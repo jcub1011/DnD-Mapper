@@ -1,0 +1,42 @@
+{
+  "name": "knockbox-game-template",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.authority.json",
+    "build:app": "vite build",
+    "build:authority": "vite build --config vite.authority.config.ts",
+    "build": "npm run typecheck && npm run build:app && npm run build:authority",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"src/**/*.{ts,css}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,css}\"",
+    "manifest:check": "node scripts/check-manifest.mjs",
+    "addon:check": "node node_modules/knockbox-cli/knockbox.mjs addon check",
+    "addon:update": "node node_modules/knockbox-cli/knockbox.mjs addon update",
+    "export:game": "npm run manifest:check && node node_modules/knockbox-cli/knockbox.mjs pack --build \"npm run build\" --in dist --manifest export/GAME.json --out dist-game/"
+  },
+  "dependencies": {
+    "lit": "^3.3.3",
+    "phaser": "^4.2.1"
+  },
+  "devDependencies": {
+    "@cfworker/json-schema": "^4.1.1",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.9.5",
+    "eslint": "^10.9.1",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.11.0",
+    "happy-dom": "^20.11.12",
+    "knockbox-cli": "^1.1.0",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.68.0",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
+  }
+}
