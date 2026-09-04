@@ -348,13 +348,16 @@ Every limit in this repo is configurable, portal-editable and validated. Match t
 | `KnockBox:BlobsEnabled` | `true` | master switch, like `precompressEnabled` |
 | `KnockBox:BlobMaxBytes` | 100 MB | matches legacy's per-file cap |
 | `KnockBox:BlobLobbyQuotaBytes` | 1 GB | matches legacy's per-room cap |
-| `KnockBox:BlobTotalQuotaBytes` | **needs a real number (Q2)** | the word service caps per-file only, so N × cap is unbounded |
+| `KnockBox:BlobTotalQuotaBytes` | **20 GB** (was `Q2`) | the word service caps per-file only, so N × cap is unbounded |
 | `KnockBox:BlobGraceMinutes` | 5 | upload-before-register window |
-| `KnockBox:BlobSweepSeconds` | 300 | 0 disables |
+| `KnockBox:BlobSweepSeconds` | 300 | 0 disables; **shipped startup-only**, see *As built* |
 | `KnockBox:BlobsRoot` | `blobs` | see below |
+| `KnockBox:BlobMaxUploadsPerLobby` | 4 | added while implementing — bounds the abandoned-`PUT` slot below |
 
-**Q2 is genuinely open.** An aggregate cap is the difference between a bounded feature and a disk-
-fill vector, and the existing word service is a cautionary example of shipping only a per-item cap.
+**`Q2` is answered: 20 GB server-wide, plus a per-game override of the per-lobby figure** (`D10` in
+[`00-decisions.md`](00-decisions.md)). The paragraph that stood here was right about why it mattered:
+an aggregate cap is the difference between a bounded feature and a disk-fill vector, and the word
+service is the cautionary example of shipping only a per-item cap.
 
 ## Files touched
 
@@ -483,6 +486,77 @@ interface KnockBoxPlugin {
 
 `registerBlob` hides hashing, the `HEAD` probe, upload and registration — satisfying R6 at the API
 surface, not just internally. The game never sees a hash.
+
+## As built
+
+The server half is implemented on `KnockBox-Games` branch `feat/blob-share-service`. This section is
+the contract the client half codes against, and records where the implementation diverged from the
+spec above — the spec is left intact, because its reasoning is why the divergences are what they are.
+
+### The HTTP surface, as shipped
+
+Everything is on the **games origin** under `/blob`, never under `/games/`.
+
+| Method | Route | Auth | Answers |
+| --- | --- | --- | --- |
+| `GET` | `/blob/{sha256}.{tag}` | none | the bytes; 404 on a bad tag, unknown content, or an upload still in flight |
+| `HEAD` | `/blob/{sha256}` | ticket | `200` present / `404` absent, no body |
+| `PUT` | `/blob/{sha256}` | ticket | `200` stored or already present, `400` bad/mismatched hash, `413` too large, `507` quota full, `429` too many in flight, `503` disabled |
+| `POST` | `/blob/register` | ticket | `{ ok, url }`; `409` when the content is not uploaded yet, `507` quota, `400` bad name |
+| `DELETE` | `/blob/register/{logicalId}` | ticket | always `200` — R5 means a game may call this defensively |
+
+The ticket goes in **`X-KnockBox-Ticket`** (or `Authorization: Bearer`), on a same-origin `fetch`, so
+no preflight. Register's body is `{ logicalId, sha256, contentType }` and carries **no `lobbyId`** —
+that comes from the verified ticket, which is what stops a client registering into another session.
+
+`register` returns the read URL ready to use: `/blob/{sha256}.{tag}`. Hand it straight to
+`<img src>`; it needs no headers, which is the whole reason it is MAC-keyed rather than
+header-guarded (`D11`).
+
+### Four divergences from the spec above
+
+1. **Reads are MAC-keyed and `HEAD` is authenticated.** The spec offered "accept the oracle, or spend
+   one line fixing it"; it was fixed. See `D11` in [`00`](00-decisions.md).
+
+2. **`BlobApi` is middleware, not a route table.** The games-origin branch of the pipeline has no
+   `UseRouting`/`UseEndpoints` at all — it is `app.Use` gates plus static mounts, ordered 404-first.
+   A prefix match and a method switch fits it; an endpoint table would have had to sit either before
+   the gates (bypassing them) or after the static mounts (unreachable).
+
+3. **The grace window covers only the gap before the *first* handle.** The spec left this implicit and
+   the implicit reading is wrong: honouring the original window after a handle has been released means
+   upload-register-release inside one window leaves the bytes on disk, so the last lobby to close frees
+   nothing — R4 failing silently. There is also **no idle window**, and that is a deliberate departure
+   from `AuthorityModuleCache`'s refresh-don't-skip rule: that rule exists because a module cache can
+   only guess whether anyone still wants a module, whereas here the refcount is exact.
+
+4. **`ContentPaths.BlobsRoot` is a `required init` member, and adding it found a live bug.**
+   `GamePackageExporterTests` had been passing the six positional roots in the wrong order — binding
+   `LogsRoot` to `games-unpacked` and `GamesUnpackedRoot` to `logs` — and compiled only because all six
+   parameters are `string`, exactly as the spec predicted. `required` broke every construction site,
+   which is how it was found; that call site is now named-argument.
+
+Also worth knowing for the client: **`BlobSweepSeconds` is startup-only** (a cadence is fixed while its
+window is read live), and the **per-game quota** from `D10` is edited on the portal's Platform tab
+beside the per-session figure it overrides, not on the Games tab.
+
+### What the client has to do, and the one thing it cannot
+
+The flow is `hash → HEAD → PUT if absent → POST register → use the returned url`.
+
+**`Expect: 100-continue` is not available to a browser.** `fetch` has no way to request it, so the
+"already present" case cannot avoid transmitting the body from a browser client — which makes the
+`HEAD` probe the real optimisation rather than a nicety. The server honours the expectation for clients
+that can send it, and otherwise drains the body against a cap rather than resetting the stream, because
+a reset produces client-visible broken pipes behind some proxies.
+
+### Verified against a running server
+
+Beyond the unit tests: a 100 MB upload moves the server's working set by **6 MB** (R1); `ETag`,
+`If-None-Match`/304 and `Range`/206 all work, inherited free from `StaticFileMiddleware`; a blob is
+served as its declared image type with no `Content-Encoding`, so it is not Brotli-re-compressed; two
+logical ids in one lobby release independently (R6); closing the lobby 404s the URL with no game-side
+call (R4); a forged tag on real content 404s; and a restart clears the root, logging why.
 
 ## Local emulation
 

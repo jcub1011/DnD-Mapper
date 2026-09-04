@@ -117,6 +117,49 @@ file backs both.
 *Why:* it keeps the game's mental model simple. The consequence is that refcounting must be **per
 handle**, not per `(lobby, hash)` pair. See [`09-blob-share-server-spec.md`](09-blob-share-server-spec.md).
 
+### D10 — Blob quotas are three-tiered, with a per-game override
+
+This is the answer to `Q2`, given by the user and implemented.
+
+| Tier | Default | Editable |
+| --- | --- | --- |
+| Per blob | 100 MB | runtime, from the portal |
+| Per lobby | 1 GB | runtime, from the portal |
+| **Per game**, overriding the per-lobby figure | none | runtime, per game id |
+| Server-wide aggregate | 20 GB | runtime, from the portal |
+
+*Why an aggregate at all:* it is the difference between a bounded feature and a disk-fill vector.
+`AuthorityWordService` is the cautionary example — it caps `MaxWordFileBytes` per file and sums
+nothing, so N games × cap is genuinely unbounded there.
+
+*Why per-game:* a mapper needs gigabytes of art where a word game needs none, and one number for both
+either starves the first or hands the second a quota it has no use for. It is keyed by game id and
+persisted in `AdminSettings`, which already carries two per-game-id override maps (availability and
+update policy), so it follows an established shape rather than inventing one.
+
+*What a lobby is charged:* the summed length of the **distinct** hashes it references. A lobby that
+registers one 500 MB file under two logical ids is charged 500 MB, because the quota is about disk and
+the file on disk is one file. Charging twice would penalise a game for a dedup `D9` says it must not
+be able to see.
+
+### D11 — Blob read URLs are keyed on a MAC of the hash, not the bare hash
+
+`GET /blob/{sha256}.{tag}`, where `tag` is a truncated `HMAC-SHA256(perProcessSecret, sha256)`.
+
+*Why:* a bare hash is not a capability. A hash is derived from the bytes, so it is unguessable only
+for content the requester does not already have — anyone holding the same commercial map pack can
+compute every hash in it and probe an unauthenticated read route for which maps the DM uploaded.
+Spoilers are most of what a VTT's asset privacy is for, and legacy's random Guid had no such property.
+The token is stateless (the hash stays visible; what changes is that it cannot be *forged*), so
+storage is still keyed by hash and dedup is untouched.
+
+*The cost:* URLs do not survive a restart. They already did not — the startup sweep deletes every
+blob — so this costs nothing that was not already gone.
+
+*The corollary:* `HEAD /blob/{sha256}`, the dedup probe, **takes a ticket**. It reveals one bit, but
+that bit is the whole oracle. An SDK `fetch` can carry a header; `<img src>` cannot, which is why only
+`GET` is anonymous.
+
 ## Decisions made without consultation
 
 Low-risk and conventional, but recorded so they can be challenged.
@@ -136,7 +179,7 @@ Resolve these before or during the phase that depends on them.
 | # | Question | Blocks | Notes |
 | --- | --- | --- | --- |
 | Q1 | Do hidden tokens need real server-side visibility filtering, or is client-side hiding acceptable? | Phase 4 | `perRecipient` mode is the faithful answer but **disables deltas entirely**, which collides with the 512 KiB cap. See [`06-state-and-authority.md`](06-state-and-authority.md#the-perrecipient-tension). Legacy already leaks fog to clients, so full fidelity here would *exceed* legacy. |
-| Q2 | What is the aggregate disk quota for blobs, per lobby and server-wide? | **Phase 0 — needed before it starts** | Confirmed: `AuthorityWordService` bounds only `MaxWordFileBytes` per file and sums nothing, so N games × cap really is unbounded. Without an aggregate cap this feature is a disk-fill vector. |
+| ~~Q2~~ | ~~What is the aggregate disk quota for blobs, per lobby and server-wide?~~ | — | **Answered — see `D10`.** 20 GB server-wide, 1 GB per lobby, plus a per-game override of the per-lobby figure. |
 | Q3 | Does the display/projector view survive the port at all? | Phase 6+ | It was a second Blazor route. A KnockBox game has one entry point, so it would become an in-game fullscreen mode. |
 | Q4 | Should save slots stay DM-local, or move to server storage once blob-share exists? | Phase 2 | Legacy is entirely browser-local (IndexedDB). Keeping that is simplest and matches D1 — but note it makes the DM's browser the only copy of the campaign, and makes post-restart recovery a re-import ([`06`](06-state-and-authority.md#recovery-after-a-restart)). |
 | Q6 | Which browsers must the port support? | Phase 2 | Nothing in this doc set states a floor, yet [`04`](04-vtf-format.md) depends on `DecompressionStream('deflate-raw')` (Safari 16.4+, Firefox 113+) and [`08`](08-assets-pipeline.md) on `OffscreenCanvas` in a worker. Needs a one-line answer. |

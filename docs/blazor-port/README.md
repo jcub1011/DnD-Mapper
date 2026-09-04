@@ -59,7 +59,7 @@ are the domain model, the `.vtf` format, and the CSS token block.
 | Phase | State |
 | --- | --- |
 | Planning | **Complete and audited** — this document set, verified against all three repos |
-| Phase 0 — blob-share platform feature | **Blocked on `Q2`** (aggregate disk quota) — needs a number before the spec is implementable |
+| Phase 0 — blob-share platform feature | **Server half done** on `KnockBox-Games` branch `feat/blob-share-service` — store, HTTP surface, eviction on both teardown paths, three-tier quota, portal knobs, docs, tests. `Q2` is answered. **The client addon release is outstanding** and is the part with the lead time. |
 | Phase 1 — foundation & rename | Not started |
 | Phase 2 — domain + `.vtf` import | Not started |
 | Phase 3 — Phaser map renderer | Not started |
@@ -69,10 +69,18 @@ are the domain model, the `.vtf` format, and the CSS token block.
 
 Keep this table current as phases land — it is the fastest way for a future session to orient.
 
-Two open questions gate work rather than merely informing it: **`Q2`** (blob disk quota) must be
-answered before phase 0 is implementable, and **`Q1`** (hidden-token visibility) before phase 4.
+One open question still gates work rather than merely informing it: **`Q1`** (hidden-token
+visibility), before phase 4. **`Q2`** (blob disk quota) is settled — see `D10` in
+[`00-decisions.md`](00-decisions.md#d10--blob-quotas-are-three-tiered-with-a-per-game-override).
 `Q6` (target browsers) and `Q7` (`players[0]` is the creator) both want a one-line answer from
 outside this document set.
+
+**Phase 0's remaining work is the client half**, and it is the half the schedule turns on: client
+methods in the phaser and web addons, the three protocol cores, `knockbox-local.js`, the Godot names
+added to `KNOWN_GODOT_GAPS`, a shared `sdkVersion` bump across four version files, `client-parity`,
+an `addons-v*` tag, then a server release to carry the API. See
+[`09`](09-blob-share-server-spec.md#client-addon--the-expensive-half), whose *As built* section
+records what the server actually shipped.
 
 ## Conventions used in these docs
 
