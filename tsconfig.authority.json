@@ -17,6 +17,11 @@
     "src/authority/kb.ts",
     "src/authority/authority.ts",
     "src/game/types.ts",
-    "src/game/rules.ts"
+    "src/game/rules.ts",
+    "src/game/domain.ts",
+    "src/game/fog.ts",
+    "src/game/snapping.ts",
+    "src/game/stacking.ts"
   ]
 }
+

@@ -52,8 +52,17 @@ export default tseslint.config(
      * bundle graph, where they would drag DOM references into a module that has
      * no DOM. Only relative, DOM-free project imports are allowed.
      */
-    files: ["src/authority/**/*.ts", "src/game/rules.ts", "src/game/types.ts"],
-    ignores: ["src/authority/**/*.test.ts", "src/authority/fakeKb.ts"],
+    files: [
+      "src/authority/**/*.ts",
+      "src/game/rules.ts",
+      "src/game/types.ts",
+      "src/game/domain.ts",
+      "src/game/fog.ts",
+      "src/game/snapping.ts",
+      "src/game/stacking.ts",
+    ],
+    ignores: ["src/authority/**/*.test.ts", "src/authority/fakeKb.ts", "src/game/**/*.test.ts"],
+
     rules: {
       "no-restricted-globals": [
         "error",

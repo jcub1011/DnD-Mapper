@@ -58,3 +58,10 @@ export type Patch = MatchState;
 
 /** Score that ends the match. */
 export const TARGET_SCORE = 5;
+
+// Re-export full domain models and helpers
+export * from "./domain.js";
+export * from "./fog.js";
+export * from "./snapping.js";
+export * from "./stacking.js";
+
