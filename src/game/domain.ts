@@ -21,6 +21,22 @@ export interface GridConfig {
   readonly lineColor: string;
 }
 
+export const DEFAULT_GRID_CONFIG: GridConfig = {
+  widthCells: 30,
+  heightCells: 20,
+  cellPixels: 50,
+  showGridLines: true,
+  snapToGrid: true,
+  lineColor: "#222",
+};
+
+export function createDefaultGridConfig(overrides?: Partial<GridConfig>): GridConfig {
+  return {
+    ...DEFAULT_GRID_CONFIG,
+    ...overrides,
+  };
+}
+
 export interface MapImage {
   readonly id: string;
   readonly name: string;
@@ -46,6 +62,14 @@ export interface MapImage {
   readonly wasDownscaled: boolean;
   readonly originalLongEdgePx: number;
   readonly displayLongEdgePx: number;
+}
+ 
+/** Derived display name: name ?? "Layer #{layerOrder}". */
+export function getMapImageDisplayName(img: Pick<MapImage, "name" | "layerOrder">): string {
+  if (img.name && img.name.trim().length > 0) {
+    return img.name;
+  }
+  return `Layer #${img.layerOrder}`;
 }
 
 export type TokenType = "PlayerToken" | "NPCToken";
@@ -101,6 +125,17 @@ export interface MapSummary {
   readonly heightCells: number;
 }
 
+/** Extracts minimal metadata summary from a GameMap. */
+export function toMapSummary(map: GameMap): MapSummary {
+  return {
+    id: map.id,
+    name: map.name,
+    listOrder: map.listOrder,
+    widthCells: map.grid.widthCells,
+    heightCells: map.grid.heightCells,
+  };
+}
+
 export type NewToken = Omit<Token, "id" | "mapId" | "ownerUserId" | "representsUserId">;
 export type NewMapImage = Omit<MapImage, "id" | "shareToken" | "layerOrder">;
 
@@ -126,11 +161,14 @@ export type AttributeValue =
   | { readonly kind: "Modifier"; readonly value: number }
   | { readonly kind: "Text"; readonly value: string };
 
-export function getAttributeModifier(v: AttributeValue): number {
+export function getModifier(v: AttributeValue): number {
   if (v.kind === "Modifier") return v.value;
   if (v.kind === "Score") return Math.floor((v.value - 10) / 2);
   return 0;
 }
+
+/** Backward-compatible alias for getModifier. */
+export const getAttributeModifier = getModifier;
 
 export type AttributePreset =
   | "DnD5eCore"
@@ -147,6 +185,40 @@ export interface AttributeRow {
 export interface AttributeSchema {
   readonly preset: AttributePreset;
   readonly rows: readonly AttributeRow[];
+}
+
+export const DND_5E_CORE_ATTRIBUTES: readonly AttributeRow[] = [
+  { name: "Strength", type: "Score", default: { kind: "Score", value: 10 } },
+  { name: "Dexterity", type: "Score", default: { kind: "Score", value: 10 } },
+  { name: "Constitution", type: "Score", default: { kind: "Score", value: 10 } },
+  { name: "Intelligence", type: "Score", default: { kind: "Score", value: 10 } },
+  { name: "Wisdom", type: "Score", default: { kind: "Score", value: 10 } },
+  { name: "Charisma", type: "Score", default: { kind: "Score", value: 10 } },
+];
+
+export const DND_5E_COMMON_SKILLS: readonly AttributeRow[] = [
+  { name: "Athletics", type: "Modifier", default: { kind: "Modifier", value: 0 } },
+  { name: "Stealth", type: "Modifier", default: { kind: "Modifier", value: 0 } },
+  { name: "Perception", type: "Modifier", default: { kind: "Modifier", value: 0 } },
+  { name: "Persuasion", type: "Modifier", default: { kind: "Modifier", value: 0 } },
+  { name: "Investigation", type: "Modifier", default: { kind: "Modifier", value: 0 } },
+];
+
+export const SIMPLE_D20_ATTRIBUTES: readonly AttributeRow[] = [
+  { name: "Modifier", type: "Modifier", default: { kind: "Modifier", value: 0 } },
+];
+
+export function createDefaultAttributeSchema(preset: AttributePreset = "DnD5eCore"): AttributeSchema {
+  switch (preset) {
+    case "DnD5eCore":
+      return { preset, rows: DND_5E_CORE_ATTRIBUTES };
+    case "DnD5ePlusCommonSkills":
+      return { preset, rows: [...DND_5E_CORE_ATTRIBUTES, ...DND_5E_COMMON_SKILLS] };
+    case "SimpleD20":
+      return { preset, rows: SIMPLE_D20_ATTRIBUTES };
+    case "Custom":
+      return { preset, rows: [] };
+  }
 }
 
 export interface AttributeDelta {
@@ -308,6 +380,25 @@ export interface DndMapperSettings {
   readonly loadedDicePlayerIndicator: string;
 }
 
+export const DEFAULT_SETTINGS: DndMapperSettings = {
+  tokenMovement: "OwnerOrHost",
+  sheetEditByOthers: "HostOnly",
+  rollsVisibleToPlayers: true,
+  playersCanCreateNPCs: false,
+  hpTrackingEnabled: true,
+  playersCanSeeOtherSheets: false,
+  loadedDiceEnabled: false,
+  loadedDiceRuleVisibility: "Hidden",
+  loadedDicePlayerIndicator: "None",
+};
+
+export function createDefaultSettings(overrides?: Partial<DndMapperSettings>): DndMapperSettings {
+  return {
+    ...DEFAULT_SETTINGS,
+    ...overrides,
+  };
+}
+
 export type DndMapperPhase = "Lobby" | "Playing";
 
 export interface DndMapperState {
@@ -330,6 +421,28 @@ export interface DndMapperState {
   readonly dmPlayerId: string | null;
 }
 
+export function createDefaultDndMapperState(dmPlayerId: string | null = null): DndMapperState {
+  return {
+    phase: "Lobby",
+    settings: DEFAULT_SETTINGS,
+    attributeSchema: createDefaultAttributeSchema("DnD5eCore"),
+    maps: [],
+    activeMapId: null,
+    sheets: {},
+    customTemplates: {},
+    rollLog: [],
+    globalRollTemplates: [],
+    activeSchemaTemplateId: null,
+    initiativeAttributeName: null,
+    activeCombat: null,
+    pendingCenterRequest: null,
+    focusRect: null,
+    loadedDiceRules: [],
+    hostHeldKeys: [],
+    dmPlayerId,
+  };
+}
+
 // ── Invariants & Constants ────────────────────────────────────────────────────
 
 export const TOKEN_RADIUS = 0.45;
@@ -343,3 +456,9 @@ export const MAX_DICE_PER_ROLL = 20;
 export const MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024; // 100 MB per image
 export const MAX_ROOM_STORAGE_BYTES = 1024 * 1024 * 1024; // 1 GB aggregate
 export const MAX_ARCHIVE_BYTES = 500 * 1024 * 1024; // 500 MB browser archive ceiling
+export const ZOOM_MIN = 0.01;
+export const ZOOM_MAX = 10.0;
+export const FOG_BRUSH_RADIUS_MIN = 1;
+export const FOG_BRUSH_RADIUS_MAX = 3;
+export const MAX_TEXTURE_SIZE = 8192;
+

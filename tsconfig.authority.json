@@ -21,7 +21,11 @@
     "src/game/domain.ts",
     "src/game/fog.ts",
     "src/game/snapping.ts",
-    "src/game/stacking.ts"
+    "src/game/stacking.ts",
+    "src/game/dice.ts",
+    "src/game/color.ts",
+    "src/game/visibility.ts",
+    "src/game/ruler.ts"
   ]
 }
 

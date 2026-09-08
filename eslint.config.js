@@ -60,6 +60,10 @@ export default tseslint.config(
       "src/game/fog.ts",
       "src/game/snapping.ts",
       "src/game/stacking.ts",
+      "src/game/dice.ts",
+      "src/game/color.ts",
+      "src/game/visibility.ts",
+      "src/game/ruler.ts",
     ],
     ignores: ["src/authority/**/*.test.ts", "src/authority/fakeKb.ts", "src/game/**/*.test.ts"],
 

@@ -64,4 +64,8 @@ export * from "./domain.js";
 export * from "./fog.js";
 export * from "./snapping.js";
 export * from "./stacking.js";
+export * from "./dice.js";
+export * from "./color.js";
+export * from "./visibility.js";
+export * from "./ruler.js";
 
