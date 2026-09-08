@@ -189,3 +189,20 @@ export function setCellsFogged(
 
   return next ?? mask;
 }
+
+/** Creates a fully fogged mask for a grid. */
+export function fillFog(grid: GridConfig): FogMaskBytes {
+  const bytes = new Uint8Array(fogByteLength(grid));
+  bytes.fill(0xff);
+  const totalCells = grid.widthCells * grid.heightCells;
+  const rem = totalCells & 7;
+  if (rem > 0 && bytes.length > 0) {
+    bytes[bytes.length - 1] = (1 << rem) - 1;
+  }
+  return bytes;
+}
+
+/** Creates a completely cleared (revealed) fog mask. */
+export function clearFog(): FogMaskBytes {
+  return new Uint8Array(0);
+}

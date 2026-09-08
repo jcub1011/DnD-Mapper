@@ -17,6 +17,7 @@ import type {
   DndMapperState,
   GameMap,
   LoadedDiceRule,
+  MapSummary,
   NamedTemplate,
   RollTemplate,
 } from "../game/domain.js";
@@ -47,7 +48,7 @@ import type { UnpackResult } from "../vtf/types.js";
 const SAVE_DEBOUNCE_MS = 500;
 
 export interface PersistedFingerprint {
-  readonly maps: readonly GameMap[];
+  readonly maps: readonly (GameMap | MapSummary)[];
   readonly sheets: Readonly<Record<string, CharacterSheet>>;
   readonly customTemplates: Readonly<Record<string, NamedTemplate>>;
   readonly globalRollTemplates: readonly RollTemplate[];

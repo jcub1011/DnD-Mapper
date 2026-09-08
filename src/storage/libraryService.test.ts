@@ -182,11 +182,12 @@ describe("LibraryService and Sharded Persistence", () => {
       await service.flushAutoSave(state);
 
       // Modify only map token position
+      const map0 = state.maps[0] as GameMap;
       const updatedMap: GameMap = {
-        ...state.maps[0],
+        ...map0,
         tokens: [
           {
-            ...state.maps[0].tokens[0],
+            ...map0.tokens[0],
             x: 7.5,
             y: 8.5,
           },
@@ -201,21 +202,22 @@ describe("LibraryService and Sharded Persistence", () => {
 
       const loaded = await service.loadSlot(AUTO_SLOT_ID);
       expect(loaded).not.toBeNull();
-      expect(loaded!.maps[0].tokens[0].x).toBe(7.5);
-      expect(loaded!.maps[0].tokens[0].y).toBe(8.5);
+      expect((loaded!.maps[0] as GameMap).tokens[0].x).toBe(7.5);
+      expect((loaded!.maps[0] as GameMap).tokens[0].y).toBe(8.5);
       expect(loaded!.sheets["sheet-1"].characterName).toBe("Valeros");
     });
 
     it("cleans up stale shards when maps are deleted", async () => {
       const state = createMockState();
+      const map0 = state.maps[0] as GameMap;
       const map2: GameMap = {
-        ...state.maps[0],
+        ...map0,
         id: "map-2",
         name: "Tower",
       };
       const stateWithTwoMaps: DndMapperState = {
         ...state,
-        maps: [state.maps[0], map2],
+        maps: [map0, map2],
       };
 
       await service.flushAutoSave(stateWithTwoMaps);

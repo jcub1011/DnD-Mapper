@@ -64,6 +64,10 @@ export default tseslint.config(
       "src/game/color.ts",
       "src/game/visibility.ts",
       "src/game/ruler.ts",
+      "src/game/wire.ts",
+      "src/game/maps.ts",
+      "src/game/tokens.ts",
+      "src/game/campaignImport.ts",
     ],
     ignores: ["src/authority/**/*.test.ts", "src/authority/fakeKb.ts", "src/game/**/*.test.ts"],
 

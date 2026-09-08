@@ -10,12 +10,12 @@
 
 import { html, nothing, type TemplateResult } from "lit";
 import { customElement, state } from "lit/decorators.js";
+import type { KBPlayer } from "../../../addons/knockbox/knockbox-phaser";
+import { createDefaultDndMapperState } from "../../game/domain";
+import type { MatchState } from "../../game/types";
+import { createLogger } from "../../log";
 import type { GameController } from "../../net/controller";
 import type { LaunchMode } from "../../net/launch";
-import type { MatchState } from "../../game/types";
-import { TARGET_SCORE } from "../../game/types";
-import { createLogger } from "../../log";
-import { fx } from "../fx/fx";
 import { GameElement } from "./GameElement";
 
 const log = createLogger("app");
@@ -23,7 +23,7 @@ const log = createLogger("app");
 /** Largest dt we feed the presentation loop (guards against tab-backgrounding spikes). */
 const MAX_DT = 1 / 20;
 
-const EMPTY: MatchState = { phase: "Lobby", players: [], winnerId: null };
+const EMPTY: MatchState = createDefaultDndMapperState();
 
 @customElement("dndm-app")
 export class DndmApp extends GameElement {
@@ -33,9 +33,9 @@ export class DndmApp extends GameElement {
   private controller?: GameController;
   private rafId = 0;
   private lastTs = 0;
-  private lastScore = 0;
 
   @state() private match: Readonly<MatchState> = EMPTY;
+  @state() private roster: readonly KBPlayer[] = [];
   @state() private isOwner = false;
   @state() private lobbyOpen = true;
 
@@ -48,7 +48,8 @@ export class DndmApp extends GameElement {
     this.listen(controller.events, "changed", ({ state }) => {
       this.onStateChanged(state);
     });
-    this.listen(controller.events, "roster", ({ isOwner }) => {
+    this.listen(controller.events, "roster", ({ players, isOwner }) => {
+      this.roster = players;
       this.isOwner = isOwner;
     });
 
@@ -64,17 +65,6 @@ export class DndmApp extends GameElement {
   }
 
   private onStateChanged(state: Readonly<MatchState>): void {
-    // FX react to state we OBSERVED changing, not to our own click: under server
-    // authority a click may be rejected and never happen. Celebrate the confirmed
-    // result instead of the optimistic one.
-    const mine = state.players.find((p) => p.id === this.controller?.playerId);
-    const score = mine?.score ?? 0;
-    if (score > this.lastScore) {
-      const r = this.getBoundingClientRect();
-      fx.burstAt([r.left + r.width / 2, r.top + r.height / 2], 0.6);
-    }
-    if (state.phase === "GameOver" && this.match.phase !== "GameOver") fx.shake(0.7);
-    this.lastScore = score;
     this.match = state;
   }
 
@@ -107,48 +97,41 @@ export class DndmApp extends GameElement {
   }
 
   override render(): TemplateResult {
-    const { phase, players, winnerId } = this.match;
+    const { phase, maps, activeMapId, dmPlayerId } = this.match;
     const me = this.controller?.playerId ?? "";
-    const winner = players.find((p) => p.id === winnerId);
+    const activeMap = maps.find((m) => m.id === activeMapId);
+    const isDm = Boolean(me && dmPlayerId === me);
 
     return html`
       <main class="dndm-shell">
         <h1>D&D Mapper</h1>
         <p class="dndm-sub">
-          launch: <strong>${this.launchMode}</strong> · phase: ${phase} · ${players.length}
-          player${players.length === 1 ? "" : "s"}
-          ${this.isOwner ? html` · <strong>DM / Owner</strong>` : nothing}
+          launch: <strong>${this.launchMode}</strong> · phase: ${phase} · ${this.roster.length}
+          player${this.roster.length === 1 ? "" : "s"}
+          ${isDm ? html` · <strong>DM</strong>` : nothing}
+          ${this.isOwner && !isDm ? html` · <strong>Owner</strong>` : nothing}
+        </p>
+
+        <p class="dndm-sub">
+          Active Map: <strong>${activeMap?.name ?? "None"}</strong> (${maps.length} total)
         </p>
 
         <ul class="dndm-scores">
-          ${players.map(
+          ${this.roster.map(
             (p) => html`
               <li class=${p.id === me ? "is-me" : ""}>
-                ${p.displayName}${p.id === me ? " (you)" : ""} — ${p.score}
+                ${p.displayName}${p.id === me ? " (you)" : ""}${p.id === dmPlayerId ? " [DM]" : ""}
               </li>
             `,
           )}
-          ${players.length === 0 ? html`<li>waiting for players…</li>` : nothing}
+          ${this.roster.length === 0 ? html`<li>waiting for players…</li>` : nothing}
         </ul>
 
         ${
-          phase === "Lobby"
-            ? html`<button @click=${() => this.send({ kind: "start" })}>Start match</button>`
-            : nothing
-        }
-        ${
-          phase === "Playing"
-            ? html`
-                <p class="dndm-sub">first to ${TARGET_SCORE} wins</p>
-                <button @click=${() => this.send({ kind: "score", points: 1 })}>+1</button>
-              `
-            : nothing
-        }
-        ${
-          phase === "GameOver"
-            ? html`<p class="dndm-score">
-                ${winner ? `${winner.displayName} wins!` : "match over"}
-              </p>`
+          isDm && maps.length === 0
+            ? html`<button @click=${() => this.send({ kind: "createMap", name: "First Map" })}>
+                Create First Map
+              </button>`
             : nothing
         }
         ${

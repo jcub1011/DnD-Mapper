@@ -10,54 +10,129 @@
  *
  * Nothing here imports Phaser, Lit, or the DOM: `src/game/` is shared by the
  * authority module and the client, and the authority runs in a bare sandbox.
- * Reshape these when your game's rules are designed.
  */
 
-/** High-level lifecycle of a match. */
-export type GamePhase = "Lobby" | "Playing" | "GameOver";
+import type {
+  CampaignHeader,
+  CenterViewportRequest,
+  DndMapperSettings,
+  DndMapperState,
+  FocusRect,
+  GameMap,
+  GridConfig,
+  MapImage,
+  MapSummary,
+  NewMapImage,
+  NewToken,
+  Token,
+} from "./domain.js";
 
 /** A lobby member, as the platform reports it (`init`, `onPlayerJoined`). */
 export interface PlayerInfo {
-  id: string;
-  displayName: string;
-}
-
-/** A single player's authoritative state. */
-export interface PlayerState {
-  id: string;
-  displayName: string;
-  score: number;
-}
-
-/** The full authoritative match state — what `snapshot()` returns. */
-export interface MatchState {
-  phase: GamePhase;
-  players: PlayerState[];
-  /** Winner's player id once phase is GameOver. `null`, never undefined. */
-  winnerId: string | null;
+  readonly id: string;
+  readonly displayName: string;
 }
 
 /**
- * Client → authority. The client sends these through `sendIntent`; they arrive at
- * the authority as UNTRUSTED data (a modified client can send anything), which is
- * why `rules.applyIntent` takes `unknown` and narrows.
+ * The authoritative match state replicated across clients.
+ * In DndMapper, this is the top-level DndMapperState.
  */
-export type Intent = { kind: "start" } | { kind: "score"; points: number };
+export type MatchState = DndMapperState;
 
 /**
- * Authority → clients. Patches MUST carry ABSOLUTE values, never relative ones:
- * a broadcast delta can overtake a point-to-point snapshot on a real socket, so
- * convergence relies on re-applying a patch being safe. `{ score: 5 }` is fine;
- * `{ delta: +1 }` would double-count.
- *
- * This template broadcasts the whole state (it's tiny), which makes the absolute
- * rule impossible to get wrong — the same choice `games/tictactoe-server` makes.
- * For a large state, narrow this to the fields that changed, still absolute-valued.
+ * Client → authority intents.
+ * Untrusted data received by authority via `applyIntent`.
  */
-export type Patch = MatchState;
+export type Intent =
+  // maps
+  | { readonly kind: "createMap"; readonly name: string }
+  | { readonly kind: "renameMap"; readonly mapId: string; readonly name: string }
+  | { readonly kind: "deleteMap"; readonly mapId: string }
+  | { readonly kind: "duplicateMap"; readonly mapId: string }
+  | { readonly kind: "reorderMaps"; readonly order: readonly string[] }
+  | { readonly kind: "setActiveMap"; readonly mapId: string }
+  | { readonly kind: "updateGrid"; readonly mapId: string; readonly grid: GridConfig }
+  // tokens
+  | { readonly kind: "spawnToken"; readonly mapId: string; readonly token: NewToken }
+  | { readonly kind: "moveToken"; readonly tokenId: string; readonly x: number; readonly y: number }
+  | { readonly kind: "updateToken"; readonly tokenId: string; readonly patch: Partial<Token> }
+  | { readonly kind: "removeToken"; readonly tokenId: string }
+  | { readonly kind: "setTokenHidden"; readonly tokenId: string; readonly hidden: boolean }
+  // images
+  | { readonly kind: "addImage"; readonly mapId: string; readonly image: NewMapImage }
+  | {
+      readonly kind: "transformImage";
+      readonly imageId: string;
+      readonly x: number;
+      readonly y: number;
+      readonly width: number;
+      readonly height: number;
+      readonly rotation: number;
+    }
+  | { readonly kind: "reorderImage"; readonly imageId: string; readonly layerOrder: number }
+  | { readonly kind: "setImageLocked"; readonly imageId: string; readonly locked: boolean }
+  | { readonly kind: "setImageHidden"; readonly imageId: string; readonly hidden: boolean }
+  | { readonly kind: "removeImage"; readonly imageId: string }
+  // fog — ONE intent per stroke, never per cell
+  | {
+      readonly kind: "paintFog";
+      readonly mapId: string;
+      readonly cells: readonly number[];
+      readonly fogged: boolean;
+    }
+  | { readonly kind: "fillFog"; readonly mapId: string }
+  | { readonly kind: "clearFog"; readonly mapId: string }
+  // viewport
+  | { readonly kind: "setFocusRect"; readonly rect: FocusRect | null }
+  | {
+      readonly kind: "centerViewport";
+      readonly mapId: string;
+      readonly x: number;
+      readonly y: number;
+    }
+  // session
+  | { readonly kind: "updateSettings"; readonly patch: Partial<DndMapperSettings> }
+  // campaign loading
+  | { readonly kind: "requestMap"; readonly mapId: string }
+  | {
+      readonly kind: "beginImport";
+      readonly campaign: CampaignHeader;
+      readonly chunkCount: number;
+      readonly token?: string;
+    }
+  | {
+      readonly kind: "importChunk";
+      readonly token: string;
+      readonly index: number;
+      readonly maps: readonly GameMap[];
+    }
+  | { readonly kind: "commitImport"; readonly token: string };
 
-/** Score that ends the match. */
-export const TARGET_SCORE = 5;
+/**
+ * Authority → clients narrowed patches.
+ * Carrying absolute values (never relative deltas) to ensure safe idempotence.
+ */
+export type Patch =
+  | { readonly kind: "full"; readonly state: DndMapperState } // sync / join / reconnect only
+  | { readonly kind: "token"; readonly token: Token } // absolute position, not a delta
+  | { readonly kind: "tokenRemoved"; readonly tokenId: string }
+  | { readonly kind: "fog"; readonly mapId: string; readonly mask: string } // whole mask for ONE map
+  | { readonly kind: "image"; readonly image: MapImage }
+  | { readonly kind: "imageRemoved"; readonly imageId: string }
+  | { readonly kind: "grid"; readonly mapId: string; readonly grid: GridConfig }
+  | { readonly kind: "activeMap"; readonly mapId: string }
+  | { readonly kind: "focusRect"; readonly rect: FocusRect | null }
+  | { readonly kind: "centerViewport"; readonly request: CenterViewportRequest }
+  | { readonly kind: "settings"; readonly settings: DndMapperSettings }
+  | { readonly kind: "mapList"; readonly maps: readonly MapSummary[] } // metadata only, no tokens/images
+  | { readonly kind: "map"; readonly map: GameMap } // ONE map in full
+  | { readonly kind: "dm"; readonly dmPlayerId: string }; // succession
+
+/** Import chunk budget for campaign streaming (~39% of 512 KiB cap). */
+export const CHUNK_BUDGET = 200_000;
+
+/** Max broadcast frame byte limit guard (~78% of 512 KiB cap). */
+export const MAX_FRAME_BYTES = 400_000;
 
 // Re-export full domain models and helpers
 export * from "./domain.js";

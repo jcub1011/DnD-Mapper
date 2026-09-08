@@ -397,13 +397,31 @@ export function createDefaultSettings(overrides?: Partial<DndMapperSettings>): D
   };
 }
 
+export function isFullMap(map: GameMap | MapSummary): map is GameMap {
+  return "tokens" in map && "grid" in map && "fogMask" in map;
+}
+
+export interface CampaignHeader {
+  readonly title?: string;
+  readonly settings?: DndMapperSettings;
+  readonly attributeSchema?: AttributeSchema;
+  readonly activeMapId?: string | null;
+  readonly sheets?: Readonly<Record<string, CharacterSheet>>;
+  readonly customTemplates?: Readonly<Record<string, NamedTemplate>>;
+  readonly globalRollTemplates?: readonly RollTemplate[];
+  readonly activeSchemaTemplateId?: string | null;
+  readonly initiativeAttributeName?: string | null;
+  readonly activeCombat?: CombatState | null;
+  readonly loadedDiceRules?: readonly LoadedDiceRule[];
+}
+
 export type DndMapperPhase = "Lobby" | "Playing";
 
 export interface DndMapperState {
   readonly phase: DndMapperPhase;
   readonly settings: DndMapperSettings;
   readonly attributeSchema: AttributeSchema;
-  readonly maps: readonly GameMap[];
+  readonly maps: readonly (GameMap | MapSummary)[];
   readonly activeMapId: string | null;
   readonly sheets: Readonly<Record<string, CharacterSheet>>;
   readonly customTemplates: Readonly<Record<string, NamedTemplate>>;
