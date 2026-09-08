@@ -1,0 +1,233 @@
+import { html, nothing, type TemplateResult } from "lit";
+import { customElement, property } from "lit/decorators.js";
+import { GameElement } from "../app/GameElement";
+import type { ToolMode } from "../map/MapScene";
+
+@customElement("dndm-toolbar")
+export class DndmToolbar extends GameElement {
+  @property({ type: Boolean })
+  isDm = false;
+
+  @property({ type: Number })
+  zoom = 1.0;
+
+  @property({ type: Boolean })
+  showGridLines = true;
+
+  @property({ type: String })
+  toolMode: ToolMode = "none";
+
+  @property({ type: String })
+  fogBrushMode: "paint" | "erase" = "paint";
+
+  @property({ type: Number })
+  fogBrushRadius = 1;
+
+  @property({ type: Boolean })
+  hasFocusRect = false;
+
+  @property({ attribute: false })
+  onToggleGrid?: (show: boolean) => void;
+
+  @property({ attribute: false })
+  onZoomIn?: () => void;
+
+  @property({ attribute: false })
+  onZoomOut?: () => void;
+
+  @property({ attribute: false })
+  onResetView?: () => void;
+
+  @property({ attribute: false })
+  onSetToolMode?: (mode: ToolMode) => void;
+
+  @property({ attribute: false })
+  onSetFogBrushMode?: (mode: "paint" | "erase") => void;
+
+  @property({ attribute: false })
+  onCycleBrushRadius?: () => void;
+
+  @property({ attribute: false })
+  onFillFog?: () => void;
+
+  @property({ attribute: false })
+  onClearFog?: () => void;
+
+  @property({ attribute: false })
+  onClearFocusRect?: () => void;
+
+  @property({ attribute: false })
+  onCenterEveryone?: () => void;
+
+  private toggleFocus(): void {
+    const next: ToolMode = this.toolMode === "focus" ? "none" : "focus";
+    this.onSetToolMode?.(next);
+  }
+
+  private toggleRuler(): void {
+    const next: ToolMode = this.toolMode === "ruler" ? "none" : "ruler";
+    this.onSetToolMode?.(next);
+  }
+
+  private selectFogPaint(): void {
+    if (this.toolMode === "fog" && this.fogBrushMode === "paint") {
+      this.onSetToolMode?.("none");
+    } else {
+      this.onSetFogBrushMode?.("paint");
+      this.onSetToolMode?.("fog");
+    }
+  }
+
+  private selectFogErase(): void {
+    if (this.toolMode === "fog" && this.fogBrushMode === "erase") {
+      this.onSetToolMode?.("none");
+    } else {
+      this.onSetFogBrushMode?.("erase");
+      this.onSetToolMode?.("fog");
+    }
+  }
+
+  override render(): TemplateResult {
+    const pct = Math.round(this.zoom * 100);
+
+    return html`
+      <div class="dndm-canvas-toolbar" role="toolbar" aria-label="Map tools">
+        <label class="dndm-grid-toggle" title="Toggle grid lines">
+          <input
+            type="checkbox"
+            ?checked=${this.showGridLines}
+            @change=${(e: Event) =>
+              this.onToggleGrid?.((e.target as HTMLInputElement).checked)}
+          />
+          Grid
+        </label>
+
+        <button
+          class="dndm-zoom-btn"
+          type="button"
+          title="Zoom out"
+          @click=${() => this.onZoomOut?.()}
+        >
+          −
+        </button>
+        <span class="dndm-zoom-readout">${pct}%</span>
+        <button
+          class="dndm-zoom-btn"
+          type="button"
+          title="Zoom in"
+          @click=${() => this.onZoomIn?.()}
+        >
+          +
+        </button>
+        <button
+          class="dndm-zoom-btn"
+          type="button"
+          title="Reset view"
+          @click=${() => this.onResetView?.()}
+        >
+          ⟲
+        </button>
+
+        ${this.isDm
+          ? html`
+              <span class="dndm-toolbar-sep" aria-hidden="true"></span>
+
+              <button
+                class="dndm-zoom-btn ${this.toolMode === "focus" ? "active" : ""}"
+                type="button"
+                title="Focus box — drag on the map to define a focus region"
+                @click=${() => this.toggleFocus()}
+              >
+                ▭
+              </button>
+              ${this.hasFocusRect
+                ? html`
+                    <button
+                      class="dndm-zoom-btn"
+                      type="button"
+                      title="Clear focus box"
+                      @click=${() => this.onClearFocusRect?.()}
+                    >
+                      ✕
+                    </button>
+                  `
+                : nothing}
+
+              <button
+                class="dndm-zoom-btn ${this.toolMode === "ruler" ? "active" : ""}"
+                type="button"
+                title="Ruler — click two points to measure distance; right-click clears"
+                @click=${() => this.toggleRuler()}
+              >
+                📐
+              </button>
+
+              <span class="dndm-toolbar-sep" aria-hidden="true"></span>
+
+              <button
+                class="dndm-zoom-btn ${this.toolMode === "fog" && this.fogBrushMode === "paint"
+                  ? "active"
+                  : ""}"
+                type="button"
+                title="Paint fog — drag on the map to hide cells"
+                @click=${() => this.selectFogPaint()}
+              >
+                ▒
+              </button>
+              <button
+                class="dndm-zoom-btn ${this.toolMode === "fog" && this.fogBrushMode === "erase"
+                  ? "active"
+                  : ""}"
+                type="button"
+                title="Erase fog — drag on the map to reveal cells"
+                @click=${() => this.selectFogErase()}
+              >
+                ◌
+              </button>
+              <button
+                class="dndm-zoom-btn"
+                type="button"
+                title="Brush radius (click to cycle 1 → 2 → 3)"
+                @click=${() => this.onCycleBrushRadius?.()}
+              >
+                ${this.fogBrushRadius}
+              </button>
+              <button
+                class="dndm-zoom-btn"
+                type="button"
+                title="Fill the entire map with fog"
+                @click=${() => this.onFillFog?.()}
+              >
+                ▣
+              </button>
+              <button
+                class="dndm-zoom-btn"
+                type="button"
+                title="Clear all fog"
+                @click=${() => this.onClearFog?.()}
+              >
+                ◻
+              </button>
+
+              <span class="dndm-toolbar-sep" aria-hidden="true"></span>
+
+              <button
+                class="dndm-zoom-btn"
+                type="button"
+                title="Center all players on current view"
+                @click=${() => this.onCenterEveryone?.()}
+              >
+                ⌖
+              </button>
+            `
+          : nothing}
+      </div>
+    `;
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "dndm-toolbar": DndmToolbar;
+  }
+}

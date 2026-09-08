@@ -209,6 +209,11 @@ export class MatchView {
         this._state = { ...this._state, dmPlayerId: patch.dmPlayerId };
         break;
       }
+
+      case "phase": {
+        this._state = { ...this._state, phase: patch.phase };
+        break;
+      }
     }
   }
 }

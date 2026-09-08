@@ -789,6 +789,47 @@ export function applyIntent(
       };
     }
 
+    case "startSession": {
+      if (!isDm(state, fromId)) return null;
+      if (state.phase === "Playing") return null;
+
+      let nextMaps = state.maps;
+      let nextActiveMapId = state.activeMapId;
+      let newMapCreated = false;
+
+      if (state.maps.length === 0) {
+        const firstMap = createNewMap("First Map", now, 0);
+        nextMaps = [firstMap];
+        nextActiveMapId = firstMap.id;
+        newMapCreated = true;
+      }
+
+      const nextState: DndMapperState = {
+        ...state,
+        phase: "Playing",
+        maps: nextMaps,
+        activeMapId: nextActiveMapId,
+      };
+
+      if (newMapCreated) {
+        return {
+          state: nextState,
+          patch: {
+            kind: "full",
+            state: projectSnapshot(nextState),
+          },
+        };
+      }
+
+      return {
+        state: nextState,
+        patch: {
+          kind: "phase",
+          phase: "Playing",
+        },
+      };
+    }
+
     default:
       return null;
   }

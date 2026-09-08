@@ -281,6 +281,37 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
     scene.resetView();
     expect(cam.zoom).toBe(1.0);
   });
+
+  it("anchors zoom to the visible center between rails", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+
+    // Set asymmetrical rail insets: left rail 300px, right rail 100px
+    scene.setRailInsets(300, 100);
+    expect(scene.railLeft).toBe(300);
+    expect(scene.railRight).toBe(100);
+
+    // Visible canvas interval is [300, 1920 - 100] = [300, 1820]. Center is 1060.
+    // Formula: (1920 + 300 - 100) / 2 = 1060.
+    const expectedAnchorX = (cam.width + scene.railLeft - scene.railRight) / 2;
+    expect(expectedAnchorX).toBe(1060);
+    const expectedAnchorY = cam.height / 2;
+
+    const worldBefore = cam.getWorldPoint(expectedAnchorX, expectedAnchorY);
+
+    scene.zoomIn();
+
+    // Invariant: screen anchor point maps to the exact same world coordinate before and after zoom
+    const worldAfter = cam.getWorldPoint(expectedAnchorX, expectedAnchorY);
+    expect(worldAfter.x).toBeCloseTo(worldBefore.x, 1);
+    expect(worldAfter.y).toBeCloseTo(worldBefore.y, 1);
+
+    scene.zoomOut();
+
+    const worldAfterZoomOut = cam.getWorldPoint(expectedAnchorX, expectedAnchorY);
+    expect(worldAfterZoomOut.x).toBeCloseTo(worldBefore.x, 1);
+    expect(worldAfterZoomOut.y).toBeCloseTo(worldBefore.y, 1);
+  });
 });
 
 describe("FogLayer Diffing and Brush Math", () => {

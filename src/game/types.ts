@@ -15,6 +15,7 @@
 import type {
   CampaignHeader,
   CenterViewportRequest,
+  DndMapperPhase,
   DndMapperSettings,
   DndMapperState,
   FocusRect,
@@ -106,7 +107,8 @@ export type Intent =
       readonly index: number;
       readonly maps: readonly GameMap[];
     }
-  | { readonly kind: "commitImport"; readonly token: string };
+  | { readonly kind: "commitImport"; readonly token: string }
+  | { readonly kind: "startSession" };
 
 /**
  * Authority → clients narrowed patches.
@@ -126,7 +128,8 @@ export type Patch =
   | { readonly kind: "settings"; readonly settings: DndMapperSettings }
   | { readonly kind: "mapList"; readonly maps: readonly MapSummary[] } // metadata only, no tokens/images
   | { readonly kind: "map"; readonly map: GameMap } // ONE map in full
-  | { readonly kind: "dm"; readonly dmPlayerId: string }; // succession
+  | { readonly kind: "dm"; readonly dmPlayerId: string } // succession
+  | { readonly kind: "phase"; readonly phase: DndMapperPhase };
 
 /** Import chunk budget for campaign streaming (~39% of 512 KiB cap). */
 export const CHUNK_BUDGET = 200_000;

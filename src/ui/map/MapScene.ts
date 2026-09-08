@@ -73,10 +73,15 @@ export class MapScene extends Phaser.Scene {
   private camStartY = 0;
   private didMoveDuringPan = false;
 
+  // Rail insets for rail-aware visible center zoom anchor
+  public railLeft = 0;
+  public railRight = 0;
+
   // Event callbacks
   public onTokenMoveEnd?: (event: TokenDragEvent) => void;
   public onTokenDoubleClick?: (tokenId: string) => void;
   public onImageTransformEnd?: (event: ImageTransformEvent) => void;
+  public onImageSelect?: (imageId: string | null) => void;
   public onFogStrokeCommit?: (cells: number[], fogged: boolean) => void;
   public onFocusRectCommit?: (rect: FocusRect | null) => void;
   public onViewportChanged?: (vp: ViewportState) => void;
@@ -98,6 +103,7 @@ export class MapScene extends Phaser.Scene {
     // 2. Image layers (DEPTH.IMAGES = 1..999)
     this.imageLayer = new ImageLayer(this);
     this.imageLayer.onImageTransformEnd = (e) => this.onImageTransformEnd?.(e);
+    this.imageLayer.onImageSelect = (id) => this.onImageSelect?.(id);
 
     // 3. Grid lines (DEPTH.GRID = 1000)
     this.gridGfx = this.add.graphics();
@@ -223,6 +229,19 @@ export class MapScene extends Phaser.Scene {
     this.imageLayer.setAssetSource(source);
   }
 
+  setRailInsets(leftPx: number, rightPx: number): void {
+    this.railLeft = leftPx;
+    this.railRight = rightPx;
+  }
+
+  selectImage(imageId: string | null): void {
+    this.imageLayer.selectImage(imageId);
+  }
+
+  getSelectedImageId(): string | null {
+    return this.imageLayer.getSelectedImageId();
+  }
+
   // ── Tool Mode State Machine ────────────────────────────────────────────────
 
   setToolMode(mode: ToolMode): void {
@@ -261,7 +280,9 @@ export class MapScene extends Phaser.Scene {
 
   zoomIn(factor = TOOLBAR_FACTOR): void {
     const cam = this.cameras.main;
-    zoomAtAnchor(cam, factor, cam.width / 2, cam.height / 2);
+    const anchorX = (cam.width + this.railLeft - this.railRight) / 2;
+    const anchorY = cam.height / 2;
+    zoomAtAnchor(cam, factor, anchorX, anchorY);
     this.redrawGrid();
     this.rulerOverlay.redraw();
     this.focusOverlay.redraw();
@@ -270,7 +291,9 @@ export class MapScene extends Phaser.Scene {
 
   zoomOut(factor = TOOLBAR_FACTOR): void {
     const cam = this.cameras.main;
-    zoomAtAnchor(cam, 1 / factor, cam.width / 2, cam.height / 2);
+    const anchorX = (cam.width + this.railLeft - this.railRight) / 2;
+    const anchorY = cam.height / 2;
+    zoomAtAnchor(cam, 1 / factor, anchorX, anchorY);
     this.redrawGrid();
     this.rulerOverlay.redraw();
     this.focusOverlay.redraw();

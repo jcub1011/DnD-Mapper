@@ -91,6 +91,10 @@ export class AuthorityController implements GameController {
     this.authority.setOpen(open);
   }
 
+  kickPlayer(playerId: string): void {
+    this.net.kickPlayer(playerId);
+  }
+
   destroy(): void {
     for (const off of this.unsubscribe) off();
     this.unsubscribe.length = 0;
