@@ -17,7 +17,6 @@ export type FogMaskB64 = string;
 /** Decoded bytes. The ONLY form the bit maths operates on. */
 export type FogMaskBytes = Uint8Array<ArrayBuffer>;
 
-
 const B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const B64_LOOKUP = new Uint8Array(256);
 for (let i = 0; i < B64_CHARS.length; i++) {
@@ -165,7 +164,6 @@ export function setCellsFogged(
   if (neededBytes <= 0) return mask;
 
   let next: FogMaskBytes | null = null;
-
 
   for (let i = 0; i < cells.length; i++) {
     const bit = cells[i];

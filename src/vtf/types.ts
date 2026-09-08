@@ -96,11 +96,13 @@ export interface VtfLayer {
 export interface VtfGridPosition {
   readonly x: number;
   readonly y: number;
+  readonly extra?: Readonly<Record<string, unknown>>;
 }
 
 export interface VtfPixelOffset {
   readonly x: number;
   readonly y: number;
+  readonly extra?: Readonly<Record<string, unknown>>;
 }
 
 export interface VtfTransform {
@@ -203,4 +205,32 @@ export interface UnpackResult {
   readonly extension: VtfExtensionPayload;
   readonly warnings: readonly string[];
   readonly state: DndMapperState;
+}
+
+/**
+ * Extracts unknown properties into the `extra` field of an object,
+ * matching C#'s [JsonExtensionData] behavior so foreign/future fields survive round-trips.
+ */
+export function withExtra<T extends object>(data: unknown, knownKeys: readonly string[]): T {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return data as T;
+  }
+  const obj = data as Record<string, unknown>;
+  const knownSet = new Set<string>(knownKeys);
+  const extra: Record<string, unknown> = {
+    ...((obj.extra as Record<string, unknown> | undefined) || {}),
+  };
+  let hasExtra = Object.keys(extra).length > 0;
+
+  for (const [key, val] of Object.entries(obj)) {
+    if (!knownSet.has(key) && key !== "extra") {
+      extra[key] = val;
+      hasExtra = true;
+    }
+  }
+
+  return {
+    ...obj,
+    ...(hasExtra ? { extra } : {}),
+  } as T;
 }

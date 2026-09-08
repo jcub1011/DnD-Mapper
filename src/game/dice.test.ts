@@ -152,7 +152,9 @@ describe("dice helpers", () => {
       expect(BUILTIN_ROLL_TEMPLATE_IDS.D12).toBe("d0000000-0000-0000-0000-000000000105");
       expect(BUILTIN_ROLL_TEMPLATE_IDS.D20).toBe("d0000000-0000-0000-0000-000000000106");
       expect(BUILTIN_ROLL_TEMPLATE_IDS.D20_ADVANTAGE).toBe("d0000000-0000-0000-0000-000000000107");
-      expect(BUILTIN_ROLL_TEMPLATE_IDS.D20_DISADVANTAGE).toBe("d0000000-0000-0000-0000-000000000108");
+      expect(BUILTIN_ROLL_TEMPLATE_IDS.D20_DISADVANTAGE).toBe(
+        "d0000000-0000-0000-0000-000000000108",
+      );
       expect(BUILTIN_ROLL_TEMPLATE_IDS.D100).toBe("d0000000-0000-0000-0000-000000000109");
 
       for (const t of BUILTIN_ROLL_TEMPLATES) {
@@ -161,8 +163,12 @@ describe("dice helpers", () => {
     });
 
     it("has expected roll modes for Advantage and Disadvantage templates", () => {
-      const adv = BUILTIN_ROLL_TEMPLATES.find((t) => t.id === BUILTIN_ROLL_TEMPLATE_IDS.D20_ADVANTAGE);
-      const dis = BUILTIN_ROLL_TEMPLATES.find((t) => t.id === BUILTIN_ROLL_TEMPLATE_IDS.D20_DISADVANTAGE);
+      const adv = BUILTIN_ROLL_TEMPLATES.find(
+        (t) => t.id === BUILTIN_ROLL_TEMPLATE_IDS.D20_ADVANTAGE,
+      );
+      const dis = BUILTIN_ROLL_TEMPLATES.find(
+        (t) => t.id === BUILTIN_ROLL_TEMPLATE_IDS.D20_DISADVANTAGE,
+      );
       expect(adv?.mode).toBe("Advantage");
       expect(dis?.mode).toBe("Disadvantage");
     });

@@ -73,11 +73,7 @@ export async function decodeAndMaybeDownscale(
           ctx.imageSmoothingQuality = "high";
           ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
           downscaledBlob = await new Promise<Blob | null>((resolve) => {
-            canvas.toBlob(
-              (b) => resolve(b),
-              "image/webp",
-              0.92,
-            );
+            canvas.toBlob((b) => resolve(b), "image/webp", 0.92);
           });
         }
       }

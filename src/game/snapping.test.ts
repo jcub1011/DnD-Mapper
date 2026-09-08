@@ -31,7 +31,6 @@ describe("snapping", () => {
       expect(r2.y).toBeCloseTo(8.5);
     });
 
-
     it("clamps out-of-bounds positions to [0.5, W-0.5]", () => {
       const grid = makeGrid(true, 10, 10);
       const low = snapToken(-3, -4, grid);

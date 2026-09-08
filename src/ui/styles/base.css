@@ -106,7 +106,9 @@ dndm-app {
   font: inherit;
   cursor: pointer;
   pointer-events: auto;
-  transition: background 120ms ease, border-color 120ms ease;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
 }
 .dndm-shell button:hover {
   background: var(--dndm-bg-elev-hover);

@@ -63,7 +63,7 @@ export interface MapImage {
   readonly originalLongEdgePx: number;
   readonly displayLongEdgePx: number;
 }
- 
+
 /** Derived display name: name ?? "Layer #{layerOrder}". */
 export function getMapImageDisplayName(img: Pick<MapImage, "name" | "layerOrder">): string {
   if (img.name && img.name.trim().length > 0) {
@@ -170,11 +170,7 @@ export function getModifier(v: AttributeValue): number {
 /** Backward-compatible alias for getModifier. */
 export const getAttributeModifier = getModifier;
 
-export type AttributePreset =
-  | "DnD5eCore"
-  | "DnD5ePlusCommonSkills"
-  | "SimpleD20"
-  | "Custom";
+export type AttributePreset = "DnD5eCore" | "DnD5ePlusCommonSkills" | "SimpleD20" | "Custom";
 
 export interface AttributeRow {
   readonly name: string;
@@ -208,7 +204,9 @@ export const SIMPLE_D20_ATTRIBUTES: readonly AttributeRow[] = [
   { name: "Modifier", type: "Modifier", default: { kind: "Modifier", value: 0 } },
 ];
 
-export function createDefaultAttributeSchema(preset: AttributePreset = "DnD5eCore"): AttributeSchema {
+export function createDefaultAttributeSchema(
+  preset: AttributePreset = "DnD5eCore",
+): AttributeSchema {
   switch (preset) {
     case "DnD5eCore":
       return { preset, rows: DND_5E_CORE_ATTRIBUTES };
@@ -461,4 +459,3 @@ export const ZOOM_MAX = 10.0;
 export const FOG_BRUSH_RADIUS_MIN = 1;
 export const FOG_BRUSH_RADIUS_MAX = 3;
 export const MAX_TEXTURE_SIZE = 8192;
-

@@ -1,45 +1,49 @@
 /* Design tokens — Forge & Ember palette for DnD Mapper. */
 :root {
   /* Surfaces */
-  --dndm-bg-deep:        #0c0a08;   /* forge-black wells (inputs, behind panel) */
-  --dndm-bg-panel:       #191512;   /* panel body */
-  --dndm-bg-panel-2:     #221b16;   /* alt rows / shadow */
-  --dndm-bg-elev:        #2a2018;   /* button rest */
-  --dndm-bg-elev-hover:  #382a1e;   /* button hover (ember-tinted) */
+  --dndm-bg-deep: #0c0a08; /* forge-black wells (inputs, behind panel) */
+  --dndm-bg-panel: #191512; /* panel body */
+  --dndm-bg-panel-2: #221b16; /* alt rows / shadow */
+  --dndm-bg-elev: #2a2018; /* button rest */
+  --dndm-bg-elev-hover: #382a1e; /* button hover (ember-tinted) */
 
   /* Lines */
-  --dndm-border:         #3a2d23;   /* blackened-iron hairline */
-  --dndm-border-strong:  #14100c;
-  --dndm-border-accent:  rgba(196, 116, 56, 0.32);  /* banked-ember copper */
+  --dndm-border: #3a2d23; /* blackened-iron hairline */
+  --dndm-border-strong: #14100c;
+  --dndm-border-accent: rgba(196, 116, 56, 0.32); /* banked-ember copper */
 
   /* Text */
-  --dndm-text:           #ece0cc;   /* warm ivory */
-  --dndm-text-dim:       #b29a7e;
-  --dndm-text-muted:     #7a6852;
+  --dndm-text: #ece0cc; /* warm ivory */
+  --dndm-text-dim: #b29a7e;
+  --dndm-text-muted: #7a6852;
 
   /* Accents */
-  --dndm-ember:          #c4743a;   /* primary accent */
-  --dndm-ember-hi:       #e89055;   /* hot ember highlight */
-  --dndm-gold:           #8b6a3a;   /* muted copper-gold */
-  --dndm-gilt:           #8b6a3a;   /* alias → muted copper */
-  --dndm-wax:            #c4743a;   /* alias → ember (legacy refs) */
-  --dndm-wax-hi:         #e89055;   /* alias → ember-hi (legacy refs) */
-  --dndm-parchment:      #221b16;   /* alias → panel-2 (legacy refs) */
+  --dndm-ember: #c4743a; /* primary accent */
+  --dndm-ember-hi: #e89055; /* hot ember highlight */
+  --dndm-gold: #8b6a3a; /* muted copper-gold */
+  --dndm-gilt: #8b6a3a; /* alias → muted copper */
+  --dndm-wax: #c4743a; /* alias → ember (legacy refs) */
+  --dndm-wax-hi: #e89055; /* alias → ember-hi (legacy refs) */
+  --dndm-parchment: #221b16; /* alias → panel-2 (legacy refs) */
 
   /* Semantic */
-  --dndm-danger:         #b04a3a;   /* rust-red */
-  --dndm-success:        #6a8a52;   /* oxidized moss */
+  --dndm-danger: #b04a3a; /* rust-red */
+  --dndm-success: #6a8a52; /* oxidized moss */
 
   /* Other */
-  --dndm-ink-soft:       rgba(196, 116, 56, 0.22);  /* faint divider over panel */
-  --dndm-void:           #07060a;   /* canvas background */
-  --dndm-display:        "Cormorant Garamond", "EB Garamond", Georgia, serif;
-  --dndm-highlight:      rgba(232, 144, 85, 0.07);  /* subtle ember sheen for inset highlights */
+  --dndm-ink-soft: rgba(196, 116, 56, 0.22); /* faint divider over panel */
+  --dndm-void: #07060a; /* canvas background */
+  --dndm-display: "Cormorant Garamond", "EB Garamond", Georgia, serif;
+  --dndm-highlight: rgba(232, 144, 85, 0.07); /* subtle ember sheen for inset highlights */
 
   /* Texture / composition */
   --dndm-noise: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.22 0 0 0 0 0.16 0 0 0 0 0.10 0 0 0 0.30 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.35'/></svg>");
   --dndm-panel-gradient: linear-gradient(180deg, #1d1814 0%, #191512 55%, #14110e 100%);
-  --dndm-panel-vignette: radial-gradient(ellipse at 50% 0%, rgba(196, 116, 56, 0.06), transparent 60%);
+  --dndm-panel-vignette: radial-gradient(
+    ellipse at 50% 0%,
+    rgba(196, 116, 56, 0.06),
+    transparent 60%
+  );
 
   /* Typography */
   --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;

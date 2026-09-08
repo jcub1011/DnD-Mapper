@@ -51,10 +51,7 @@ export function applyViewport(
 /**
  * Read the visible top-left world cell coordinate and zoom back out of the camera.
  */
-export function readViewport(
-  cam: Phaser.Cameras.Scene2D.Camera,
-  cellPixels = CELL,
-): ViewportState {
+export function readViewport(cam: Phaser.Cameras.Scene2D.Camera, cellPixels = CELL): ViewportState {
   return {
     panX: cam.worldView.x / cellPixels,
     panY: cam.worldView.y / cellPixels,

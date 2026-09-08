@@ -2,23 +2,24 @@
  * Promise-based IndexedDB engine wrapper for DnD Mapper.
  */
 
-import {
-  DB_NAME,
-  DB_VERSION,
-  STORE_IMAGES,
-  STORE_LIBRARY,
-  STORE_SLOTS_INDEX,
-} from "./schema.js";
+import { DB_NAME, DB_VERSION, STORE_IMAGES, STORE_LIBRARY, STORE_SLOTS_INDEX } from "./schema.js";
 
 export class StorageQuotaError extends Error {
-  constructor(message = "Storage quota exceeded. The browser cannot store additional campaign data or images.") {
+  constructor(
+    message = "Storage quota exceeded. The browser cannot store additional campaign data or images.",
+  ) {
     super(message);
     this.name = "StorageQuotaError";
   }
 }
 
 function wrapError(err: unknown): Error {
-  if (err && typeof err === "object" && "name" in err && (err as { name: string }).name === "QuotaExceededError") {
+  if (
+    err &&
+    typeof err === "object" &&
+    "name" in err &&
+    (err as { name: string }).name === "QuotaExceededError"
+  ) {
     return new StorageQuotaError();
   }
   if (err instanceof Error) return err;
@@ -29,10 +30,7 @@ export function isIndexedDbAvailable(): boolean {
   return typeof indexedDB !== "undefined" && indexedDB !== null;
 }
 
-export function openDatabase(
-  dbName = DB_NAME,
-  version = DB_VERSION,
-): Promise<IDBDatabase> {
+export function openDatabase(dbName = DB_NAME, version = DB_VERSION): Promise<IDBDatabase> {
   if (!isIndexedDbAvailable()) {
     return Promise.reject(new Error("IndexedDB is not available in this environment."));
   }
@@ -172,10 +170,7 @@ export function deleteBatch(
   });
 }
 
-export function getAllKeysFromStore(
-  db: IDBDatabase,
-  storeName: string,
-): Promise<string[]> {
+export function getAllKeysFromStore(db: IDBDatabase, storeName: string): Promise<string[]> {
   return new Promise((resolve, reject) => {
     try {
       const tx = db.transaction(storeName, "readonly");

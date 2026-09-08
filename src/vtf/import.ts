@@ -23,19 +23,22 @@ import type {
   TokenIconKind,
   TokenType,
 } from "../game/domain.js";
-import { MAX_ARCHIVE_BYTES } from "../game/domain.js";
+import { MAX_ARCHIVE_BYTES, MAX_FILE_SIZE_BYTES, MAX_ROOM_STORAGE_BYTES } from "../game/domain.js";
 import type {
   DndMapperGlobalVendor,
   DndMapperSceneVendor,
   LibraryCoreSnapshot,
   UnpackResult,
   VtfEntity,
+  VtfEntityInstance,
   VtfExtensionPayload,
   VtfGlobalState,
   VtfImageAsset,
+  VtfLayer,
   VtfManifest,
   VtfScene,
 } from "./types.js";
+import { withExtra } from "./types.js";
 import { openZip } from "./unzip.js";
 
 const VENDOR_KEY = "knockbox_dnd_mapper";
@@ -45,6 +48,13 @@ const EXTENSION_ENTRY = `extensions/${VENDOR_KEY}.json`;
 const SCENES_PREFIX = "scenes/";
 const ENTITIES_PREFIX = "entities/";
 const IMAGES_PREFIX = "assets/images/";
+
+const ALLOWED_MIME_TYPES = new Set([
+  "application/zip",
+  "application/x-zip-compressed",
+  "application/octet-stream",
+  "",
+]);
 
 function normalizeTokenIconKind(raw: unknown): TokenIconKind {
   return raw === 1 || raw === "Solid" ? "Solid" : "Initial";
@@ -151,6 +161,21 @@ function getContentType(ext: string): string | null {
  * Imports a .vtf archive from a Blob into a complete campaign state and image assets.
  */
 export async function importVtf(blob: Blob): Promise<UnpackResult> {
+  // Feature detection: DecompressionStream('deflate-raw')
+  if (typeof DecompressionStream === "undefined") {
+    throw new Error(
+      "DecompressionStream is not supported in this environment. Modern browser required (Safari 16.4+, Firefox 113+, Chrome 80+).",
+    );
+  }
+
+  // MIME allow-list validation
+  if (blob.type && !ALLOWED_MIME_TYPES.has(blob.type)) {
+    throw new Error(
+      `Unsupported archive MIME type '${blob.type}'. Expected a .vtf or zip archive.`,
+    );
+  }
+
+  // 500 MB browser archive ceiling
   if (blob.size > MAX_ARCHIVE_BYTES) {
     throw new Error(
       `Archive size (${Math.round(blob.size / (1024 * 1024))} MB) exceeds maximum allowed size of 500 MB.`,
@@ -165,19 +190,24 @@ export async function importVtf(blob: Blob): Promise<UnpackResult> {
   if (!manifestEntry) {
     throw new Error("Invalid .vtf archive: missing manifest.json.");
   }
-  const manifest = await zip.readJson<VtfManifest>(manifestEntry);
-  if (!manifest || !manifest.vtfVersion) {
+  const rawManifest = await zip.readJson<VtfManifest>(manifestEntry);
+  if (!rawManifest || !rawManifest.vtfVersion) {
     throw new Error("Invalid .vtf archive: malformed manifest.json.");
   }
+  const manifest = withExtra<VtfManifest>(rawManifest, [
+    "vtfVersion",
+    "campaign",
+    "system",
+    "dependencies",
+    "entryState",
+  ]);
 
   const major = parseMajorVersion(manifest.vtfVersion);
   if (major === 0) {
     throw new Error(`Unrecognized vtfVersion: '${manifest.vtfVersion}'.`);
   }
   if (major > 1) {
-    throw new Error(
-      `This .vtf was written for VTF v${major}.x; this build supports up to v1.x.`,
-    );
+    throw new Error(`This .vtf was written for VTF v${major}.x; this build supports up to v1.x.`);
   }
 
   const slotTitle = manifest.campaign?.title?.trim() || "Imported slot";
@@ -186,20 +216,53 @@ export async function importVtf(blob: Blob): Promise<UnpackResult> {
   const globalEntry = zip.getEntry(GLOBAL_STATE_ENTRY);
   let globalVendor: DndMapperGlobalVendor = {};
   if (globalEntry) {
-    const globalState = await zip.readJson<VtfGlobalState>(globalEntry);
-    if (globalState?.vendorData?.[VENDOR_KEY]) {
-      globalVendor = globalState.vendorData[VENDOR_KEY] as DndMapperGlobalVendor;
+    const rawGlobal = await zip.readJson<VtfGlobalState>(globalEntry);
+    if (rawGlobal) {
+      const globalState = withExtra<VtfGlobalState>(rawGlobal, [
+        "campaignTime",
+        "playlist",
+        "vendorData",
+      ]);
+      if (globalState?.vendorData?.[VENDOR_KEY]) {
+        globalVendor = withExtra<DndMapperGlobalVendor>(globalState.vendorData[VENDOR_KEY], [
+          "settings",
+          "attributeSchema",
+          "activeSchemaTemplateId",
+          "initiativeAttributeName",
+          "customTemplates",
+          "globalRollTemplates",
+          "loadedDiceRules",
+          "mapOrder",
+          "sheetOrder",
+        ]);
+      }
     }
   }
 
   // 3. Images: read bytes, re-mint GUIDs to avoid cross-slot collisions
   const imageGuidMap = new Map<string, string>(); // oldGuidLower -> newGuid
   const images = new Map<string, VtfImageAsset>();
+  let aggregateImageBytes = 0;
 
   for (const entry of zip.entries) {
     if (!entry.name.startsWith(IMAGES_PREFIX)) continue;
     const fileName = entry.name.slice(IMAGES_PREFIX.length);
     if (!fileName || fileName.endsWith("/")) continue;
+
+    // Per-image file cap: 100 MB
+    if (entry.uncompressedSize > MAX_FILE_SIZE_BYTES) {
+      throw new Error(
+        `Image '${fileName}' (${Math.round(entry.uncompressedSize / (1024 * 1024))} MB) exceeds maximum allowed size of 100 MB.`,
+      );
+    }
+
+    // Room aggregate cap: 1 GB
+    aggregateImageBytes += entry.uncompressedSize;
+    if (aggregateImageBytes > MAX_ROOM_STORAGE_BYTES) {
+      throw new Error(
+        `Total uncompressed image size exceeds maximum allowed room storage of 1 GB.`,
+      );
+    }
 
     const dot = fileName.lastIndexOf(".");
     const stem = dot >= 0 ? fileName.slice(0, dot) : fileName;
@@ -211,7 +274,10 @@ export async function importVtf(blob: Blob): Promise<UnpackResult> {
       continue;
     }
 
-    const newId = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `img-${Math.random().toString(36).slice(2, 11)}`;
+    const newId =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `img-${Math.random().toString(36).slice(2, 11)}`;
     imageGuidMap.set(stem.toLowerCase(), newId);
 
     const imageBlob = await zip.readBlob(entry);
@@ -230,18 +296,48 @@ export async function importVtf(blob: Blob): Promise<UnpackResult> {
     if (!entry.name.startsWith(SCENES_PREFIX)) continue;
     if (!entry.name.toLowerCase().endsWith(".json")) continue;
 
-    const scene = await zip.readJson<VtfScene>(entry);
-    if (!scene) continue;
+    const rawScene = await zip.readJson<VtfScene>(entry);
+    if (!rawScene) continue;
 
-    const sceneVendor = scene.vendorData?.[VENDOR_KEY] as DndMapperSceneVendor | undefined;
-    if (!sceneVendor || !sceneVendor.id) {
+    const scene = withExtra<VtfScene>(rawScene, [
+      "sceneId",
+      "dimensions",
+      "grid",
+      "ambience",
+      "layers",
+      "entityInstances",
+      "vendorData",
+    ]);
+
+    const rawSceneVendor = scene.vendorData?.[VENDOR_KEY] as Record<string, unknown> | undefined;
+    if (!rawSceneVendor || !rawSceneVendor.id) {
       warnings.push(`Skipped scene without DnD Mapper vendor data: ${scene.sceneId || entry.name}`);
       continue;
     }
+    const sceneVendor = withExtra<DndMapperSceneVendor>(rawSceneVendor, [
+      "id",
+      "name",
+      "listOrder",
+      "createdUtc",
+      "grid",
+      "defaultSpawnX",
+      "defaultSpawnY",
+      "fogMask",
+    ]);
 
     // Process Layers (Images)
     const imageList: MapImage[] = [];
-    for (const layer of scene.layers || []) {
+    for (const rawLayer of scene.layers || []) {
+      const layer = withExtra<VtfLayer>(rawLayer, [
+        "id",
+        "name",
+        "type",
+        "assetRef",
+        "zIndex",
+        "opacity",
+        "vendorData",
+      ]);
+
       if (layer.type?.toLowerCase() !== "image") {
         warnings.push(`Skipped layer with unsupported type '${layer.type}'.`);
         continue;
@@ -269,7 +365,15 @@ export async function importVtf(blob: Blob): Promise<UnpackResult> {
 
     // Process Entity Instances (Tokens)
     const tokenList: Token[] = [];
-    for (const inst of scene.entityInstances || []) {
+    for (const rawInst of scene.entityInstances || []) {
+      const inst = withExtra<VtfEntityInstance>(rawInst, [
+        "instanceId",
+        "entityRef",
+        "transform",
+        "localOverrides",
+        "vendorData",
+      ]);
+
       const tokenVendor = inst.vendorData?.[VENDOR_KEY] as Record<string, unknown> | undefined;
       if (tokenVendor && tokenVendor.id) {
         tokenList.push({
@@ -300,7 +404,12 @@ export async function importVtf(blob: Blob): Promise<UnpackResult> {
           mapId: sceneVendor.id,
           x: inst.transform.gridPosition.x,
           y: inst.transform.gridPosition.y,
-          sheetId: inst.entityRef?.startsWith(ENTITIES_PREFIX) ? inst.entityRef.slice(ENTITIES_PREFIX.length).replace(/^sheet_/, "").replace(/\.json$/, "") : null,
+          sheetId: inst.entityRef?.startsWith(ENTITIES_PREFIX)
+            ? inst.entityRef
+                .slice(ENTITIES_PREFIX.length)
+                .replace(/^sheet_/, "")
+                .replace(/\.json$/, "")
+            : null,
           hidden: false,
         });
       }
@@ -345,8 +454,10 @@ export async function importVtf(blob: Blob): Promise<UnpackResult> {
     if (!entry.name.startsWith(ENTITIES_PREFIX)) continue;
     if (!entry.name.toLowerCase().endsWith(".json")) continue;
 
-    const entity = await zip.readJson<VtfEntity>(entry);
-    if (!entity) continue;
+    const rawEntity = await zip.readJson<VtfEntity>(entry);
+    if (!rawEntity) continue;
+
+    const entity = withExtra<VtfEntity>(rawEntity, ["entityId", "name", "assetRef", "vendorData"]);
 
     const sheetVendor = entity.vendorData?.[VENDOR_KEY] as CharacterSheet | undefined;
     if (!sheetVendor || !sheetVendor.id) {
@@ -375,8 +486,10 @@ export async function importVtf(blob: Blob): Promise<UnpackResult> {
   };
   const extensionEntry = zip.getEntry(EXTENSION_ENTRY);
   if (extensionEntry) {
-    const ext = await zip.readJson<VtfExtensionPayload>(extensionEntry);
-    if (ext) extension = ext;
+    const rawExt = await zip.readJson<VtfExtensionPayload>(extensionEntry);
+    if (rawExt) {
+      extension = withExtra<VtfExtensionPayload>(rawExt, ["activeCombat", "phase"]);
+    }
   }
 
   // 7. Core Spine

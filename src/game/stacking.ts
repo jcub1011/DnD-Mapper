@@ -64,7 +64,9 @@ export function groupTokensIntoStacks(tokens: readonly Token[]): TokenStack[] {
   }
 
   return [...map.values()]
-    .sort((a, b) => (a.cell.cellY !== b.cell.cellY ? a.cell.cellY - b.cell.cellY : a.cell.cellX - b.cell.cellX))
+    .sort((a, b) =>
+      a.cell.cellY !== b.cell.cellY ? a.cell.cellY - b.cell.cellY : a.cell.cellX - b.cell.cellX,
+    )
     .map((s) => ({ cell: s.cell, tokens: s.tokens }));
 }
 

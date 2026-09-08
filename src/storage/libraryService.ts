@@ -41,12 +41,8 @@ import {
   STORE_LIBRARY,
   STORE_SLOTS_INDEX,
 } from "./schema.js";
-import type {
-  LibraryCoreSnapshot,
-  SlotIndexEntry,
-  SlotInfo,
-  SlotsIndex,
-} from "./schema.js";
+import type { LibraryCoreSnapshot, SlotIndexEntry, SlotInfo, SlotsIndex } from "./schema.js";
+import type { UnpackResult } from "../vtf/types.js";
 
 const SAVE_DEBOUNCE_MS = 500;
 
@@ -386,7 +382,11 @@ export class LibraryService {
     await this.touchSlotIndex(slotId, slotName, isAutoSave ? "Auto" : "Manual");
   }
 
-  private async touchSlotIndex(slotId: string, name: string, kind: "Auto" | "Manual"): Promise<void> {
+  private async touchSlotIndex(
+    slotId: string,
+    name: string,
+    kind: "Auto" | "Manual",
+  ): Promise<void> {
     const db = this.requireDb();
     const index = await this.ensureSlotsIndex();
     const now = new Date().toISOString();
@@ -585,5 +585,37 @@ export class LibraryService {
     }
 
     return total;
+  }
+
+  /**
+   * Imports an unpacked VTF archive as a new slot.
+   * Persists all extracted images to STORE_IMAGES, then saves the slot shards into STORE_LIBRARY.
+   */
+  public async importSlot(
+    unpackResult: UnpackResult,
+    slotId?: string,
+    slotName?: string,
+  ): Promise<string> {
+    const db = this.requireDb();
+
+    // 1. Batch store images into STORE_IMAGES
+    const imageItems = Array.from(unpackResult.images.values()).map((asset) => ({
+      key: asset.id,
+      value: asset.blob,
+    }));
+    if (imageItems.length > 0) {
+      await putBatch(db, STORE_IMAGES, imageItems);
+    }
+
+    // 2. Save slot shards into STORE_LIBRARY
+    const id =
+      slotId ||
+      (typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `slot-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`);
+    const name = slotName || unpackResult.slotTitle || "Imported slot";
+
+    await this.saveSlot(id, name, unpackResult.state);
+    return id;
   }
 }

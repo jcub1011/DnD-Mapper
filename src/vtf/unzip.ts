@@ -63,10 +63,10 @@ export async function openZip(blob: Blob): Promise<ZipArchiveReader> {
     throw new Error("Invalid ZIP: End of Central Directory signature not found.");
   }
 
-  // Check for ZIP64 locator preceding EOCD
-  if (eocdRelOffset >= 20) {
-    const locatorSig = scanView.getUint32(eocdRelOffset - 20, true);
-    if (locatorSig === SIG_ZIP64_LOCATOR || locatorSig === SIG_ZIP64_EOCD) {
+  // Check for ZIP64 locator or EOCD preceding EOCD
+  for (let i = 0; i <= eocdRelOffset - 4; i++) {
+    const sig = scanView.getUint32(i, true);
+    if (sig === SIG_ZIP64_LOCATOR || sig === SIG_ZIP64_EOCD) {
       throw new Error("ZIP64 archives are not supported.");
     }
   }

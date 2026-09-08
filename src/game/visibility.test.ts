@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  createDefaultDndMapperState,
-  type CharacterSheet,
-  type Token,
-} from "./domain.js";
+import { createDefaultDndMapperState, type CharacterSheet, type Token } from "./domain.js";
 import {
   canEditSheet,
   canMoveToken,

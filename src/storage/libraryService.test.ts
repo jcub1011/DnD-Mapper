@@ -2,11 +2,7 @@ import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CharacterSheet, DndMapperState, GameMap } from "../game/domain.js";
 import { deleteDatabase } from "./db.js";
-import {
-  captureFingerprint,
-  isFingerprintEqual,
-  LibraryService,
-} from "./libraryService.js";
+import { captureFingerprint, isFingerprintEqual, LibraryService } from "./libraryService.js";
 import { AUTO_SLOT_ID } from "./schema.js";
 
 function createMockState(): DndMapperState {
