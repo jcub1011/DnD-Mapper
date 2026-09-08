@@ -11,8 +11,11 @@ import {
   createAssetSource,
 } from "./assetSource.js";
 import {
+  HttpBlobTransport,
   IdbBlobTransport,
+  KbBlobTransport,
   LOCAL_BLOB_DB_NAME,
+  type KnockBoxBlobPlugin,
   sha256Hex,
 } from "./blobTransport.js";
 import { decodeAndMaybeDownscale } from "./imageDownscale.js";
@@ -143,12 +146,30 @@ describe("Asset Pipeline", () => {
     it("createAssetSource returns appropriate implementation for launch mode", () => {
       const soloSource = createAssetSource("solo", service);
       expect(soloSource).toBeInstanceOf(BlobShareAssetSource);
+      expect((soloSource as BlobShareAssetSource).transport).toBeInstanceOf(IdbBlobTransport);
 
       const tabSource = createAssetSource("local-tab", service);
       expect(tabSource).toBeInstanceOf(BlobShareAssetSource);
+      expect((tabSource as BlobShareAssetSource).transport).toBeInstanceOf(IdbBlobTransport);
 
       const platformSource = createAssetSource("platform", service, "test-ticket");
       expect(platformSource).toBeInstanceOf(BlobShareAssetSource);
+      expect((platformSource as BlobShareAssetSource).transport).toBeInstanceOf(HttpBlobTransport);
+
+      const mockPlugin: KnockBoxBlobPlugin = {
+        registerBlob: vi.fn(),
+        unregisterBlob: vi.fn(),
+        blobUrl: vi.fn(),
+      };
+      const platformKbSource = createAssetSource(
+        "platform",
+        service,
+        "test-ticket",
+        "local",
+        mockPlugin,
+      );
+      expect(platformKbSource).toBeInstanceOf(BlobShareAssetSource);
+      expect((platformKbSource as BlobShareAssetSource).transport).toBeInstanceOf(KbBlobTransport);
     });
   });
 
@@ -534,6 +555,169 @@ describe("Asset Pipeline", () => {
     it("enforces 100 MB per-file and 1 GB room caps constants", () => {
       expect(MAX_FILE_SIZE_BYTES).toBe(100 * 1024 * 1024);
       expect(MAX_ROOM_STORAGE_BYTES).toBe(1024 * 1024 * 1024);
+    });
+  });
+
+  describe("KbBlobTransport (09 — Blob Share Spec)", () => {
+    let mockPlugin: KnockBoxBlobPlugin;
+    let transport: KbBlobTransport;
+
+    beforeEach(() => {
+      mockPlugin = {
+        registerBlob: vi.fn().mockResolvedValue("/blob/abc12345.tag6789"),
+        unregisterBlob: vi.fn().mockResolvedValue(undefined),
+        blobUrl: vi.fn((logicalId: string) =>
+          logicalId === "img-1" ? "/blob/abc12345.tag6789" : null,
+        ),
+      };
+      transport = new KbBlobTransport(mockPlugin);
+    });
+
+    it("stages blob with put, then registers via plugin.registerBlob", async () => {
+      const blob = new Blob(["test-bytes"], { type: "image/png" });
+      const hash = "abc12345";
+
+      await transport.put(hash, blob);
+      await transport.register("img-1", hash);
+
+      expect(mockPlugin.registerBlob).toHaveBeenCalledWith("img-1", blob);
+      expect(await transport.hashFor("img-1")).toBe(hash);
+      expect(await transport.urlFor(hash)).toBe("/blob/abc12345.tag6789");
+      expect(await transport.has(hash)).toBe(true);
+    });
+
+    it("throws on register if blob was not staged via put", async () => {
+      await expect(transport.register("img-unstaged", "unknown-hash")).rejects.toThrow(
+        /no staged blob for hash/,
+      );
+    });
+
+    it("unregisters handle and delegates to plugin.unregisterBlob", async () => {
+      const blob = new Blob(["test-bytes"]);
+      await transport.put("hash-1", blob);
+      await transport.register("img-temp", "hash-1");
+
+      expect(await transport.hashFor("img-temp")).toBe("hash-1");
+
+      await transport.unregister("img-temp");
+      expect(mockPlugin.unregisterBlob).toHaveBeenCalledWith("img-temp");
+      expect(await transport.hashFor("img-temp")).toBeNull();
+    });
+  });
+
+  describe("HttpBlobTransport (09 — Blob Share Spec)", () => {
+    let origFetch: typeof globalThis.fetch;
+
+    beforeEach(() => {
+      origFetch = globalThis.fetch;
+    });
+
+    afterEach(() => {
+      globalThis.fetch = origFetch;
+    });
+
+    it("has checks HEAD /blob/{sha256} with X-KnockBox-Ticket header", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+      });
+      globalThis.fetch = mockFetch;
+
+      const transport = new HttpBlobTransport("secret-ticket", "http://games.local");
+      const exists = await transport.has("deadbeef".repeat(8));
+
+      expect(exists).toBe(true);
+      expect(mockFetch).toHaveBeenCalledWith(
+        `http://games.local/blob/${"deadbeef".repeat(8)}`,
+        expect.objectContaining({
+          method: "HEAD",
+          headers: { "X-KnockBox-Ticket": "secret-ticket" },
+        }),
+      );
+    });
+
+    it("has returns false when HEAD answers 404 or network error", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({ status: 404, ok: false });
+      const transport = new HttpBlobTransport("secret-ticket", "http://games.local");
+      expect(await transport.has("deadbeef".repeat(8))).toBe(false);
+
+      globalThis.fetch = vi.fn().mockRejectedValue(new Error("Network failure"));
+      expect(await transport.has("deadbeef".repeat(8))).toBe(false);
+    });
+
+    it("put sends PUT /blob/{sha256} with ticket and binary body", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({ status: 200, ok: true });
+      globalThis.fetch = mockFetch;
+
+      const transport = new HttpBlobTransport("ticket-abc");
+      const blob = new Blob(["blob-content"], { type: "image/webp" });
+      await transport.put("hash-123", blob);
+
+      expect(mockFetch).toHaveBeenCalledWith("/blob/hash-123", {
+        method: "PUT",
+        headers: {
+          "X-KnockBox-Ticket": "ticket-abc",
+          "Content-Type": "image/webp",
+        },
+        body: blob,
+      });
+    });
+
+    it("put throws on non-200 refusal status", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        status: 413,
+        ok: false,
+        text: () => Promise.resolve("Blob too large"),
+      });
+
+      const transport = new HttpBlobTransport("ticket-abc");
+      await expect(transport.put("hash-123", new Blob(["large"]))).rejects.toThrow(
+        /Failed to upload blob \(413\)/,
+      );
+    });
+
+    it("register posts to /blob/register and records returned URL capability", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+        json: () => Promise.resolve({ ok: true, url: "/blob/hash-123.tag-mac" }),
+      });
+      globalThis.fetch = mockFetch;
+
+      const transport = new HttpBlobTransport("ticket-xyz");
+      await transport.register("logical-img-1", "hash-123", "image/webp");
+
+      expect(mockFetch).toHaveBeenCalledWith("/blob/register", {
+        method: "POST",
+        headers: {
+          "X-KnockBox-Ticket": "ticket-xyz",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          logicalId: "logical-img-1",
+          sha256: "hash-123",
+          contentType: "image/webp",
+        }),
+      });
+
+      expect(await transport.hashFor("logical-img-1")).toBe("hash-123");
+      expect(await transport.urlFor("hash-123")).toBe("/blob/hash-123.tag-mac");
+    });
+
+    it("unregister sends DELETE /blob/register/{logicalId}", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({ status: 200, ok: true });
+      globalThis.fetch = mockFetch;
+
+      const transport = new HttpBlobTransport("ticket-xyz");
+      await transport.unregister("logical-img-1");
+
+      expect(mockFetch).toHaveBeenCalledWith("/blob/register/logical-img-1", {
+        method: "DELETE",
+        headers: {
+          "X-KnockBox-Ticket": "ticket-xyz",
+        },
+      });
+      expect(await transport.hashFor("logical-img-1")).toBeNull();
     });
   });
 });

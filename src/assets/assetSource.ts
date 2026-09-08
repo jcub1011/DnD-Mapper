@@ -13,6 +13,8 @@ import {
   type BlobTransport,
   IdbBlobTransport,
   HttpBlobTransport,
+  KbBlobTransport,
+  type KnockBoxBlobPlugin,
   sha256Hex,
 } from "./blobTransport.js";
 
@@ -171,8 +173,12 @@ export function createAssetSource(
   _libraryService: LibraryService,
   ticket: string | null = null,
   lobbyId = "local",
+  plugin?: unknown,
 ): AssetSource {
   if (launchMode === "platform") {
+    if (plugin && typeof (plugin as KnockBoxBlobPlugin).registerBlob === "function") {
+      return new BlobShareAssetSource(new KbBlobTransport(plugin as KnockBoxBlobPlugin));
+    }
     return new BlobShareAssetSource(new HttpBlobTransport(ticket));
   }
 

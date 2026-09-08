@@ -86,6 +86,7 @@ export class DndmApp extends GameElement {
   private rafId = 0;
   private lastCenterNonce: string | null = null;
 
+  public ticket: string | null = null;
   public libraryService = new LibraryService();
   public assetSource: AssetSource = createAssetSource(this.launchMode, this.libraryService);
   private hasSweptLocalBlobs = false;
@@ -133,7 +134,13 @@ export class DndmApp extends GameElement {
     this.controller = controller;
     this.match = controller.view.state;
     this.isOwner = controller.isOwner;
-    this.assetSource = createAssetSource(this.launchMode, this.libraryService);
+    this.assetSource = createAssetSource(
+      this.launchMode,
+      this.libraryService,
+      this.ticket,
+      "local",
+      fx.knockbox(),
+    );
 
     this.initRailWidths();
     this.updateRailCssVars();

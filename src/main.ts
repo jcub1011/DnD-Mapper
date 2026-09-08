@@ -30,6 +30,10 @@ function boot(): void {
   // out of location.hash the moment it starts, so detectLaunch() is only reliable
   // before the Phaser game boots — capture it here and thread it down.
   const launchMode = detectLaunch();
+  const ticket =
+    typeof location !== "undefined" && location.hash
+      ? new URLSearchParams(location.hash.replace(/^#/, "")).get("kbTicket")
+      : null;
   log.info(`booting (launch=${launchMode})`);
 
   // Boot the Phaser game into #map, registering the KnockBox networking
@@ -49,6 +53,7 @@ function boot(): void {
   const net = fx.knockbox();
   const app = document.querySelector("dndm-app") as DndmApp;
   app.launchMode = launchMode;
+  app.ticket = ticket;
   fx.setShakeTarget(app);
 
   if (!net) throw new Error("KnockBox plugin was not registered — cannot start the game");

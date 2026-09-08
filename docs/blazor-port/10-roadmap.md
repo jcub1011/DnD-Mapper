@@ -29,14 +29,14 @@ plus a coordinated `addons-v*` release.
 6. Client SDK methods across all four addons; bump `sdkVersion`; release.
 
 **Done when:**
-- [ ] Two lobbies register the same bytes; one file exists on disk.
-- [ ] **R6:** two logical ids in *one* lobby release independently — unregistering one keeps the file.
-- [ ] Closing a lobby releases its handles with no game-side cleanup call.
-- [ ] Uploading 100 MB does not move the server's managed heap (`dotnet-counters` while uploading).
-- [ ] A hash that doesn't match the uploaded bytes is rejected and leaves no staging file.
-- [ ] An unauthenticated `PUT` is refused; a `GET` by hash succeeds without auth.
-- [ ] Restart leaves no orphaned blobs.
-- [ ] `npm run addon:update` in this repo pulls the new client method.
+- [x] Two lobbies register the same bytes; one file exists on disk.
+- [x] **R6:** two logical ids in *one* lobby release independently — unregistering one keeps the file.
+- [x] Closing a lobby releases its handles with no game-side cleanup call.
+- [x] Uploading 100 MB does not move the server's managed heap (`dotnet-counters` while uploading).
+- [x] A hash that doesn't match the uploaded bytes is rejected and leaves no staging file.
+- [x] An unauthenticated `PUT` is refused; a `GET` by hash succeeds without auth.
+- [x] Restart leaves no orphaned blobs.
+- [x] `npm run addon:update` in this repo pulls the new client method.
 
 ## Phase 1 — Foundation
 

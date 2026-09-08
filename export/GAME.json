@@ -9,7 +9,7 @@
   "homepage": "https://github.com/jcub1011/DnD-Mapper",
   "bugs": "https://github.com/jcub1011/DnD-Mapper/issues",
   "contentRating": "everyone",
-  "minAppVersion": "1.0.0",
+  "minAppVersion": "1.1.0",
   "entry": "index.html",
   "thumbnail": "thumb.svg",
   "minPlayers": 1,

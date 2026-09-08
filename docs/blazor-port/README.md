@@ -59,7 +59,7 @@ are the domain model, the `.vtf` format, and the CSS token block.
 | Phase | State |
 | --- | --- |
 | Planning | **Complete and audited** — this document set, verified against all three repos |
-| Phase 0 — blob-share platform feature | **Server half done** on `KnockBox-Games` branch `feat/blob-share-service` — store, HTTP surface, eviction on both teardown paths, three-tier quota, portal knobs, docs, tests. `Q2` is answered. **The client addon release is outstanding** and is the part with the lead time. |
+| Phase 0 — blob-share platform feature | **Complete** — Server feature built & tested on `KnockBox-Games` branch `feat/blob-share-service` (`BlobStore`, `BlobApi`, three-tier quota, teardown eviction, portal knobs, Native AOT support). Client addon updated to `1.2.0` across phaser and web addons, vendored in `DnD-Mapper`, `KbBlobTransport` client seam implemented, and `export/GAME.json` raised to `minAppVersion: 1.1.0`. |
 | Phase 1 — foundation & rename | **Complete** — template renamed to `dnd-mapper`, layer stack inverted (`#map` below `<dndm-app>`), `panels.css` & tokens installed, `MapScene` camera midpoint correction and clamped grid renderer verified with tests |
 | Phase 2 — domain + `.vtf` import | Not started |
 | Phase 3 — Phaser map renderer | Not started |
@@ -75,12 +75,7 @@ visibility), before phase 4. **`Q2`** (blob disk quota) is settled — see `D10`
 `Q6` (target browsers) and `Q7` (`players[0]` is the creator) both want a one-line answer from
 outside this document set.
 
-**Phase 0's remaining work is the client half**, and it is the half the schedule turns on: client
-methods in the phaser and web addons, the three protocol cores, `knockbox-local.js`, the Godot names
-added to `KNOWN_GODOT_GAPS`, a shared `sdkVersion` bump across four version files, `client-parity`,
-an `addons-v*` tag, then a server release to carry the API. See
-[`09`](09-blob-share-server-spec.md#client-addon--the-expensive-half), whose *As built* section
-records what the server actually shipped.
+**Phase 0 is complete**: both the server service in `KnockBox-Games` and the client addon/transports in `DnD-Mapper` are implemented and tested, with `export/GAME.json` requiring server version `1.1.0`.
 
 ## Conventions used in these docs
 

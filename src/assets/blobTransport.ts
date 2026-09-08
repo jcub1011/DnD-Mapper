@@ -403,3 +403,61 @@ export class HttpBlobTransport implements BlobTransport {
     return this.urls.get(sha256) ?? `${this.baseUrl}/blob/${sha256}`;
   }
 }
+
+/**
+ * Interface describing the blob methods exposed by KnockBox client plugins / peers.
+ */
+export interface KnockBoxBlobPlugin {
+  registerBlob(logicalId: string, blob: Blob): Promise<string>;
+  unregisterBlob(logicalId: string): Promise<void>;
+  blobUrl(logicalId: string): string | null;
+}
+
+/**
+ * KnockBox Addon-backed BlobTransport for 'platform' launch mode,
+ * delegating to knockbox.registerBlob / unregisterBlob / blobUrl.
+ *
+ * Implements 09 — Blob Share (Platform Feature Spec) § Don't block the port on the addon release.
+ */
+export class KbBlobTransport implements BlobTransport {
+  private readonly stagedBlobs = new Map<string, Blob>();
+  private readonly handles = new Map<string, string>(); // logicalId -> sha256
+  private readonly urls = new Map<string, string>(); // sha256 -> url
+
+  constructor(private readonly plugin: KnockBoxBlobPlugin) {}
+
+  public async has(sha256: string): Promise<boolean> {
+    return this.urls.has(sha256);
+  }
+
+  public async put(sha256: string, blob: Blob): Promise<void> {
+    this.stagedBlobs.set(sha256, blob);
+  }
+
+  public async register(logicalId: string, sha256: string): Promise<void> {
+    const staged = this.stagedBlobs.get(sha256);
+    if (!staged) {
+      throw new Error(
+        `Cannot register blob for logicalId "${logicalId}": no staged blob for hash ${sha256}`,
+      );
+    }
+    const url = await this.plugin.registerBlob(logicalId, staged);
+    this.handles.set(logicalId, sha256);
+    this.urls.set(sha256, url);
+    this.stagedBlobs.delete(sha256);
+  }
+
+  public async unregister(logicalId: string): Promise<void> {
+    this.handles.delete(logicalId);
+    await this.plugin.unregisterBlob(logicalId);
+  }
+
+  public async hashFor(logicalId: string): Promise<string | null> {
+    return this.handles.get(logicalId) ?? null;
+  }
+
+  public async urlFor(sha256: string): Promise<string> {
+    return this.urls.get(sha256) ?? "";
+  }
+}
+
