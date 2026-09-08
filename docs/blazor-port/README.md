@@ -60,7 +60,7 @@ are the domain model, the `.vtf` format, and the CSS token block.
 | --- | --- |
 | Planning | **Complete and audited** — this document set, verified against all three repos |
 | Phase 0 — blob-share platform feature | **Server half done** on `KnockBox-Games` branch `feat/blob-share-service` — store, HTTP surface, eviction on both teardown paths, three-tier quota, portal knobs, docs, tests. `Q2` is answered. **The client addon release is outstanding** and is the part with the lead time. |
-| Phase 1 — foundation & rename | Not started |
+| Phase 1 — foundation & rename | **Complete** — template renamed to `dnd-mapper`, layer stack inverted (`#map` below `<dndm-app>`), `panels.css` & tokens installed, `MapScene` camera midpoint correction and clamped grid renderer verified with tests |
 | Phase 2 — domain + `.vtf` import | Not started |
 | Phase 3 — Phaser map renderer | Not started |
 | Phase 4 — authority & multiplayer sync | Not started |

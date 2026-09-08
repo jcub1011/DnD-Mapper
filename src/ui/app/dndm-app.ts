@@ -1,13 +1,11 @@
 /*
- * Root application shell. A pure VIEW over the replicated match state: it renders
- * what the authority published and turns clicks into intents. It never computes
- * game state — that lives in src/authority/, which the server runs.
+ * Root application shell for D&D Mapper. A pure VIEW over the replicated match
+ * state: it renders what the authority published and turns clicks into intents.
+ * It never computes game state — that lives in src/authority/, which the server runs.
  *
- * The controller is built by main.ts (synchronously, right after the FX game and
- * its KnockBox plugin exist) and handed in, so there is no boot-ordering race
+ * The controller is built by main.ts (synchronously, right after the Phaser game
+ * and its KnockBox plugin exist) and handed in, so there is no boot-ordering race
  * between the plugin firing `ready` and this element subscribing.
- *
- * Real views (lobby, HUD, game-over) get routed from here as the game takes shape.
  */
 
 import { html, nothing, type TemplateResult } from "lit";
@@ -27,8 +25,8 @@ const MAX_DT = 1 / 20;
 
 const EMPTY: MatchState = { phase: "Lobby", players: [], winnerId: null };
 
-@customElement("game-app")
-export class GameApp extends GameElement {
+@customElement("dndm-app")
+export class DndmApp extends GameElement {
   /** Set by main.ts before the element does anything meaningful. */
   launchMode: LaunchMode = "solo";
 
@@ -93,13 +91,7 @@ export class GameApp extends GameElement {
   };
 
   /**
-   * Per-frame PRESENTATION hook — currently empty by design.
-   *
-   * Anything continuous (a countdown, a tween, interpolated positions) belongs
-   * here and must run on EVERY client, because state only arrives on snapshots and
-   * deltas, never per frame. Drive it from values the authority put in the state
-   * (a `deadlineMs` you compare against, say), never from a per-frame counter the
-   * server would have to send.
+   * Per-frame PRESENTATION hook.
    */
   private advancePresentation(_dt: number): void {}
 
@@ -120,15 +112,15 @@ export class GameApp extends GameElement {
     const winner = players.find((p) => p.id === winnerId);
 
     return html`
-      <main class="game-shell">
-        <h1>KnockBox Game</h1>
-        <p class="game-sub">
+      <main class="dndm-shell">
+        <h1>D&D Mapper</h1>
+        <p class="dndm-sub">
           launch: <strong>${this.launchMode}</strong> · phase: ${phase} · ${players.length}
           player${players.length === 1 ? "" : "s"}
-          ${this.isOwner ? html` · <strong>owner</strong>` : nothing}
+          ${this.isOwner ? html` · <strong>DM / Owner</strong>` : nothing}
         </p>
 
-        <ul class="game-scores">
+        <ul class="dndm-scores">
           ${players.map(
             (p) => html`
               <li class=${p.id === me ? "is-me" : ""}>
@@ -147,14 +139,14 @@ export class GameApp extends GameElement {
         ${
           phase === "Playing"
             ? html`
-                <p class="game-sub">first to ${TARGET_SCORE} wins</p>
+                <p class="dndm-sub">first to ${TARGET_SCORE} wins</p>
                 <button @click=${() => this.send({ kind: "score", points: 1 })}>+1</button>
               `
             : nothing
         }
         ${
           phase === "GameOver"
-            ? html`<p class="game-score">
+            ? html`<p class="dndm-score">
                 ${winner ? `${winner.displayName} wins!` : "match over"}
               </p>`
             : nothing
@@ -177,6 +169,6 @@ export class GameApp extends GameElement {
 
 declare global {
   interface HTMLElementTagNameMap {
-    "game-app": GameApp;
+    "dndm-app": DndmApp;
   }
 }

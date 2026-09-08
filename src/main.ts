@@ -1,8 +1,7 @@
 /*
- * Bootstrap. Resolves the launch mode, boots the Phaser FX overlay (which
+ * Bootstrap. Resolves the launch mode, boots the Phaser map renderer (which
  * registers the KnockBox networking plugin when launched for multiplayer), and
- * mounts the Lit app shell. No Phaser scenes drive gameplay — the game loop runs
- * from <game-app>, and the FX canvas is purely decorative.
+ * mounts the Lit app shell.
  */
 
 import "./ui/styles/index.css";
@@ -10,9 +9,9 @@ import { attachKnockBoxSink, createLogger } from "./log";
 import { detectLaunch } from "./net/launch";
 import { AuthorityController } from "./net/authorityController";
 import { fx } from "./ui/fx/fx";
-// Side-effect import registers <game-app>; the type import is erased at build.
-import "./ui/app/game-app";
-import type { GameApp } from "./ui/app/game-app";
+// Side-effect import registers <dndm-app>; the type import is erased at build.
+import "./ui/app/dndm-app";
+import type { DndmApp } from "./ui/app/dndm-app";
 
 const log = createLogger("boot");
 
@@ -33,9 +32,9 @@ function boot(): void {
   const launchMode = detectLaunch();
   log.info(`booting (launch=${launchMode})`);
 
-  // Boot the Phaser FX overlay into #fx, registering the KnockBox networking
+  // Boot the Phaser game into #map, registering the KnockBox networking
   // plugin when launched for multiplayer (platform ticket or ?kbLocal=tab).
-  fx.init("fx", launchMode);
+  fx.init("map", launchMode);
 
   // Route logs to the KnockBox server logger once the plugin is attached. The
   // getter is resolved lazily per log call, so the plugin's async startup and
@@ -43,12 +42,12 @@ function boot(): void {
   attachKnockBoxSink(() => fx.knockbox()?.log);
 
   // Build the controller HERE, synchronously, while we are still in the same task
-  // that booted the FX game. KBAuthority requests its first snapshot from the
+  // that booted the Phaser game. KBAuthority requests its first snapshot from the
   // transport's `ready` event, and the plugin can fire that as soon as it starts —
   // so anything that defers (a microtask, an element lifecycle hook) risks missing
   // it. AuthorityController also carries a re-request guard for the same reason.
   const net = fx.knockbox();
-  const app = document.querySelector("game-app") as GameApp;
+  const app = document.querySelector("dndm-app") as DndmApp;
   app.launchMode = launchMode;
   fx.setShakeTarget(app);
 
