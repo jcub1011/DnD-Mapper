@@ -26,6 +26,13 @@ function formatRelative(isoUtc: string): string {
   }
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 @customElement("dndm-saves-panel")
 export class DndmSavesPanel extends GameElement {
   @property({ attribute: false })
@@ -38,6 +45,7 @@ export class DndmSavesPanel extends GameElement {
   onLoadSlotState?: (state: DndMapperState) => void;
 
   @state() private slots: readonly SlotInfo[] = [];
+  @state() private bytesUsed = 0;
   @state() private creating = false;
   @state() private newSlotName = "";
   @state() private renamingId: string | null = null;
@@ -50,6 +58,11 @@ export class DndmSavesPanel extends GameElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    if (this.libraryService) {
+      this.libraryService.onSlotsChanged = () => {
+        void this.refreshSlots();
+      };
+    }
     void this.refreshSlots();
   }
 
@@ -63,6 +76,7 @@ export class DndmSavesPanel extends GameElement {
     if (!this.libraryService) return;
     try {
       this.slots = await this.libraryService.listSlots();
+      this.bytesUsed = await this.libraryService.getBytesUsed();
       this.error = null;
     } catch (err) {
       this.error = String(err);
@@ -321,6 +335,13 @@ export class DndmSavesPanel extends GameElement {
                   })}
                 </ul>
               `}
+          <div
+            class="dndm-saves-storage-meter"
+            style="padding: 6px 8px; font-size: 11px; opacity: 0.75; display: flex; justify-content: space-between; border-top: 1px solid var(--dndm-border, #333); margin-top: 8px;"
+          >
+            <span>Storage</span>
+            <span>${formatBytes(this.bytesUsed)} / 1 GB</span>
+          </div>
           ${this.error ? html`<div class="dndm-saves-error">${this.error}</div>` : nothing}
         </div>
       </section>

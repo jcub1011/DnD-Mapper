@@ -506,6 +506,7 @@ export class MapScene extends Phaser.Scene {
     this.fogLayer.onContextRestored();
     if (this.activeMap) {
       this.imageLayer.setImages(this.activeMap.images);
+      this.imageLayer.onContextRestored();
       this.tokenLayer.setTokens(this.activeMap.tokens);
     }
     this.rulerOverlay.redraw();

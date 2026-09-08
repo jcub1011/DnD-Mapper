@@ -429,6 +429,7 @@ export function applyIntent(
         fullMaps,
         intent.mapId,
         intent.image as NewMapImage,
+        typeof intent.imageId === "string" ? intent.imageId : undefined,
       );
       if (!created) return null;
       const nextState: DndMapperState = { ...state, maps: nextMaps };

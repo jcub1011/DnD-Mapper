@@ -25,6 +25,60 @@ export interface ImageTransformEvent {
   rotation: number;
 }
 
+const inFlight = new Map<string, Promise<boolean>>();
+
+/**
+ * Ensures texture is loaded into Phaser for the given map image.
+ *
+ * Implements 08 — Asset Pipeline Wiring into Phaser:
+ *  - One in-flight load per image id, and exactly one listener pair per attempt.
+ *  - loaderror scoped strictly to file.key === image.id to prevent cross-image rejection.
+ *  - Unregistered listeners cleaned up in done().
+ *  - Revokes blob: URLs once texture is uploaded to avoid pinning browser memory.
+ */
+export function ensureTexture(
+  scene: Phaser.Scene,
+  image: MapImage,
+  assets?: AssetSource,
+): Promise<boolean> {
+  if (scene.textures.exists(image.id)) return Promise.resolve(true);
+  if (!assets) return Promise.resolve(false);
+
+  const existing = inFlight.get(image.id);
+  if (existing) return existing;
+
+  const task = (async () => {
+    const url = await assets.resolve(image.id);
+    if (url === null) return false; // -> dashed placeholder
+
+    return await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const done = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        scene.load.off(`filecomplete-image-${image.id}`, onDone);
+        scene.load.off("loaderror", onError);
+        if (url.startsWith("blob:")) {
+          URL.revokeObjectURL(url);
+        }
+        resolve(ok);
+      };
+      const onDone = () => done(true);
+      const onError = (file: { key: string }) => {
+        if (file.key === image.id) done(false); // scoped, not global
+      };
+
+      scene.load.on(`filecomplete-image-${image.id}`, onDone);
+      scene.load.on("loaderror", onError);
+      scene.load.image(image.id, url);
+      if (!scene.load.isLoading()) scene.load.start(); // required outside preload()
+    });
+  })().finally(() => inFlight.delete(image.id));
+
+  inFlight.set(image.id, task);
+  return task;
+}
+
 export class ImageLayer {
   private readonly sprites = new Map<string, Phaser.GameObjects.Image>();
   private readonly selectionGfx: Phaser.GameObjects.Graphics;
@@ -85,12 +139,15 @@ export class ImageLayer {
   }
 
   private rebuildImages(): void {
-    // 1. Clean up removed sprites
+    // 1. Clean up removed sprites and textures
     const activeIds = new Set(this.images.map((img) => img.id));
     for (const [id, sprite] of this.sprites.entries()) {
       if (!activeIds.has(id)) {
         sprite.destroy();
         this.sprites.delete(id);
+        if (this.scene.textures.exists(id)) {
+          this.scene.textures.remove(id);
+        }
       }
     }
 
@@ -195,33 +252,23 @@ export class ImageLayer {
   }
 
   private async resolveImageTexture(img: MapImage): Promise<void> {
-    if (!this.assetSource) return;
     try {
-      const url = await this.assetSource.getUrl(img.id);
-      if (!url) return;
-
-      const textureKey = `img_${img.id}`;
-      if (this.scene.textures.exists(textureKey)) {
+      const ok = await ensureTexture(this.scene, img, this.assetSource);
+      if (ok) {
         const sprite = this.sprites.get(img.id);
         if (sprite) {
-          sprite.setTexture(textureKey);
+          sprite.setTexture(img.id);
           sprite.setDisplaySize(img.width * CELL, img.height * CELL);
         }
-        return;
       }
-
-      // Load image dynamically
-      this.scene.load.image(textureKey, url);
-      this.scene.load.once(`filecomplete-image-${textureKey}`, () => {
-        const sprite = this.sprites.get(img.id);
-        if (sprite) {
-          sprite.setTexture(textureKey);
-          sprite.setDisplaySize(img.width * CELL, img.height * CELL);
-        }
-      });
-      this.scene.load.start();
     } catch {
       // Fallback stays placeholder
+    }
+  }
+
+  public onContextRestored(): void {
+    for (const img of this.images) {
+      void this.resolveImageTexture(img);
     }
   }
 

@@ -9,7 +9,9 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import type { KBPlayer } from "../../../addons/knockbox/knockbox-phaser";
-import { LocalAssetSource, type AssetSource } from "../../assets/assetSource";
+import { createAssetSource, type AssetSource } from "../../assets/assetSource";
+import { IdbBlobTransport } from "../../assets/blobTransport";
+import type { DndmImageUpload } from "../upload/dndm-image-upload";
 import {
   createDefaultDndMapperState,
   isFullMap,
@@ -85,7 +87,8 @@ export class DndmApp extends GameElement {
   private lastCenterNonce: string | null = null;
 
   public libraryService = new LibraryService();
-  public assetSource: AssetSource = new LocalAssetSource(this.libraryService);
+  public assetSource: AssetSource = createAssetSource(this.launchMode, this.libraryService);
+  private hasSweptLocalBlobs = false;
 
   @state() private match: Readonly<MatchState> = EMPTY;
   @state() private roster: readonly KBPlayer[] = [];
@@ -130,6 +133,7 @@ export class DndmApp extends GameElement {
     this.controller = controller;
     this.match = controller.view.state;
     this.isOwner = controller.isOwner;
+    this.assetSource = createAssetSource(this.launchMode, this.libraryService);
 
     this.initRailWidths();
     this.updateRailCssVars();
@@ -141,6 +145,11 @@ export class DndmApp extends GameElement {
       this.roster = players;
       const prevOwner = this.isOwner;
       this.isOwner = isOwner;
+      if (isOwner && players.length === 1 && !this.hasSweptLocalBlobs && this.launchMode === "local-tab") {
+        this.hasSweptLocalBlobs = true;
+        const idb = new IdbBlobTransport();
+        idb.clear().finally(() => idb.close());
+      }
       if (prevOwner !== isOwner) {
         this.initRailWidths();
         this.updateRailCssVars();
@@ -283,6 +292,33 @@ export class DndmApp extends GameElement {
       this.updateRailCssVars();
     }
   }
+
+  // ── Canvas Drag & Drop ─────────────────────────────────────────────────────
+  private onCanvasDragOver = (e: DragEvent): void => {
+    if (!this.isDm) return;
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  private onCanvasDragLeave = (e: DragEvent): void => {
+    if (!this.isDm) return;
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  private onCanvasDrop = async (e: DragEvent): Promise<void> => {
+    if (!this.isDm || !e.dataTransfer) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const files = Array.from(e.dataTransfer.files).filter(
+      (f) => f.type.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(f.name),
+    );
+    if (files.length === 0) return;
+    const uploadEl = this.renderRoot.querySelector("dndm-image-upload") as DndmImageUpload | null;
+    if (uploadEl) {
+      await uploadEl.processFiles(files);
+    }
+  };
 
   // ── Map Scene Synchronization ──────────────────────────────────────────────
   private wireMapScene(): void {
@@ -510,9 +546,10 @@ export class DndmApp extends GameElement {
                       slot="header-action"
                       .compact=${true}
                       .libraryService=${this.libraryService}
-                      .onImageUploaded=${(newImg: NewMapImage) => {
+                      .onImageUploaded=${async (newImg: NewMapImage, blob: Blob, imageId: string) => {
                         if (active) {
-                          this.send({ kind: "addImage", mapId: active.id, image: newImg });
+                          await this.assetSource.publish(imageId, blob);
+                          this.send({ kind: "addImage", mapId: active.id, image: newImg, imageId });
                           toastService.success(`Added image layer "${newImg.name}"`);
                         }
                       }}
@@ -522,7 +559,17 @@ export class DndmApp extends GameElement {
                   <dndm-saves-panel
                     .libraryService=${this.libraryService}
                     .currentState=${this.match}
-                    .onLoadSlotState=${(loaded: MatchState) => {
+                    .onLoadSlotState=${async (loaded: MatchState) => {
+                      for (const map of loaded.maps) {
+                        if ("images" in map) {
+                          for (const img of map.images) {
+                            const blob = await this.libraryService.getImage(img.id);
+                            if (blob) {
+                              await this.assetSource.publish(img.id, blob);
+                            }
+                          }
+                        }
+                      }
                       this.send({
                         kind: "beginImport",
                         campaign: {
@@ -578,7 +625,12 @@ export class DndmApp extends GameElement {
           : nothing}
 
         <!-- Canvas Area -->
-        <main class="dndm-canvas-area">
+        <main
+          class="dndm-canvas-area"
+          @dragover=${this.onCanvasDragOver}
+          @dragleave=${this.onCanvasDragLeave}
+          @drop=${this.onCanvasDrop}
+        >
           ${!active
             ? html`
                 <div class="dndm-empty">
@@ -680,11 +732,14 @@ export class DndmApp extends GameElement {
                               });
                             }
                           }}
-                          .onRemove=${() => {
+                          .onRemove=${async () => {
                             if (this.selectedImage) {
+                              const imgId = this.selectedImage.id;
+                              await this.assetSource.release(imgId);
+                              await this.libraryService.deleteImage(imgId);
                               this.send({
                                 kind: "removeImage",
-                                imageId: this.selectedImage.id,
+                                imageId: imgId,
                               });
                               this.selectedImageId = null;
                               fx.map()?.selectImage(null);

@@ -60,7 +60,12 @@ export type Intent =
   | { readonly kind: "removeToken"; readonly tokenId: string }
   | { readonly kind: "setTokenHidden"; readonly tokenId: string; readonly hidden: boolean }
   // images
-  | { readonly kind: "addImage"; readonly mapId: string; readonly image: NewMapImage }
+  | {
+      readonly kind: "addImage";
+      readonly mapId: string;
+      readonly image: NewMapImage;
+      readonly imageId?: string;
+    }
   | {
       readonly kind: "transformImage";
       readonly imageId: string;
