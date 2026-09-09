@@ -550,3 +550,326 @@ describe("Character Sheet Permissions (Phase 6)", () => {
   });
 });
 
+describe("Phase 9: Combat & Initiative Rules", () => {
+  function setupCombatMatch(): { state: DndMapperState; mapId: string } {
+    let state = setupMatch();
+    const mapId = state.activeMapId!;
+    // Spawn player token
+    const pRes = applyIntent(
+      state,
+      "player-1",
+      {
+        kind: "spawnToken",
+        mapId,
+        token: {
+          type: "PlayerToken",
+          name: "AliceHero",
+          color: "#00f",
+          iconKind: "Initial",
+          x: 1.5,
+          y: 1.5,
+          sheetId: null,
+          hidden: false,
+        },
+      },
+      1000,
+    );
+    state = pRes!.state;
+    const playerToken = (pRes!.patch as { token: Token }).token;
+    const upRes = applyIntent(
+      state,
+      "dm-1",
+      {
+        kind: "updateToken",
+        tokenId: playerToken.id,
+        patch: { ownerUserId: "player-1" },
+      },
+      1050,
+    );
+    state = upRes!.state;
+
+    // Spawn NPC token
+    const nRes = applyIntent(
+      state,
+      "dm-1",
+      {
+        kind: "spawnToken",
+        mapId,
+        token: {
+          type: "NPCToken",
+          name: "GoblinMinion",
+          color: "#0f0",
+          iconKind: "Initial",
+          x: 2.5,
+          y: 2.5,
+          sheetId: null,
+          hidden: false,
+        },
+      },
+      1000,
+    );
+    state = nRes!.state;
+    return { state, mapId };
+  }
+
+  it("authorizes startCombat and captures map tokens", () => {
+    const { state, mapId } = setupCombatMatch();
+
+    // Non-DM rejected
+    const rej = applyIntent(state, "player-1", { kind: "startCombat", mapId }, 2000);
+    expect(rej).toBeNull();
+
+    // DM starts combat
+    const res = applyIntent(state, "dm-1", { kind: "startCombat", mapId }, 2000);
+    expect(res).not.toBeNull();
+    const combat = res!.state.activeCombat!;
+    expect(combat).toBeDefined();
+    expect(combat.phase).toBe("WaitingForRolls");
+    expect(combat.roundNumber).toBe(1);
+    expect(combat.currentTurnIndex).toBe(0);
+    expect(combat.turnOrder).toHaveLength(2);
+    expect(res!.patch).toEqual({ kind: "combat", combat });
+  });
+
+  it("filters to npcTokenIds when provided to startCombat", () => {
+    const { state, mapId } = setupCombatMatch();
+    const map = state.maps.find((m) => m.id === mapId)!;
+    const tokens = "tokens" in map ? map.tokens : [];
+    const npcToken = tokens.find((t) => t.type === "NPCToken")!;
+
+    // Start with only that NPC token ID
+    const res = applyIntent(
+      state,
+      "dm-1",
+      { kind: "startCombat", mapId, npcTokenIds: [npcToken.id] },
+      2000,
+    );
+    expect(res).not.toBeNull();
+    const combat = res!.state.activeCombat!;
+    expect(combat.turnOrder).toHaveLength(2); // Player + selected NPC
+  });
+
+  it("enforces rollInitiative permissions and advances to Active when all rolls in", () => {
+    const { state: initMatch, mapId } = setupCombatMatch();
+    const startRes = applyIntent(initMatch, "dm-1", { kind: "startCombat", mapId }, 2000)!;
+    let state = startRes.state;
+    const combat = state.activeCombat!;
+    const playerCombatant = combat.turnOrder.find((c) => c.ownerUserId === "player-1")!;
+    const npcCombatant = combat.turnOrder.find((c) => c.ownerUserId === null)!;
+
+    // Player 2 cannot roll for Player 1
+    const p2Rej = applyIntent(
+      state,
+      "player-2",
+      { kind: "rollInitiative", combatantId: playerCombatant.id },
+      2100,
+    );
+    expect(p2Rej).toBeNull();
+
+    // Player 1 cannot roll for NPC
+    const npcRej = applyIntent(
+      state,
+      "player-1",
+      { kind: "rollInitiative", combatantId: npcCombatant.id },
+      2100,
+    );
+    expect(npcRej).toBeNull();
+
+    // Player 1 rolls for own combatant with override
+    const roll1 = applyIntent(
+      state,
+      "player-1",
+      { kind: "rollInitiative", combatantId: playerCombatant.id, rollOverride: 18 },
+      2200,
+    )!;
+    expect(roll1).not.toBeNull();
+    state = roll1.state;
+    expect(state.activeCombat!.phase).toBe("WaitingForRolls"); // NPC still unset
+
+    // DM rolls for NPC with override
+    const roll2 = applyIntent(
+      state,
+      "dm-1",
+      { kind: "rollInitiative", combatantId: npcCombatant.id, rollOverride: 12 },
+      2300,
+    )!;
+    expect(roll2).not.toBeNull();
+    state = roll2.state;
+
+    // Both have rolled -> automatically transitioned to Active and sorted
+    expect(state.activeCombat!.phase).toBe("Active");
+    expect(state.activeCombat!.turnOrder[0].id).toBe(playerCombatant.id);
+    expect(state.activeCombat!.turnOrder[0].initiativeRoll).toBe(18);
+    expect(state.activeCombat!.turnOrder[1].id).toBe(npcCombatant.id);
+    expect(state.activeCombat!.turnOrder[1].initiativeRoll).toBe(12);
+  });
+
+  it("handles forceInitiativeRoll by DM", () => {
+    const { state: initMatch, mapId } = setupCombatMatch();
+    const startRes = applyIntent(initMatch, "dm-1", { kind: "startCombat", mapId }, 2000)!;
+    const state = startRes.state;
+    const playerCombatant = state.activeCombat!.turnOrder.find((c) => c.ownerUserId === "player-1")!;
+
+    // Non-DM rejected
+    const rej = applyIntent(
+      state,
+      "player-2",
+      { kind: "forceInitiativeRoll", combatantId: playerCombatant.id, score: 14 },
+      2100,
+    );
+    expect(rej).toBeNull();
+
+    // DM force-rolls
+    const res = applyIntent(
+      state,
+      "dm-1",
+      { kind: "forceInitiativeRoll", combatantId: playerCombatant.id, score: 14 },
+      2100,
+    )!;
+    expect(res).not.toBeNull();
+    const updated = res.state.activeCombat!.turnOrder.find((c) => c.id === playerCombatant.id)!;
+    expect(updated.initiativeRoll).toBe(14);
+    expect(updated.isForceRolled).toBe(true);
+  });
+
+  it("handles setNpcInitiative staging and rollAllUnsetNpcs", () => {
+    const { state: initMatch, mapId } = setupCombatMatch();
+    const startRes = applyIntent(initMatch, "dm-1", { kind: "startCombat", mapId }, 2000)!;
+    let state = startRes.state;
+    const npc = state.activeCombat!.turnOrder.find((c) => c.ownerUserId === null)!;
+
+    // Stage pending score on NPC
+    const stageRes = applyIntent(
+      state,
+      "dm-1",
+      { kind: "setNpcInitiative", combatantId: npc.id, score: 16 },
+      2100,
+    )!;
+    expect(stageRes).not.toBeNull();
+    state = stageRes.state;
+    const stagedNpc = state.activeCombat!.turnOrder.find((c) => c.id === npc.id)!;
+    expect(stagedNpc.pendingInitiative).toBe(16);
+    expect(stagedNpc.initiativeRoll).toBeNull();
+
+    // Roll all unset NPCs flushes pending
+    const rollNpcs = applyIntent(state, "dm-1", { kind: "rollAllUnsetNpcs" }, 2200)!;
+    expect(rollNpcs).not.toBeNull();
+    state = rollNpcs.state;
+    const committedNpc = state.activeCombat!.turnOrder.find((c) => c.id === npc.id)!;
+    expect(committedNpc.initiativeRoll).toBe(16);
+    expect(committedNpc.pendingInitiative).toBeNull();
+  });
+
+  it("handles turn cycling (nextTurn / previousTurn) in Active phase", () => {
+    const { state: initMatch, mapId } = setupCombatMatch();
+    const startRes = applyIntent(initMatch, "dm-1", { kind: "startCombat", mapId }, 2000)!;
+    let state = startRes.state;
+    const [c1, c2] = state.activeCombat!.turnOrder;
+
+    // Set rolls so combat is Active
+    state = applyIntent(
+      state,
+      "dm-1",
+      { kind: "rollInitiative", combatantId: c1.id, rollOverride: 20 },
+      2100,
+    )!.state;
+    state = applyIntent(
+      state,
+      "dm-1",
+      { kind: "rollInitiative", combatantId: c2.id, rollOverride: 10 },
+      2200,
+    )!.state;
+    expect(state.activeCombat!.phase).toBe("Active");
+    expect(state.activeCombat!.currentTurnIndex).toBe(0);
+    expect(state.activeCombat!.roundNumber).toBe(1);
+
+    // Non-DM cannot advance
+    expect(applyIntent(state, "player-1", { kind: "nextTurn" }, 2300)).toBeNull();
+
+    // Next turn -> index 1, round 1
+    state = applyIntent(state, "dm-1", { kind: "nextTurn" }, 2300)!.state;
+    expect(state.activeCombat!.currentTurnIndex).toBe(1);
+    expect(state.activeCombat!.roundNumber).toBe(1);
+
+    // Next turn -> index 0, round 2
+    state = applyIntent(state, "dm-1", { kind: "nextTurn" }, 2400)!.state;
+    expect(state.activeCombat!.currentTurnIndex).toBe(0);
+    expect(state.activeCombat!.roundNumber).toBe(2);
+
+    // Previous turn -> index 1, round 1
+    state = applyIntent(state, "dm-1", { kind: "previousTurn" }, 2500)!.state;
+    expect(state.activeCombat!.currentTurnIndex).toBe(1);
+    expect(state.activeCombat!.roundNumber).toBe(1);
+  });
+
+  it("handles addCombatant and removeCombatant", () => {
+    const { state: initMatch, mapId } = setupCombatMatch();
+    const startRes = applyIntent(initMatch, "dm-1", { kind: "startCombat", mapId }, 2000)!;
+    let state = startRes.state;
+
+    // Spawn an ad-hoc token
+    const extraToken = applyIntent(
+      state,
+      "dm-1",
+      {
+        kind: "spawnToken",
+        mapId,
+        token: {
+          type: "NPCToken",
+          name: "Reinforcement",
+          color: "#ff0",
+          iconKind: "Initial",
+          x: 5.5,
+          y: 5.5,
+          sheetId: null,
+          hidden: false,
+        },
+      },
+      2050,
+    )!;
+    state = extraToken.state;
+    const spawnedTokenId = (extraToken.patch as { token: Token }).token.id;
+
+    // Add to combat
+    const addRes = applyIntent(
+      state,
+      "dm-1",
+      { kind: "addCombatant", tokenId: spawnedTokenId, initiativeRoll: 17 },
+      2100,
+    )!;
+    expect(addRes).not.toBeNull();
+    state = addRes.state;
+    expect(state.activeCombat!.turnOrder).toHaveLength(3);
+    const added = state.activeCombat!.turnOrder.find((c) => c.tokenId === spawnedTokenId)!;
+    expect(added.name).toBe("Reinforcement");
+    expect(added.initiativeRoll).toBe(17);
+
+    // Remove from combat
+    const removeRes = applyIntent(
+      state,
+      "dm-1",
+      { kind: "removeCombatant", combatantId: added.id },
+      2200,
+    )!;
+    expect(removeRes).not.toBeNull();
+    state = removeRes.state;
+    expect(state.activeCombat!.turnOrder).toHaveLength(2);
+    expect(state.activeCombat!.turnOrder.find((c) => c.id === added.id)).toBeUndefined();
+  });
+
+  it("ends combat and cleans state", () => {
+    const { state: initMatch, mapId } = setupCombatMatch();
+    const startRes = applyIntent(initMatch, "dm-1", { kind: "startCombat", mapId }, 2000)!;
+    const state = startRes.state;
+    expect(state.activeCombat).not.toBeNull();
+
+    // Non-DM cannot end
+    expect(applyIntent(state, "player-1", { kind: "endCombat" }, 2100)).toBeNull();
+
+    // DM ends combat
+    const endRes = applyIntent(state, "dm-1", { kind: "endCombat" }, 2100)!;
+    expect(endRes).not.toBeNull();
+    expect(endRes.state.activeCombat).toBeNull();
+    expect(endRes.patch).toEqual({ kind: "combat", combat: null });
+  });
+});

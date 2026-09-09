@@ -210,6 +210,10 @@ export class MapScene extends Phaser.Scene {
     this.tokenLayer.setTokens(tokens);
   }
 
+  setActiveTurnTokenId(tokenId: string | null): void {
+    this.tokenLayer.setActiveTurnTokenId(tokenId);
+  }
+
   updateSheets(sheets: Readonly<Record<string, CharacterSheet>>): void {
     this.tokenLayer.setSheets(sheets);
   }
@@ -276,6 +280,15 @@ export class MapScene extends Phaser.Scene {
   centerOn(cellX: number, cellY: number): void {
     const cam = this.cameras.main;
     cam.centerOn(cellX * CELL, cellY * CELL);
+    this.redrawGrid();
+    this.rulerOverlay.redraw();
+    this.focusOverlay.redraw();
+    this.onViewportChanged?.(readViewport(cam, CELL));
+  }
+
+  panToWorld(worldX: number, worldY: number): void {
+    const cam = this.cameras.main;
+    cam.pan(worldX, worldY, 300, "Power2");
     this.redrawGrid();
     this.rulerOverlay.redraw();
     this.focusOverlay.redraw();

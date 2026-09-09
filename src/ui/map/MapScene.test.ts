@@ -312,6 +312,29 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
     expect(worldAfterZoomOut.x).toBeCloseTo(worldBefore.x, 1);
     expect(worldAfterZoomOut.y).toBeCloseTo(worldBefore.y, 1);
   });
+
+  it("updates active turn token halo and pans camera to world coordinates", () => {
+    const tokens: Token[] = [
+      {
+        id: "tok-1",
+        type: "PlayerToken",
+        name: "Valeros",
+        color: "#f00",
+        iconKind: "Initial",
+        mapId: "map-1",
+        x: 2.5,
+        y: 2.5,
+        sheetId: null,
+        hidden: false,
+        ownerUserId: "u1",
+        representsUserId: null,
+      },
+    ];
+    scene.updateTokens(tokens);
+    scene.setActiveTurnTokenId("tok-1");
+    expect(() => scene.setActiveTurnTokenId("tok-1")).not.toThrow();
+    expect(() => scene.panToWorld(100, 200)).not.toThrow();
+  });
 });
 
 describe("FogLayer Diffing and Brush Math", () => {

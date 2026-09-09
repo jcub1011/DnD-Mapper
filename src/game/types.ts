@@ -38,6 +38,7 @@ import type {
   StatusEffect,
   StatusEffectTemplate,
   Token,
+  CombatState,
 } from "./domain.js";
 
 /** A lobby member, as the platform reports it (`init`, `onPlayerJoined`). */
@@ -207,7 +208,31 @@ export type Intent =
   | { readonly kind: "deleteLoadedDiceRule"; readonly ruleId: string }
   | { readonly kind: "toggleLoadedDiceRule"; readonly ruleId: string; readonly enabled: boolean }
   | { readonly kind: "reorderLoadedDiceRules"; readonly ruleIds: readonly string[] }
-  | { readonly kind: "updateHostKeys"; readonly heldKeys: readonly string[] };
+  | { readonly kind: "updateHostKeys"; readonly heldKeys: readonly string[] }
+  // combat (Phase 9)
+  | { readonly kind: "startCombat"; readonly mapId: string; readonly npcTokenIds?: readonly string[] }
+  | { readonly kind: "endCombat" }
+  | { readonly kind: "nextTurn" }
+  | { readonly kind: "previousTurn" }
+  | {
+      readonly kind: "rollInitiative";
+      readonly combatantId: string;
+      readonly rollOverride?: number;
+    }
+  | {
+      readonly kind: "forceInitiativeRoll";
+      readonly combatantId: string;
+      readonly score?: number;
+    }
+  | {
+      readonly kind: "setNpcInitiative";
+      readonly combatantId: string;
+      readonly score: number;
+    }
+  | { readonly kind: "rollAllUnsetNpcs" }
+  | { readonly kind: "rollAllNpcInitiative" }
+  | { readonly kind: "addCombatant"; readonly tokenId: string; readonly initiativeRoll: number }
+  | { readonly kind: "removeCombatant"; readonly combatantId: string };
 
 /**
  * Authority → clients narrowed patches.
@@ -240,7 +265,8 @@ export type Patch =
   | { readonly kind: "rollLogCleared" }
   | { readonly kind: "globalRollTemplates"; readonly templates: readonly RollTemplate[] }
   | { readonly kind: "loadedDiceRules"; readonly rules: readonly LoadedDiceRule[] }
-  | { readonly kind: "hostKeys"; readonly keys: readonly string[] };
+  | { readonly kind: "hostKeys"; readonly keys: readonly string[] }
+  | { readonly kind: "combat"; readonly combat: CombatState | null };
 
 /** Import chunk budget for campaign streaming (~39% of 512 KiB cap). */
 export const CHUNK_BUDGET = 200_000;
@@ -258,3 +284,4 @@ export * from "./color.js";
 export * from "./visibility.js";
 export * from "./ruler.js";
 export * from "./loadedDice.js";
+export * from "./combat.js";

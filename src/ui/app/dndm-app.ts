@@ -48,12 +48,15 @@ import "../panels/dndm-layer-panel";
 import "../panels/dndm-map-list";
 import "../panels/dndm-my-token";
 import "../panels/dndm-loaded-dice-panel";
+import "../panels/dndm-host-initiative";
+import "../panels/dndm-initiative-banner";
 import "../panels/dndm-quick-roll-footer";
 import "../panels/dndm-roll-log";
 import "../panels/dndm-saves-panel";
 import "../panels/dndm-token-panel";
 import "../toast/dndm-toast";
 import "../upload/dndm-image-upload";
+import { resolveActiveTurnTokenId } from "../../game/combat";
 import {
   getReadableTextColor,
   resolveDiceColor,
@@ -468,6 +471,7 @@ export class DndmApp extends GameElement {
       map.setMap(activeMap, this.isDm, this.assetSource);
       map.updateSheets(this.match.sheets);
     }
+    map.setActiveTurnTokenId(resolveActiveTurnTokenId(this.match.activeCombat));
 
     if (this.match.focusRect) {
       map.setFocusRect(this.match.focusRect);
@@ -506,6 +510,7 @@ export class DndmApp extends GameElement {
           }
         }
       }
+      map.setActiveTurnTokenId(resolveActiveTurnTokenId(state.activeCombat));
       map.setFocusRect(state.focusRect);
 
       if (
@@ -789,6 +794,20 @@ export class DndmApp extends GameElement {
           @drop=${this.onCanvasDrop}
         >
           <div class="dndm-dice-canvas-overlay" id="dndm-dice-overlay"></div>
+          <dndm-initiative-banner
+            .combat=${this.match.activeCombat}
+            .currentUserId=${this.controller?.playerId ?? null}
+            .isDm=${this.isDm}
+            .tokens=${active?.tokens ?? []}
+            .sheets=${this.match.sheets}
+            .onRollInitiative=${(combatantId: string) => this.send({ kind: "rollInitiative", combatantId })}
+            .onFocusToken=${(tokenId: string) => {
+              const tok = active?.tokens.find((t) => t.id === tokenId);
+              if (tok) {
+                fx.map()?.panToWorld(tok.x * 50, tok.y * 50);
+              }
+            }}
+          ></dndm-initiative-banner>
           ${!active
             ? html`
                 <div class="dndm-empty">
@@ -975,6 +994,41 @@ export class DndmApp extends GameElement {
             @pointercancel=${(e: PointerEvent) => this.endRailResize("right", e)}
           ></div>
           <div class="dndm-rail-content">
+            ${this.isDm
+              ? html`
+                  <dndm-host-initiative
+                    .combat=${this.match.activeCombat}
+                    .activeMap=${active}
+                    .sheets=${this.match.sheets}
+                    .isDm=${this.isDm}
+                    .currentUserId=${this.controller?.playerId ?? null}
+                    .onStartCombat=${(mapId: string) => this.send({ kind: "startCombat", mapId })}
+                    .onEndCombat=${() => this.send({ kind: "endCombat" })}
+                    .onNextTurn=${() => this.send({ kind: "nextTurn" })}
+                    .onPreviousTurn=${() => this.send({ kind: "previousTurn" })}
+                    .onRollInitiative=${(combatantId: string) =>
+                      this.send({ kind: "rollInitiative", combatantId })}
+                    .onForceRoll=${(combatantId: string) =>
+                      this.send({ kind: "forceInitiativeRoll", combatantId })}
+                    .onSetNpcInitiative=${(combatantId: string, score: number) =>
+                      this.send({ kind: "setNpcInitiative", combatantId, score })}
+                    .onRollAllUnsetNpcs=${() => this.send({ kind: "rollAllUnsetNpcs" })}
+                    .onRollAllNpcInitiative=${() => this.send({ kind: "rollAllNpcInitiative" })}
+                    .onAddCombatant=${(tokenId: string, initiativeRoll: number) =>
+                      this.send({ kind: "addCombatant", tokenId, initiativeRoll })}
+                    .onRemoveCombatant=${(combatantId: string) =>
+                      this.send({ kind: "removeCombatant", combatantId })}
+                    .onFocusToken=${(tokenId: string) => {
+                      const tok = active?.tokens.find((t) => t.id === tokenId);
+                      if (tok) {
+                        fx.map()?.panToWorld(tok.x * 50, tok.y * 50);
+                      }
+                    }}
+                    .onSetSheetHp=${(sheetId: string, hp: number | null) =>
+                      this.send({ kind: "setSheetHp", sheetId, hp })}
+                  ></dndm-host-initiative>
+                `
+              : nothing}
             ${!this.isDm
               ? html`
                   <dndm-my-token

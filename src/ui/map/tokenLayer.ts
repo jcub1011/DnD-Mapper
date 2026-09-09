@@ -41,6 +41,7 @@ export class TokenLayer {
   };
   private isDm = false;
   private expandedStackCell: string | null = null;
+  private activeTurnTokenId: string | null = null;
 
   public onTokenMoveEnd?: (event: TokenDragEvent) => void;
   public onTokenDoubleClick?: (tokenId: string) => void;
@@ -51,6 +52,13 @@ export class TokenLayer {
 
     this.popoverContainer = this.scene.add.container(0, 0);
     this.popoverContainer.setDepth(DEPTH.TOKENS + 10);
+  }
+
+  setActiveTurnTokenId(tokenId: string | null): void {
+    if (this.activeTurnTokenId !== tokenId) {
+      this.activeTurnTokenId = tokenId;
+      this.rebuildTokens();
+    }
   }
 
   setDm(isDm: boolean): void {
@@ -171,6 +179,26 @@ export class TokenLayer {
       halo.lineStyle(2, 0xe89055, 0.9);
       halo.strokeCircle(0, 0, haloRadius);
       container.add(halo);
+    }
+
+    // Active Turn Golden Selection Ring
+    if (token.id === this.activeTurnTokenId) {
+      const activeHaloRadius = (TOKEN_OWNER_HALO_RADIUS + 0.05) * CELL;
+      const ring = this.scene.add.graphics();
+      ring.lineStyle(3, 0xffd700, 0.9);
+      ring.strokeCircle(0, 0, activeHaloRadius);
+      container.add(ring);
+
+      if (this.scene.tweens) {
+        this.scene.tweens.add({
+          targets: ring,
+          alpha: 0.4,
+          duration: 800,
+          ease: "Sine.easeInOut",
+          yoyo: true,
+          repeat: -1,
+        });
+      }
     }
 
     // 2. Token Circle

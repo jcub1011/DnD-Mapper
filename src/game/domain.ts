@@ -449,19 +449,16 @@ export interface CharacterSheet {
 
 // ── Combat ────────────────────────────────────────────────────────────────────
 
-export type CombatPhase = "Inactive" | "Initiative" | "Active" | "RoundEnd";
+export type CombatPhase = "WaitingForRolls" | "Active";
 
 export interface CombatantEntry {
   readonly id: string;
-  readonly sheetId: string | null;
-  readonly tokenId: string | null;
+  readonly tokenId: string;
   readonly name: string;
-  readonly initiative: number;
-  readonly tieBreaker: number;
-  readonly hp: number | null;
-  readonly maxHp: number | null;
-  readonly isNpc: boolean;
-  readonly hidden: boolean;
+  readonly ownerUserId: string | null;
+  readonly initiativeRoll: number | null;
+  readonly isForceRolled: boolean;
+  readonly pendingInitiative: number | null; // DM manual override holding buffer
 }
 
 export interface CombatState {

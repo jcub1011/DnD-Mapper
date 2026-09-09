@@ -32,7 +32,16 @@ import type {
   RollMode,
   RollTemplate,
   LoadedDiceRule,
+  CombatantEntry,
+  CombatState,
 } from "./domain.js";
+import {
+  advanceTurn,
+  getInitiativeModifier,
+  isAllRollsComplete,
+  reverseTurn,
+  sortTurnOrder,
+} from "./combat.js";
 import {
   clampHpToEffectiveMax,
   createDefaultAttributeSchema,
@@ -439,7 +448,18 @@ export function applyIntent(
       if (!mayEditToken(state, fromId, found.token)) return null;
       const { maps: nextMaps, removed } = removeTokenFromMap(fullMaps, intent.tokenId);
       if (!removed) return null;
-      const nextState: DndMapperState = { ...state, maps: nextMaps };
+
+      let nextCombat = state.activeCombat;
+      if (nextCombat && nextCombat.turnOrder.some((c) => c.tokenId === intent.tokenId)) {
+        const nextTurnOrder = nextCombat.turnOrder.filter((c) => c.tokenId !== intent.tokenId);
+        const nextTurnIndex =
+          nextTurnOrder.length === 0
+            ? 0
+            : Math.min(nextCombat.currentTurnIndex, nextTurnOrder.length - 1);
+        nextCombat = { ...nextCombat, turnOrder: nextTurnOrder, currentTurnIndex: nextTurnIndex };
+      }
+
+      const nextState: DndMapperState = { ...state, maps: nextMaps, activeCombat: nextCombat };
       return {
         state: nextState,
         patch: {
@@ -1574,7 +1594,7 @@ export function applyIntent(
       if (typeof intent.formula !== "string" || !intent.formula) return null;
       const mode: RollMode =
         intent.mode === "Advantage" || intent.mode === "Disadvantage" ? intent.mode : "Normal";
-      const isCombatActive = state.activeCombat !== null && state.activeCombat.phase !== "Inactive";
+      const isCombatActive = state.activeCombat !== null;
       const roll = executeRoll(intent.formula, mode, fromId, {
         nowMs: now,
         label: typeof intent.label === "string" ? intent.label : undefined,
@@ -1619,7 +1639,7 @@ export function applyIntent(
           : undefined;
       const mode = modeOverride ?? template.mode;
 
-      const isCombatActive = state.activeCombat !== null && state.activeCombat.phase !== "Inactive";
+      const isCombatActive = state.activeCombat !== null;
       const roll = executeRoll(template.dice, mode, fromId, {
         nowMs: now,
         label: template.label || template.name,
@@ -1890,6 +1910,376 @@ export function applyIntent(
       );
       const nextState: DndMapperState = { ...state, hostHeldKeys: normalized };
       return { state: nextState, patch: { kind: "hostKeys", keys: normalized } };
+    }
+
+    // ── Phase 9: Combat & Initiative ─────────────────────────────────────────────
+
+    case "startCombat": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.mapId !== "string") return null;
+
+      const fullMaps = state.maps.filter(isFullMap);
+      const targetMap = fullMaps.find((m) => m.id === intent.mapId);
+      if (!targetMap) return null;
+
+      const npcTokenIds = Array.isArray(intent.npcTokenIds) ? (intent.npcTokenIds as string[]) : null;
+      const eligibleTokens = targetMap.tokens.filter((t) => {
+        if (npcTokenIds) {
+          return (!t.hidden && (t.type === "PlayerToken" || t.ownerUserId !== null)) || npcTokenIds.includes(t.id);
+        }
+        return !t.hidden;
+      });
+
+      const turnOrder: CombatantEntry[] = eligibleTokens.map((token) => {
+        const sheet = token.sheetId ? state.sheets[token.sheetId] : null;
+        const name = (sheet ? sheet.characterName : token.name) || "Combatant";
+        const ownerUserId = token.ownerUserId ?? sheet?.ownerUserId ?? null;
+        return {
+          id: generateGuid(),
+          tokenId: token.id,
+          name,
+          ownerUserId,
+          initiativeRoll: null,
+          isForceRolled: false,
+          pendingInitiative: null,
+        };
+      });
+
+      const combat: CombatState = {
+        phase: "WaitingForRolls",
+        roundNumber: 1,
+        currentTurnIndex: 0,
+        turnOrder,
+      };
+
+      const nextState: DndMapperState = { ...state, activeCombat: combat };
+      return { state: nextState, patch: { kind: "combat", combat } };
+    }
+
+    case "endCombat": {
+      if (!isDm(state, fromId)) return null;
+      const nextState: DndMapperState = { ...state, activeCombat: null };
+      return { state: nextState, patch: { kind: "combat", combat: null } };
+    }
+
+    case "nextTurn": {
+      if (!isDm(state, fromId)) return null;
+      if (!state.activeCombat || state.activeCombat.phase !== "Active") return null;
+      const nextCombat = advanceTurn(state.activeCombat);
+      const nextState: DndMapperState = { ...state, activeCombat: nextCombat };
+      return { state: nextState, patch: { kind: "combat", combat: nextCombat } };
+    }
+
+    case "previousTurn": {
+      if (!isDm(state, fromId)) return null;
+      if (!state.activeCombat || state.activeCombat.phase !== "Active") return null;
+      const nextCombat = reverseTurn(state.activeCombat);
+      const nextState: DndMapperState = { ...state, activeCombat: nextCombat };
+      return { state: nextState, patch: { kind: "combat", combat: nextCombat } };
+    }
+
+    case "rollInitiative": {
+      if (!state.activeCombat) return null;
+      if (typeof intent.combatantId !== "string") return null;
+
+      const combatant = state.activeCombat.turnOrder.find((c) => c.id === intent.combatantId);
+      if (!combatant) return null;
+      if (!isDm(state, fromId) && combatant.ownerUserId !== fromId) return null;
+
+      let score: number;
+      let nextRollLog = state.rollLog;
+      if (typeof intent.rollOverride === "number") {
+        score = intent.rollOverride;
+      } else {
+        const fullMaps = state.maps.filter(isFullMap);
+        let token: Token | null = null;
+        for (const m of fullMaps) {
+          const found = m.tokens.find((t) => t.id === combatant.tokenId);
+          if (found) {
+            token = found;
+            break;
+          }
+        }
+        const sheet = token?.sheetId ? state.sheets[token.sheetId] : null;
+        const mod = getInitiativeModifier(sheet, state.initiativeAttributeName);
+        const roll = executeRoll("1d20", "Normal", fromId, {
+          nowMs: now,
+          flatModifierOverride: mod,
+          label: `${combatant.name} Initiative`,
+          sheetId: token?.sheetId,
+          attributeName: state.initiativeAttributeName || "Dexterity",
+          sheets: state.sheets,
+          loadedDiceRules: state.loadedDiceRules,
+          loadedDiceEnabled: state.settings.loadedDiceEnabled,
+          activeMapId: state.activeMapId,
+          isCombatActive: true,
+          hostHeldKeys: state.hostHeldKeys,
+        });
+        score = roll ? roll.total : Math.floor(Math.random() * 20) + 1 + mod;
+        if (roll) {
+          nextRollLog = [...state.rollLog, roll].slice(-MAX_ROLL_LOG);
+        }
+      }
+
+      const nextTurnOrder = state.activeCombat.turnOrder.map((c) =>
+        c.id === combatant.id ? { ...c, initiativeRoll: score, isForceRolled: false } : c,
+      );
+
+      let nextCombat: CombatState;
+      if (isAllRollsComplete(nextTurnOrder)) {
+        nextCombat = {
+          phase: "Active",
+          roundNumber: state.activeCombat.roundNumber,
+          currentTurnIndex: 0,
+          turnOrder: sortTurnOrder(nextTurnOrder),
+        };
+      } else {
+        nextCombat = { ...state.activeCombat, turnOrder: nextTurnOrder };
+      }
+
+      const nextState: DndMapperState = { ...state, activeCombat: nextCombat, rollLog: nextRollLog };
+      return { state: nextState, patch: { kind: "combat", combat: nextCombat } };
+    }
+
+    case "forceInitiativeRoll": {
+      if (!isDm(state, fromId)) return null;
+      if (!state.activeCombat) return null;
+      if (typeof intent.combatantId !== "string") return null;
+
+      const combatant = state.activeCombat.turnOrder.find((c) => c.id === intent.combatantId);
+      if (!combatant) return null;
+
+      let score: number;
+      let nextRollLog = state.rollLog;
+      if (typeof intent.score === "number") {
+        score = intent.score;
+      } else {
+        const fullMaps = state.maps.filter(isFullMap);
+        let token: Token | null = null;
+        for (const m of fullMaps) {
+          const found = m.tokens.find((t) => t.id === combatant.tokenId);
+          if (found) {
+            token = found;
+            break;
+          }
+        }
+        const sheet = token?.sheetId ? state.sheets[token.sheetId] : null;
+        const mod = getInitiativeModifier(sheet, state.initiativeAttributeName);
+        const roll = executeRoll("1d20", "Normal", fromId, {
+          nowMs: now,
+          flatModifierOverride: mod,
+          label: `${combatant.name} Forced Initiative`,
+          sheetId: token?.sheetId,
+          attributeName: state.initiativeAttributeName || "Dexterity",
+          sheets: state.sheets,
+          loadedDiceRules: state.loadedDiceRules,
+          loadedDiceEnabled: state.settings.loadedDiceEnabled,
+          activeMapId: state.activeMapId,
+          isCombatActive: true,
+          hostHeldKeys: state.hostHeldKeys,
+        });
+        score = roll ? roll.total : Math.floor(Math.random() * 20) + 1 + mod;
+        if (roll) {
+          nextRollLog = [...state.rollLog, roll].slice(-MAX_ROLL_LOG);
+        }
+      }
+
+      const nextTurnOrder = state.activeCombat.turnOrder.map((c) =>
+        c.id === combatant.id ? { ...c, initiativeRoll: score, isForceRolled: true } : c,
+      );
+
+      let nextCombat: CombatState;
+      if (isAllRollsComplete(nextTurnOrder)) {
+        nextCombat = {
+          phase: "Active",
+          roundNumber: state.activeCombat.roundNumber,
+          currentTurnIndex: 0,
+          turnOrder: sortTurnOrder(nextTurnOrder),
+        };
+      } else {
+        nextCombat = { ...state.activeCombat, turnOrder: nextTurnOrder };
+      }
+
+      const nextState: DndMapperState = { ...state, activeCombat: nextCombat, rollLog: nextRollLog };
+      return { state: nextState, patch: { kind: "combat", combat: nextCombat } };
+    }
+
+    case "setNpcInitiative": {
+      if (!isDm(state, fromId)) return null;
+      if (!state.activeCombat) return null;
+      if (typeof intent.combatantId !== "string" || typeof intent.score !== "number") return null;
+
+      const combatant = state.activeCombat.turnOrder.find((c) => c.id === intent.combatantId);
+      if (!combatant || combatant.ownerUserId !== null) return null;
+
+      const nextTurnOrder = state.activeCombat.turnOrder.map((c) =>
+        c.id === combatant.id ? { ...c, pendingInitiative: intent.score as number } : c,
+      );
+      const nextCombat: CombatState = { ...state.activeCombat, turnOrder: nextTurnOrder };
+      const nextState: DndMapperState = { ...state, activeCombat: nextCombat };
+      return { state: nextState, patch: { kind: "combat", combat: nextCombat } };
+    }
+
+    case "rollAllUnsetNpcs":
+    case "rollAllNpcInitiative": {
+      if (!isDm(state, fromId)) return null;
+      if (!state.activeCombat) return null;
+
+      const isUnsetOnly = kind === "rollAllUnsetNpcs";
+      const fullMaps = state.maps.filter(isFullMap);
+      let nextRollLog = state.rollLog;
+
+      const nextTurnOrder = state.activeCombat.turnOrder.map((c) => {
+        if (c.ownerUserId !== null) return c;
+
+        // If DM staged a pending value, commit it
+        if (c.pendingInitiative !== null) {
+          return {
+            ...c,
+            initiativeRoll: c.pendingInitiative,
+            pendingInitiative: null,
+          };
+        }
+
+        // If unset only and already rolled, leave it
+        if (isUnsetOnly && c.initiativeRoll !== null) {
+          return c;
+        }
+
+        // Roll d20 + modifier
+        let token: Token | null = null;
+        for (const m of fullMaps) {
+          const found = m.tokens.find((t) => t.id === c.tokenId);
+          if (found) {
+            token = found;
+            break;
+          }
+        }
+        const sheet = token?.sheetId ? state.sheets[token.sheetId] : null;
+        const mod = getInitiativeModifier(sheet, state.initiativeAttributeName);
+        const roll = executeRoll("1d20", "Normal", fromId, {
+          nowMs: now,
+          flatModifierOverride: mod,
+          label: `${c.name} Initiative`,
+          sheetId: token?.sheetId,
+          attributeName: state.initiativeAttributeName || "Dexterity",
+          sheets: state.sheets,
+          loadedDiceRules: state.loadedDiceRules,
+          loadedDiceEnabled: state.settings.loadedDiceEnabled,
+          activeMapId: state.activeMapId,
+          isCombatActive: true,
+          hostHeldKeys: state.hostHeldKeys,
+        });
+        const score = roll ? roll.total : Math.floor(Math.random() * 20) + 1 + mod;
+        if (roll) {
+          nextRollLog = [...nextRollLog, roll].slice(-MAX_ROLL_LOG);
+        }
+        return {
+          ...c,
+          initiativeRoll: score,
+        };
+      });
+
+      let nextCombat: CombatState;
+      if (isAllRollsComplete(nextTurnOrder)) {
+        nextCombat = {
+          phase: "Active",
+          roundNumber: state.activeCombat.roundNumber,
+          currentTurnIndex: 0,
+          turnOrder: sortTurnOrder(nextTurnOrder),
+        };
+      } else {
+        nextCombat = { ...state.activeCombat, turnOrder: nextTurnOrder };
+      }
+
+      const nextState: DndMapperState = { ...state, activeCombat: nextCombat, rollLog: nextRollLog };
+      return { state: nextState, patch: { kind: "combat", combat: nextCombat } };
+    }
+
+    case "addCombatant": {
+      if (!isDm(state, fromId)) return null;
+      if (!state.activeCombat) return null;
+      if (typeof intent.tokenId !== "string" || typeof intent.initiativeRoll !== "number") return null;
+
+      const fullMaps = state.maps.filter(isFullMap);
+      let foundToken: Token | null = null;
+      for (const m of fullMaps) {
+        const t = m.tokens.find((tok) => tok.id === intent.tokenId);
+        if (t) {
+          foundToken = t;
+          break;
+        }
+      }
+      if (!foundToken) return null;
+
+      const sheet = foundToken.sheetId ? state.sheets[foundToken.sheetId] : null;
+      const name = (sheet ? sheet.characterName : foundToken.name) || "Combatant";
+      const ownerUserId = foundToken.ownerUserId ?? sheet?.ownerUserId ?? null;
+
+      const newCombatant: CombatantEntry = {
+        id: generateGuid(),
+        tokenId: foundToken.id,
+        name,
+        ownerUserId,
+        initiativeRoll: intent.initiativeRoll,
+        isForceRolled: false,
+        pendingInitiative: null,
+      };
+
+      let nextCombat: CombatState;
+      if (state.activeCombat.phase === "Active") {
+        const currentActiveId = state.activeCombat.turnOrder[state.activeCombat.currentTurnIndex]?.id;
+        const sorted = sortTurnOrder([...state.activeCombat.turnOrder, newCombatant]);
+        const nextTurnIndex = sorted.findIndex((c) => c.id === currentActiveId);
+        nextCombat = {
+          ...state.activeCombat,
+          turnOrder: sorted,
+          currentTurnIndex: nextTurnIndex >= 0 ? nextTurnIndex : state.activeCombat.currentTurnIndex,
+        };
+      } else {
+        const nextTurnOrder = [...state.activeCombat.turnOrder, newCombatant];
+        if (isAllRollsComplete(nextTurnOrder)) {
+          nextCombat = {
+            phase: "Active",
+            roundNumber: state.activeCombat.roundNumber,
+            currentTurnIndex: 0,
+            turnOrder: sortTurnOrder(nextTurnOrder),
+          };
+        } else {
+          nextCombat = { ...state.activeCombat, turnOrder: nextTurnOrder };
+        }
+      }
+
+      const nextState: DndMapperState = { ...state, activeCombat: nextCombat };
+      return { state: nextState, patch: { kind: "combat", combat: nextCombat } };
+    }
+
+    case "removeCombatant": {
+      if (!isDm(state, fromId)) return null;
+      if (!state.activeCombat) return null;
+      if (typeof intent.combatantId !== "string") return null;
+
+      const removedIndex = state.activeCombat.turnOrder.findIndex((c) => c.id === intent.combatantId);
+      if (removedIndex === -1) return null;
+
+      const nextTurnOrder = state.activeCombat.turnOrder.filter((c) => c.id !== intent.combatantId);
+      let nextTurnIndex = state.activeCombat.currentTurnIndex;
+      if (nextTurnOrder.length === 0) {
+        nextTurnIndex = 0;
+      } else if (removedIndex < state.activeCombat.currentTurnIndex) {
+        nextTurnIndex = state.activeCombat.currentTurnIndex - 1;
+      } else if (removedIndex === state.activeCombat.currentTurnIndex) {
+        nextTurnIndex = state.activeCombat.currentTurnIndex % nextTurnOrder.length;
+      }
+
+      const nextCombat: CombatState = {
+        ...state.activeCombat,
+        turnOrder: nextTurnOrder,
+        currentTurnIndex: nextTurnIndex,
+      };
+
+      const nextState: DndMapperState = { ...state, activeCombat: nextCombat };
+      return { state: nextState, patch: { kind: "combat", combat: nextCombat } };
     }
 
     default:

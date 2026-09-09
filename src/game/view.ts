@@ -299,6 +299,11 @@ export class MatchView {
         this._state = { ...this._state, hostHeldKeys: patch.keys };
         break;
       }
+
+      case "combat": {
+        this._state = { ...this._state, activeCombat: patch.combat };
+        break;
+      }
     }
   }
 }
