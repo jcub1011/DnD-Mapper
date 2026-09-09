@@ -120,6 +120,7 @@ export class DndmApp extends GameElement {
   override connectedCallback(): void {
     super.connectedCallback();
     document.addEventListener("click", this.onGlobalPanelCollapseClick);
+    void this.libraryService.attach();
   }
 
   override disconnectedCallback(): void {
@@ -127,10 +128,12 @@ export class DndmApp extends GameElement {
     document.removeEventListener("click", this.onGlobalPanelCollapseClick);
     cancelAnimationFrame(this.rafId);
     this.controller?.destroy();
+    void this.libraryService.detach();
   }
 
   /** Attach the controller main.ts built. Safe to call once. */
   attach(controller: GameController): void {
+    void this.libraryService.attach();
     this.controller = controller;
     this.match = controller.view.state;
     this.isOwner = controller.isOwner;

@@ -154,19 +154,44 @@ export class LibraryService {
     }
   }
 
-  public async attach(existingDb?: IDBDatabase): Promise<void> {
-    if (this.db) return;
+  private attachPromise: Promise<void> | null = null;
 
-    if (existingDb) {
-      this.db = existingDb;
-      this.isDbOwned = false;
-    } else {
-      this.db = await openDatabase();
-      this.isDbOwned = true;
+  public async attach(existingDb?: IDBDatabase): Promise<void> {
+    if (this.db) {
+      if (!existingDb || this.db === existingDb) return;
+      if (this.isDbOwned) {
+        try {
+          this.db.close();
+        } catch {
+          // Ignore close errors
+        }
+      }
+      this.db = null;
     }
 
-    await this.ensureSlotsIndex();
-    this.notifySlotsChanged();
+    if (this.attachPromise) {
+      await this.attachPromise;
+      if (this.db) return;
+    }
+
+    this.attachPromise = (async () => {
+      if (existingDb) {
+        this.db = existingDb;
+        this.isDbOwned = false;
+      } else {
+        this.db = await openDatabase();
+        this.isDbOwned = true;
+      }
+
+      await this.ensureSlotsIndex();
+      this.notifySlotsChanged();
+    })();
+
+    try {
+      await this.attachPromise;
+    } finally {
+      this.attachPromise = null;
+    }
   }
 
   public async detach(): Promise<void> {
@@ -193,15 +218,18 @@ export class LibraryService {
     this.setSaving(false);
   }
 
-  private requireDb(): IDBDatabase {
+  private async ensureDb(): Promise<IDBDatabase> {
     if (!this.db) {
-      throw new Error("LibraryService is not attached. Call attach() first.");
+      await this.attach();
+    }
+    if (!this.db) {
+      throw new Error("LibraryService failed to open IndexedDB.");
     }
     return this.db;
   }
 
   private async ensureSlotsIndex(): Promise<SlotsIndex> {
-    const db = this.requireDb();
+    const db = this.db ?? (await this.ensureDb());
     const existing = await getFromStore<SlotsIndex>(db, STORE_SLOTS_INDEX, SLOTS_INDEX_KEY);
     if (existing && Array.isArray(existing.slots)) {
       return existing;
@@ -290,7 +318,7 @@ export class LibraryService {
     state: DndMapperState,
     isAutoSave: boolean,
   ): Promise<void> {
-    const db = this.requireDb();
+    const db = await this.ensureDb();
 
     const core: LibraryCoreSnapshot = {
       schemaVersion: 1,
@@ -388,7 +416,7 @@ export class LibraryService {
     name: string,
     kind: "Auto" | "Manual",
   ): Promise<void> {
-    const db = this.requireDb();
+    const db = await this.ensureDb();
     const index = await this.ensureSlotsIndex();
     const now = new Date().toISOString();
 
@@ -434,7 +462,7 @@ export class LibraryService {
   }
 
   public async loadSlot(slotId: string): Promise<DndMapperState | null> {
-    const db = this.requireDb();
+    const db = await this.ensureDb();
     const cKey = coreKey(slotId);
     const core = await getFromStore<LibraryCoreSnapshot>(db, STORE_LIBRARY, cKey);
     if (!core) return null;
@@ -510,7 +538,7 @@ export class LibraryService {
       throw new Error(`Cannot delete the '${AUTO_SLOT_NAME}' slot.`);
     }
 
-    const db = this.requireDb();
+    const db = await this.ensureDb();
     const index = await this.ensureSlotsIndex();
     const filtered = index.slots.filter((s) => s.id !== slotId);
     if (filtered.length === index.slots.length) {
@@ -537,7 +565,7 @@ export class LibraryService {
       throw new Error(`Cannot rename the '${AUTO_SLOT_NAME}' slot.`);
     }
 
-    const db = this.requireDb();
+    const db = await this.ensureDb();
     const index = await this.ensureSlotsIndex();
     const slotEntry = index.slots.find((s) => s.id === slotId);
     if (!slotEntry) return false;
@@ -554,27 +582,27 @@ export class LibraryService {
   // ── Image / Blob Operations ───────────────────────────────────────────────
 
   public async putImage(id: string, blob: Blob): Promise<void> {
-    const db = this.requireDb();
+    const db = await this.ensureDb();
     await putToStore(db, STORE_IMAGES, id, blob);
   }
 
   public async getImage(id: string): Promise<Blob | null> {
-    const db = this.requireDb();
+    const db = await this.ensureDb();
     return getFromStore<Blob>(db, STORE_IMAGES, id);
   }
 
   public async deleteImage(id: string): Promise<void> {
-    const db = this.requireDb();
+    const db = await this.ensureDb();
     await deleteFromStore(db, STORE_IMAGES, id);
   }
 
   public async listImageIds(): Promise<string[]> {
-    const db = this.requireDb();
+    const db = await this.ensureDb();
     return getAllKeysFromStore(db, STORE_IMAGES);
   }
 
   public async getBytesUsed(): Promise<number> {
-    const db = this.requireDb();
+    const db = await this.ensureDb();
     const imageKeys = await getAllKeysFromStore(db, STORE_IMAGES);
     let total = 0;
 
@@ -597,7 +625,7 @@ export class LibraryService {
     slotId?: string,
     slotName?: string,
   ): Promise<string> {
-    const db = this.requireDb();
+    const db = await this.ensureDb();
 
     // 1. Batch store images into STORE_IMAGES
     const imageItems = Array.from(unpackResult.images.values()).map((asset) => ({

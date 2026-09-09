@@ -12,8 +12,12 @@ import "../panels/dndm-token-panel";
 import type { DndmTokenPanel } from "../panels/dndm-token-panel";
 import "../panels/dndm-my-token";
 import type { DndmMyToken } from "../panels/dndm-my-token";
+import "../panels/dndm-saves-panel";
+import type { DndmSavesPanel } from "../panels/dndm-saves-panel";
 import "../lobby/dndm-lobby";
 import type { DndmLobby } from "../lobby/dndm-lobby";
+import { createDefaultDndMapperState } from "../../game/domain";
+import { LibraryService } from "../../storage/libraryService";
 
 function makeMap(id: string, name: string, tokens: readonly Token[] = []): GameMap {
   return {
@@ -365,6 +369,54 @@ describe("UI Panels and Canvas Controls (07 — UI Shell)", () => {
       const kickButtons = el.querySelectorAll("button.player-chip");
       expect(kickButtons.length).toBe(0);
 
+      el.remove();
+    });
+  });
+
+  describe("<dndm-saves-panel>", () => {
+    it("renders without error and creates a new save slot cleanly", async () => {
+      const el = document.createElement("dndm-saves-panel") as DndmSavesPanel;
+      const libraryService = new LibraryService(30);
+      const state = createDefaultDndMapperState();
+
+      el.libraryService = libraryService;
+      el.currentState = state;
+
+      document.body.appendChild(el);
+      await el.updateComplete;
+
+      // Wait for initial slots refresh to finish
+      await vi.waitFor(() => {
+        expect(el.querySelector(".dndm-saves-error")).toBeNull();
+      });
+
+      // Click "Save as new slot" button
+      const newSaveBtn = el.querySelector('button[aria-label="Save as new slot"]') as HTMLButtonElement;
+      expect(newSaveBtn).not.toBeNull();
+      newSaveBtn.click();
+      await el.updateComplete;
+
+      // Type slot name into input
+      const input = el.querySelector(".dndm-input") as HTMLInputElement;
+      expect(input).not.toBeNull();
+      input.value = "Test Adventure";
+      input.dispatchEvent(new Event("input"));
+      await el.updateComplete;
+
+      // Click "Save" button to confirm
+      const saveConfirmBtn = Array.from(el.querySelectorAll("button")).find(
+        (b) => b.textContent?.trim() === "Save",
+      );
+      expect(saveConfirmBtn).toBeDefined();
+      saveConfirmBtn!.click();
+
+      // Wait for save to complete and slots to refresh cleanly
+      await vi.waitFor(() => {
+        expect(el.querySelector(".dndm-saves-error")).toBeNull();
+        expect(el.textContent).toContain("Test Adventure");
+      });
+
+      await libraryService.detach();
       el.remove();
     });
   });

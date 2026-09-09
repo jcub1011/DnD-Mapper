@@ -295,4 +295,23 @@ describe("LibraryService and Sharded Persistence", () => {
       expect(await service.getBytesUsed()).toBe(0);
     });
   });
+
+  describe("Auto-attach on demand", () => {
+    it("automatically opens IndexedDB and succeeds when operations are called without explicit attach()", async () => {
+      const unattachedService = new LibraryService(30);
+      const state = createMockState();
+
+      // saveSlot without calling attach() first
+      await unattachedService.saveSlot("auto-attach-slot", "Auto Attached", state);
+
+      const slots = await unattachedService.listSlots();
+      expect(slots.some((s) => s.id === "auto-attach-slot" && s.name === "Auto Attached")).toBe(true);
+
+      const loaded = await unattachedService.loadSlot("auto-attach-slot");
+      expect(loaded).not.toBeNull();
+      expect(loaded!.maps[0].name).toBe("Dungeon");
+
+      await unattachedService.detach();
+    });
+  });
 });
