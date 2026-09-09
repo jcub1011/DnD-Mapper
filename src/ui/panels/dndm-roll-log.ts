@@ -138,6 +138,15 @@ export class DndmRollLog extends GameElement {
     const rollerName = this.getRollerName(r);
     const canReRoll = r.rollerUserId === this.currentUserId;
 
+    const hasAppliedRules = Boolean(r.appliedRules && r.appliedRules.length > 0);
+    const visibility = this.state.settings.loadedDiceRuleVisibility ?? "Hidden";
+    const showRuleStamps =
+      this.isDm || visibility === "VisibleToAll" || visibility === "AllPlayers";
+    const indicator = this.state.settings.loadedDicePlayerIndicator ?? "None";
+    const showSubtleCue =
+      hasAppliedRules && (indicator === "Subtle" || indicator === "RedDotInLog");
+    const showObviousCue = hasAppliedRules && indicator === "Obvious";
+
     return html`
       <article
         class="dndm-rolllog-entry ${isNat20 ? "dndm-rolllog-entry--nat20" : ""} ${isNat1 ? "dndm-rolllog-entry--nat1" : ""}"
@@ -148,6 +157,9 @@ export class DndmRollLog extends GameElement {
           <span class="dndm-rolllog-label">${r.label}</span>
           ${r.mode !== "Normal"
             ? html`<span class="dndm-rolllog-mode">${r.mode === "Advantage" ? "ADV" : "DIS"}</span>`
+            : nothing}
+          ${hasAppliedRules && (showSubtleCue || (this.isDm && indicator === "None"))
+            ? html`<span class="dndm-rolllog-cue--subtle" title="Roll modified by Loaded Dice">●</span>`
             : nothing}
           <time class="dndm-rolllog-time" title=${r.timestampUtc}>
             ${r.timestampUtc.slice(11, 19)}
@@ -191,6 +203,26 @@ export class DndmRollLog extends GameElement {
 
         ${r.modifierBreakdown
           ? html`<div class="dndm-rolllog-breakdown">${r.modifierBreakdown}</div>`
+          : nothing}
+
+        ${hasAppliedRules && showRuleStamps
+          ? html`
+              <div class="dndm-rolllog-stamps" style="display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px;">
+                ${r.appliedRules.map((stamp) => {
+                  const name = typeof stamp === "string" ? stamp : stamp.ruleName;
+                  const type = typeof stamp === "object" ? ` (${stamp.modificationType})` : "";
+                  return html`
+                    <span class="dndm-rolllog-tampered-badge" title="Loaded Dice: ${name}${type}">
+                      ⚡ ${name}
+                    </span>
+                  `;
+                })}
+              </div>
+            `
+          : nothing}
+
+        ${showObviousCue
+          ? html`<div class="dndm-rolllog-cue--obvious">⚡ Tampered by a divine hand</div>`
           : nothing}
       </article>
     `;

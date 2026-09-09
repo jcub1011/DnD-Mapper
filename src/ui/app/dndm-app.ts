@@ -47,6 +47,7 @@ import type { SheetPatch } from "../panels/dndm-character-sheet";
 import "../panels/dndm-layer-panel";
 import "../panels/dndm-map-list";
 import "../panels/dndm-my-token";
+import "../panels/dndm-loaded-dice-panel";
 import "../panels/dndm-quick-roll-footer";
 import "../panels/dndm-roll-log";
 import "../panels/dndm-saves-panel";
@@ -58,7 +59,8 @@ import {
   resolveDiceColor,
   resolveDiceColorForToken,
 } from "../../game/color";
-import type { RollMode, RollResult, RollTemplate } from "../../game/domain";
+import type { LoadedDiceRule, RollMode, RollResult, RollTemplate } from "../../game/domain";
+import { HostInputTracker } from "../../net/hostInput";
 import { DEFAULT_DICE_SCALE, diceOverlay } from "../dice/diceOverlay";
 
 const log = createLogger("app");
@@ -119,6 +121,7 @@ export class DndmApp extends GameElement {
   launchMode: LaunchMode = "solo";
 
   private controller?: GameController;
+  private hostInputTracker?: HostInputTracker;
   private rafId = 0;
   private lastCenterNonce: string | null = null;
 
@@ -183,6 +186,7 @@ export class DndmApp extends GameElement {
     window.removeEventListener("dndm-open-sheet", this.onOpenSheet);
     cancelAnimationFrame(this.rafId);
     this.controller?.destroy();
+    this.hostInputTracker?.destroy();
     void this.libraryService.detach();
     diceOverlay.detach();
   }
@@ -210,6 +214,15 @@ export class DndmApp extends GameElement {
       fx.knockbox(),
     );
 
+    this.hostInputTracker = new HostInputTracker({
+      onKeysChanged: (heldKeys) => {
+        this.send({ kind: "updateHostKeys", heldKeys });
+      },
+    });
+    if (this.isDm && this.match.settings.loadedDiceEnabled) {
+      this.hostInputTracker.attach();
+    }
+
     this.initRailWidths();
     this.updateRailCssVars();
 
@@ -228,6 +241,11 @@ export class DndmApp extends GameElement {
       if (prevOwner !== isOwner) {
         this.initRailWidths();
         this.updateRailCssVars();
+      }
+      if (this.isDm && this.match.settings.loadedDiceEnabled) {
+        this.hostInputTracker?.attach();
+      } else {
+        this.hostInputTracker?.detach();
       }
     });
 
@@ -503,6 +521,12 @@ export class DndmApp extends GameElement {
       this.libraryService.onStateChanged(state);
     }
 
+    if (this.isDm && state.settings.loadedDiceEnabled) {
+      this.hostInputTracker?.attach();
+    } else {
+      this.hostInputTracker?.detach();
+    }
+
     const currentRollLog = state.rollLog ?? [];
 
     if (currentRollLog.length === 0 && prevRollLog.length > 0) {
@@ -694,6 +718,27 @@ export class DndmApp extends GameElement {
                       });
                     }}
                   ></dndm-saves-panel>
+
+                  ${settings.loadedDiceEnabled
+                    ? html`
+                        <dndm-loaded-dice-panel
+                          .rules=${this.match.loadedDiceRules ?? []}
+                          .sheets=${this.match.sheets}
+                          .maps=${maps}
+                          .hostHeldKeys=${this.match.hostHeldKeys ?? []}
+                          .onCreateRule=${(rule: Omit<LoadedDiceRule, "id">) =>
+                            this.send({ kind: "createLoadedDiceRule", rule })}
+                          .onUpdateRule=${(ruleId: string, patch: Partial<LoadedDiceRule>) =>
+                            this.send({ kind: "updateLoadedDiceRule", ruleId, patch })}
+                          .onDeleteRule=${(ruleId: string) =>
+                            this.send({ kind: "deleteLoadedDiceRule", ruleId })}
+                          .onToggleRule=${(ruleId: string, enabled: boolean) =>
+                            this.send({ kind: "toggleLoadedDiceRule", ruleId, enabled })}
+                          .onReorderRules=${(ruleIds: readonly string[]) =>
+                            this.send({ kind: "reorderLoadedDiceRules", ruleIds })}
+                        ></dndm-loaded-dice-panel>
+                      `
+                    : nothing}
 
                   <section class="dndm-panel dndm-session-panel">
                     <header class="dndm-panel-header">

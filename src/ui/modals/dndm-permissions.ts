@@ -182,18 +182,26 @@ export class DndmPermissions extends GameElement {
         <span class="dndm-label">Rule visibility</span>
         <div class="dndm-pillgroup">
           <button
-            class=${s.loadedDiceRuleVisibility === "HostOnly" ? "active" : ""}
+            class=${s.loadedDiceRuleVisibility === "Hidden" ? "active" : ""}
             type="button"
             ?disabled=${!this.isDm || !s.loadedDiceEnabled}
-            @click=${() => this.emitPatch({ loadedDiceRuleVisibility: "HostOnly" })}
+            @click=${() => this.emitPatch({ loadedDiceRuleVisibility: "Hidden" })}
+          >
+            Hidden
+          </button>
+          <button
+            class=${s.loadedDiceRuleVisibility === "VisibleToHostOnly" || s.loadedDiceRuleVisibility === "HostOnly" ? "active" : ""}
+            type="button"
+            ?disabled=${!this.isDm || !s.loadedDiceEnabled}
+            @click=${() => this.emitPatch({ loadedDiceRuleVisibility: "VisibleToHostOnly" })}
           >
             Host only
           </button>
           <button
-            class=${s.loadedDiceRuleVisibility === "AllPlayers" ? "active" : ""}
+            class=${s.loadedDiceRuleVisibility === "VisibleToAll" || s.loadedDiceRuleVisibility === "AllPlayers" ? "active" : ""}
             type="button"
             ?disabled=${!this.isDm || !s.loadedDiceEnabled}
-            @click=${() => this.emitPatch({ loadedDiceRuleVisibility: "AllPlayers" })}
+            @click=${() => this.emitPatch({ loadedDiceRuleVisibility: "VisibleToAll" })}
           >
             All players
           </button>
@@ -204,20 +212,28 @@ export class DndmPermissions extends GameElement {
         <span class="dndm-label">Player indicator on modified rolls</span>
         <div class="dndm-pillgroup">
           <button
-            class=${s.loadedDicePlayerIndicator === "Hidden" ? "active" : ""}
+            class=${s.loadedDicePlayerIndicator === "None" || s.loadedDicePlayerIndicator === "Hidden" ? "active" : ""}
             type="button"
             ?disabled=${!this.isDm || !s.loadedDiceEnabled}
-            @click=${() => this.emitPatch({ loadedDicePlayerIndicator: "Hidden" })}
+            @click=${() => this.emitPatch({ loadedDicePlayerIndicator: "None" })}
           >
-            Hidden
+            None
           </button>
           <button
-            class=${s.loadedDicePlayerIndicator === "RedDotInLog" ? "active" : ""}
+            class=${s.loadedDicePlayerIndicator === "Subtle" || s.loadedDicePlayerIndicator === "RedDotInLog" ? "active" : ""}
             type="button"
             ?disabled=${!this.isDm || !s.loadedDiceEnabled}
-            @click=${() => this.emitPatch({ loadedDicePlayerIndicator: "RedDotInLog" })}
+            @click=${() => this.emitPatch({ loadedDicePlayerIndicator: "Subtle" })}
           >
-            Red dot in log
+            Subtle
+          </button>
+          <button
+            class=${s.loadedDicePlayerIndicator === "Obvious" ? "active" : ""}
+            type="button"
+            ?disabled=${!this.isDm || !s.loadedDiceEnabled}
+            @click=${() => this.emitPatch({ loadedDicePlayerIndicator: "Obvious" })}
+          >
+            Obvious
           </button>
         </div>
       </div>

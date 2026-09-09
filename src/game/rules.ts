@@ -31,6 +31,7 @@ import type {
   Token,
   RollMode,
   RollTemplate,
+  LoadedDiceRule,
 } from "./domain.js";
 import {
   clampHpToEffectiveMax,
@@ -1573,6 +1574,7 @@ export function applyIntent(
       if (typeof intent.formula !== "string" || !intent.formula) return null;
       const mode: RollMode =
         intent.mode === "Advantage" || intent.mode === "Disadvantage" ? intent.mode : "Normal";
+      const isCombatActive = state.activeCombat !== null && state.activeCombat.phase !== "Inactive";
       const roll = executeRoll(intent.formula, mode, fromId, {
         nowMs: now,
         label: typeof intent.label === "string" ? intent.label : undefined,
@@ -1580,6 +1582,11 @@ export function applyIntent(
         sheetId: typeof intent.sheetId === "string" ? intent.sheetId : null,
         attributeName: typeof intent.attributeName === "string" ? intent.attributeName : null,
         sheets: state.sheets,
+        loadedDiceRules: state.loadedDiceRules,
+        loadedDiceEnabled: state.settings.loadedDiceEnabled,
+        activeMapId: state.activeMapId,
+        isCombatActive,
+        hostHeldKeys: state.hostHeldKeys,
       });
       if (!roll) return null;
 
@@ -1612,6 +1619,7 @@ export function applyIntent(
           : undefined;
       const mode = modeOverride ?? template.mode;
 
+      const isCombatActive = state.activeCombat !== null && state.activeCombat.phase !== "Inactive";
       const roll = executeRoll(template.dice, mode, fromId, {
         nowMs: now,
         label: template.label || template.name,
@@ -1620,6 +1628,11 @@ export function applyIntent(
         attributeName: template.attributeName,
         sheets: state.sheets,
         flatModifierOverride: template.flatModifier,
+        loadedDiceRules: state.loadedDiceRules,
+        loadedDiceEnabled: state.settings.loadedDiceEnabled,
+        activeMapId: state.activeMapId,
+        isCombatActive,
+        hostHeldKeys: state.hostHeldKeys,
       });
       if (!roll) return null;
 
@@ -1768,6 +1781,115 @@ export function applyIntent(
       if (!isDm(state, fromId)) return null;
       const nextState: DndMapperState = { ...state, rollLog: [] };
       return { state: nextState, patch: { kind: "rollLogCleared" } };
+    }
+
+    // ── Phase 8: Loaded Dice ─────────────────────────────────────────────────────
+
+    case "createLoadedDiceRule": {
+      if (!isDm(state, fromId)) return null;
+      const rule = intent.rule as Omit<LoadedDiceRule, "id"> | undefined;
+      if (
+        !rule ||
+        typeof rule.name !== "string" ||
+        !Array.isArray(rule.conditions) ||
+        !Array.isArray(rule.modifications)
+      ) {
+        return null;
+      }
+
+      const newRule: LoadedDiceRule = {
+        id: generateGuid(),
+        name: rule.name.trim() || "New Loaded Dice Rule",
+        enabled: typeof rule.enabled === "boolean" ? rule.enabled : true,
+        targetSheetIds: Array.isArray(rule.targetSheetIds) ? [...rule.targetSheetIds] : [],
+        conditions: [...rule.conditions],
+        modifications: [...rule.modifications],
+      };
+
+      const nextRules = [...state.loadedDiceRules, newRule];
+      const nextState: DndMapperState = { ...state, loadedDiceRules: nextRules };
+      return { state: nextState, patch: { kind: "loadedDiceRules", rules: nextRules } };
+    }
+
+    case "updateLoadedDiceRule": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.ruleId !== "string" || !intent.patch) return null;
+      const index = state.loadedDiceRules.findIndex((r) => r.id === intent.ruleId);
+      if (index === -1) return null;
+
+      const existing = state.loadedDiceRules[index];
+      const patch = intent.patch as Partial<LoadedDiceRule>;
+      const updated: LoadedDiceRule = {
+        ...existing,
+        name: typeof patch.name === "string" ? patch.name.trim() : existing.name,
+        enabled: typeof patch.enabled === "boolean" ? patch.enabled : existing.enabled,
+        targetSheetIds: Array.isArray(patch.targetSheetIds)
+          ? [...patch.targetSheetIds]
+          : existing.targetSheetIds,
+        conditions: Array.isArray(patch.conditions) ? [...patch.conditions] : existing.conditions,
+        modifications: Array.isArray(patch.modifications)
+          ? [...patch.modifications]
+          : existing.modifications,
+      };
+
+      const nextRules = [...state.loadedDiceRules];
+      nextRules[index] = updated;
+      const nextState: DndMapperState = { ...state, loadedDiceRules: nextRules };
+      return { state: nextState, patch: { kind: "loadedDiceRules", rules: nextRules } };
+    }
+
+    case "deleteLoadedDiceRule": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.ruleId !== "string") return null;
+
+      const nextRules = state.loadedDiceRules.filter((r) => r.id !== intent.ruleId);
+      const nextState: DndMapperState = { ...state, loadedDiceRules: nextRules };
+      return { state: nextState, patch: { kind: "loadedDiceRules", rules: nextRules } };
+    }
+
+    case "toggleLoadedDiceRule": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.ruleId !== "string" || typeof intent.enabled !== "boolean") return null;
+
+      const index = state.loadedDiceRules.findIndex((r) => r.id === intent.ruleId);
+      if (index === -1) return null;
+
+      const nextRules = [...state.loadedDiceRules];
+      nextRules[index] = { ...nextRules[index], enabled: intent.enabled };
+      const nextState: DndMapperState = { ...state, loadedDiceRules: nextRules };
+      return { state: nextState, patch: { kind: "loadedDiceRules", rules: nextRules } };
+    }
+
+    case "reorderLoadedDiceRules": {
+      if (!isDm(state, fromId)) return null;
+      if (!Array.isArray(intent.ruleIds)) return null;
+
+      const idMap = new Map(state.loadedDiceRules.map((r) => [r.id, r]));
+      const nextRules: LoadedDiceRule[] = [];
+      for (const id of intent.ruleIds) {
+        const r = idMap.get(id);
+        if (r) {
+          nextRules.push(r);
+          idMap.delete(id);
+        }
+      }
+      for (const r of idMap.values()) {
+        nextRules.push(r);
+      }
+
+      const nextState: DndMapperState = { ...state, loadedDiceRules: nextRules };
+      return { state: nextState, patch: { kind: "loadedDiceRules", rules: nextRules } };
+    }
+
+    case "updateHostKeys": {
+      if (!isDm(state, fromId)) return null;
+      if (!Array.isArray(intent.heldKeys)) return null;
+
+      const normalized = Array.from(
+        new Set(intent.heldKeys.map((k) => String(k).toUpperCase())),
+      );
+      const nextState: DndMapperState = { ...state, hostHeldKeys: normalized };
+      return { state: nextState, patch: { kind: "hostKeys", keys: normalized } };
     }
 
     default:

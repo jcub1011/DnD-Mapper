@@ -289,6 +289,16 @@ export class MatchView {
         this._state = { ...this._state, globalRollTemplates: patch.templates };
         break;
       }
+
+      case "loadedDiceRules": {
+        this._state = { ...this._state, loadedDiceRules: patch.rules };
+        break;
+      }
+
+      case "hostKeys": {
+        this._state = { ...this._state, hostHeldKeys: patch.keys };
+        break;
+      }
     }
   }
 }

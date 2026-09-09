@@ -14,10 +14,13 @@ import {
   type CharacterSheet,
   type DiceTerm,
   type DieRoll,
+  type LoadedDiceRule,
+  type LoadedDiceRuleStamp,
   type RollMode,
   type RollResult,
   type RollTemplate,
 } from "./domain.js";
+import { processLoadedDice } from "./loadedDice.js";
 import { generateGuid, timestampToIsoUtc } from "./maps.js";
 
 /** Checks if a number of sides is one of the allowed dice types. */
@@ -354,15 +357,21 @@ export interface ExecuteRollOptions {
   readonly forcedByUserId?: string | null;
   readonly id?: string;
   readonly flatModifierOverride?: number;
+  readonly loadedDiceRules?: readonly LoadedDiceRule[];
+  readonly loadedDiceEnabled?: boolean;
+  readonly activeMapId?: string | null;
+  readonly isCombatActive?: boolean;
+  readonly hostHeldKeys?: readonly string[];
 }
 
 /**
  * Pure authority function that executes a deterministic roll:
  * 1. Parses and validates dice terms.
  * 2. Rolls dice with pseudo-random algorithm.
- * 3. Applies Advantage / Disadvantage (for single die rolls).
- * 4. Resolves sheet attribute modifiers and status effect contributions.
- * 5. Assembles modifierBreakdown and returns immutable RollResult.
+ * 3. Applies Loaded Dice rule pipeline if enabled.
+ * 4. Applies Advantage / Disadvantage (for single die rolls).
+ * 5. Resolves sheet attribute modifiers and status effect contributions.
+ * 6. Assembles modifierBreakdown and returns immutable RollResult.
  */
 export function executeRoll(
   formulaOrDice: string | readonly DiceTerm[],
@@ -405,7 +414,32 @@ export function executeRoll(
     const sides = dice[0].sides;
     const secondVal = Math.floor(rng() * sides) + 1;
     rolls.push({ sides, value: secondVal, discarded: false });
+  }
 
+  let appliedRules: readonly LoadedDiceRuleStamp[] = [];
+
+  if (options.loadedDiceEnabled && options.loadedDiceRules && options.loadedDiceRules.length > 0) {
+    const rollLabel =
+      options.label ?? (options.attributeName ? `${options.attributeName} Check` : "Roll");
+    const ctx = {
+      roll: {
+        sides: dice[0].sides,
+        mode: effectiveMode,
+        label: rollLabel,
+        sheetId: options.sheetId ?? null,
+        rollerUserId,
+      },
+      activeMapId: options.activeMapId ?? null,
+      isCombatActive: options.isCombatActive ?? false,
+      hostHeldKeys: options.hostHeldKeys ?? [],
+    };
+    const loadedResult = processLoadedDice(rolls, options.loadedDiceRules, ctx, rng);
+    rolls.length = 0;
+    rolls.push(...loadedResult.rolls);
+    appliedRules = loadedResult.appliedRules;
+  }
+
+  if (effectiveMode !== "Normal") {
     const firstResult = rolls[0].value;
     const secondResult = rolls[1].value;
     const firstIsKept =
@@ -487,7 +521,7 @@ export function executeRoll(
     formula,
     modifierBreakdown: breakdown,
     tokenId: options.tokenId ?? null,
-    appliedRules: [],
+    appliedRules,
   };
 }
 

@@ -27,6 +27,7 @@ import type {
   FocusRect,
   GameMap,
   GridConfig,
+  LoadedDiceRule,
   MapImage,
   MapSummary,
   NewMapImage,
@@ -199,7 +200,14 @@ export type Intent =
       readonly sheetId: string;
       readonly templateId: string;
     }
-  | { readonly kind: "clearRollLog" };
+  | { readonly kind: "clearRollLog" }
+  // loaded dice (Phase 8)
+  | { readonly kind: "createLoadedDiceRule"; readonly rule: Omit<LoadedDiceRule, "id"> }
+  | { readonly kind: "updateLoadedDiceRule"; readonly ruleId: string; readonly patch: Partial<LoadedDiceRule> }
+  | { readonly kind: "deleteLoadedDiceRule"; readonly ruleId: string }
+  | { readonly kind: "toggleLoadedDiceRule"; readonly ruleId: string; readonly enabled: boolean }
+  | { readonly kind: "reorderLoadedDiceRules"; readonly ruleIds: readonly string[] }
+  | { readonly kind: "updateHostKeys"; readonly heldKeys: readonly string[] };
 
 /**
  * Authority → clients narrowed patches.
@@ -230,7 +238,9 @@ export type Patch =
   | { readonly kind: "customTemplateRemoved"; readonly templateId: string }
   | { readonly kind: "roll"; readonly roll: RollResult }
   | { readonly kind: "rollLogCleared" }
-  | { readonly kind: "globalRollTemplates"; readonly templates: readonly RollTemplate[] };
+  | { readonly kind: "globalRollTemplates"; readonly templates: readonly RollTemplate[] }
+  | { readonly kind: "loadedDiceRules"; readonly rules: readonly LoadedDiceRule[] }
+  | { readonly kind: "hostKeys"; readonly keys: readonly string[] };
 
 /** Import chunk budget for campaign streaming (~39% of 512 KiB cap). */
 export const CHUNK_BUDGET = 200_000;
@@ -247,3 +257,4 @@ export * from "./dice.js";
 export * from "./color.js";
 export * from "./visibility.js";
 export * from "./ruler.js";
+export * from "./loadedDice.js";

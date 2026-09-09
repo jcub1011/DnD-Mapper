@@ -473,33 +473,48 @@ export interface CombatState {
 
 // ── Loaded Dice ───────────────────────────────────────────────────────────────
 
+export const GM_TARGET_ID = "00000000-0000-0000-0000-000000000001";
+
 export type LoadedDiceCondition =
   | { readonly $kind: "currentMap"; readonly mapId: string }
   | { readonly $kind: "diceTypeRolled"; readonly sides: number }
-  | { readonly $kind: "rollerIs"; readonly userId: string }
+  | { readonly $kind: "rollerIs"; readonly sheetId: string } // CharacterSheet.id or GM_TARGET_ID for unlinked GM rolls
   | { readonly $kind: "rollModeIs"; readonly mode: RollMode }
   | { readonly $kind: "hostKeyHeld"; readonly key: string }
-  | { readonly $kind: "combatActive"; readonly active: boolean }
+  | { readonly $kind: "combatActive" } // Parameterless flag
   | { readonly $kind: "rollLabelContains"; readonly substring: string }
   | { readonly $kind: "allOf"; readonly conditions: readonly LoadedDiceCondition[] }
   | { readonly $kind: "anyOf"; readonly conditions: readonly LoadedDiceCondition[] }
   | { readonly $kind: "not"; readonly condition: LoadedDiceCondition };
 
 export type LoadedDiceModification =
-  | { readonly $kind: "setResult"; readonly targetTotal: number }
+  | { readonly $kind: "setResult"; readonly value: number }
   | { readonly $kind: "clampMax"; readonly max: number }
   | { readonly $kind: "clampMin"; readonly min: number }
-  | { readonly $kind: "biasLower"; readonly strength: number }
-  | { readonly $kind: "biasHigher"; readonly strength: number }
-  | { readonly $kind: "rerollOn"; readonly triggerValues: readonly number[] };
+  | { readonly $kind: "biasLower"; readonly rerollCount: number }
+  | { readonly $kind: "biasHigher"; readonly rerollCount: number }
+  | { readonly $kind: "rerollOn"; readonly values: readonly number[] };
 
 export interface LoadedDiceRule {
   readonly id: string;
   readonly name: string;
   readonly enabled: boolean;
-  readonly targetSheetIds: readonly string[];
+  readonly targetSheetIds: readonly string[]; // Empty means all sheets / unattributed GM rolls
   readonly conditions: readonly LoadedDiceCondition[];
   readonly modifications: readonly LoadedDiceModification[];
+}
+
+export interface LoadedDiceContext {
+  readonly roll: {
+    readonly sides: number;
+    readonly mode: RollMode;
+    readonly label: string;
+    readonly sheetId: string | null;
+    readonly rollerUserId: string;
+  };
+  readonly activeMapId: string | null;
+  readonly isCombatActive: boolean;
+  readonly hostHeldKeys: readonly string[];
 }
 
 // ── Session Settings & Top-Level State ────────────────────────────────────────
