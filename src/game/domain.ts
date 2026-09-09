@@ -390,6 +390,7 @@ export type RollMode = "Normal" | "Advantage" | "Disadvantage";
 export interface DieRoll {
   readonly sides: number;
   readonly value: number;
+  readonly discarded?: boolean;
 }
 
 export type RollTemplateScope = "BuiltIn" | "Global" | "Sheet";
@@ -402,6 +403,13 @@ export interface RollTemplate {
   readonly mode: RollMode;
   readonly attributeName: string | null;
   readonly label: string;
+  readonly scope?: RollTemplateScope;
+}
+
+export interface LoadedDiceRuleStamp {
+  readonly ruleId: string;
+  readonly ruleName: string;
+  readonly modificationType: string;
 }
 
 export interface RollResult {
@@ -409,6 +417,8 @@ export interface RollResult {
   readonly rollerUserId: string;
   readonly forcedByUserId: string | null;
   readonly rolls: readonly DieRoll[];
+  readonly originalDice?: readonly DiceTerm[];
+  readonly originalAttributeRef?: { readonly sheetId: string; readonly attributeName: string | null } | null;
   readonly total: number;
   readonly mode: RollMode;
   readonly flatModifier: number;
@@ -418,7 +428,7 @@ export interface RollResult {
   readonly formula: string;
   readonly modifierBreakdown: string;
   readonly tokenId: string | null;
-  readonly appliedRules: readonly string[];
+  readonly appliedRules: readonly (string | LoadedDiceRuleStamp)[];
 }
 
 export interface CharacterSheet {

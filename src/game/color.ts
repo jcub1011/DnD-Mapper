@@ -7,6 +7,8 @@
  *   3. Strict JSON compatibility; pure TypeScript with no DOM or Node globals.
  */
 
+import type { DndMapperState } from "./domain.js";
+
 export interface RgbColor {
   readonly r: number;
   readonly g: number;
@@ -103,3 +105,82 @@ export function getReadableTextColor(bgColorHex: string): "#000000" | "#ffffff" 
 
   return contrastWithWhite > contrastWithBlack ? "#ffffff" : "#000000";
 }
+
+// ── Dice Color Resolvers ──────────────────────────────────────────────────────
+
+export const HOST_GOLD = "#FFD700";
+
+export function stringHashCode(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+export function hslToHex(h: number, s: number, l: number): string {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const hp = h / 60.0;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  let r1: number, g1: number, b1: number;
+  if (hp < 1) [r1, g1, b1] = [c, x, 0];
+  else if (hp < 2) [r1, g1, b1] = [x, c, 0];
+  else if (hp < 3) [r1, g1, b1] = [0, c, x];
+  else if (hp < 4) [r1, g1, b1] = [0, x, c];
+  else if (hp < 5) [r1, g1, b1] = [x, 0, c];
+  else [r1, g1, b1] = [c, 0, x];
+
+  const m = l - c / 2;
+  const r = Math.round((r1 + m) * 255);
+  const g = Math.round((g1 + m) * 255);
+  const b = Math.round((b1 + m) * 255);
+
+  return (
+    "#" +
+    r.toString(16).padStart(2, "0") +
+    g.toString(16).padStart(2, "0") +
+    b.toString(16).padStart(2, "0")
+  );
+}
+
+export function fallbackColorForHash(hash: number): string {
+  const hue = hash % 360;
+  return hslToHex(hue, 0.55, 0.55);
+}
+
+export function resolveDiceColor(state: DndMapperState, userId: string): string {
+  if (!userId) return fallbackColorForHash(0);
+  if (state.dmPlayerId === userId) return HOST_GOLD;
+
+  for (const map of state.maps) {
+    if ("tokens" in map) {
+      for (const token of map.tokens) {
+        if (token.ownerUserId === userId && parseHexColor(token.color)) {
+          return token.color;
+        }
+      }
+    }
+  }
+
+  return fallbackColorForHash(stringHashCode(userId));
+}
+
+export function resolveDiceColorForToken(state: DndMapperState, tokenId: string): string {
+  for (const map of state.maps) {
+    if ("tokens" in map) {
+      for (const token of map.tokens) {
+        if (token.id === tokenId) {
+          if (token.sheetId && state.sheets[token.sheetId]) {
+            const sheetColor = state.sheets[token.sheetId].color;
+            if (parseHexColor(sheetColor)) return sheetColor;
+          }
+          if (parseHexColor(token.color)) return token.color;
+          return fallbackColorForHash(stringHashCode(tokenId));
+        }
+      }
+    }
+  }
+  return fallbackColorForHash(stringHashCode(tokenId));
+}
+

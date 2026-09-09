@@ -9,7 +9,7 @@
  */
 
 import type { CharacterSheet, DndMapperState, GameMap, MapSummary, Token } from "./domain.js";
-import { createDefaultDndMapperState, isFullMap, reconcileSheetValues } from "./domain.js";
+import { createDefaultDndMapperState, isFullMap, MAX_ROLL_LOG, reconcileSheetValues } from "./domain.js";
 import type { Patch } from "./types.js";
 
 export class MatchView {
@@ -271,6 +271,22 @@ export class MatchView {
         const nextTemplates = { ...this._state.customTemplates };
         delete nextTemplates[patch.templateId];
         this._state = { ...this._state, customTemplates: nextTemplates };
+        break;
+      }
+
+      case "roll": {
+        const nextRollLog = [...this._state.rollLog, patch.roll].slice(-MAX_ROLL_LOG);
+        this._state = { ...this._state, rollLog: nextRollLog };
+        break;
+      }
+
+      case "rollLogCleared": {
+        this._state = { ...this._state, rollLog: [] };
+        break;
+      }
+
+      case "globalRollTemplates": {
+        this._state = { ...this._state, globalRollTemplates: patch.templates };
         break;
       }
     }

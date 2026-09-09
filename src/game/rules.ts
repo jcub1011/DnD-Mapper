@@ -29,6 +29,8 @@ import type {
   StatusEffect,
   StatusEffectTemplate,
   Token,
+  RollMode,
+  RollTemplate,
 } from "./domain.js";
 import {
   clampHpToEffectiveMax,
@@ -36,10 +38,12 @@ import {
   createDefaultDndMapperState,
   isCustomTemplate,
   isFullMap,
+  MAX_ROLL_LOG,
   reconcileSheetValues,
   resolveEffectiveMaxHp,
   toMapSummary,
 } from "./domain.js";
+import { BUILTIN_ROLL_TEMPLATES, executeRoll, validateDiceTerms } from "./dice.js";
 import { clearFog, decodeFog, encodeFog, fillFog, setCellsFogged } from "./fog.js";
 import {
   addImageToMap,
@@ -1561,6 +1565,209 @@ export function applyIntent(
       }
       const nextState: DndMapperState = { ...state, customTemplates: nextCustom };
       return { state: nextState, patch: null };
+    }
+
+    // ── Phase 7: Dice & Roll Templates ──────────────────────────────────────────
+
+    case "rollDice": {
+      if (typeof intent.formula !== "string" || !intent.formula) return null;
+      const mode: RollMode =
+        intent.mode === "Advantage" || intent.mode === "Disadvantage" ? intent.mode : "Normal";
+      const roll = executeRoll(intent.formula, mode, fromId, {
+        nowMs: now,
+        label: typeof intent.label === "string" ? intent.label : undefined,
+        tokenId: typeof intent.tokenId === "string" ? intent.tokenId : null,
+        sheetId: typeof intent.sheetId === "string" ? intent.sheetId : null,
+        attributeName: typeof intent.attributeName === "string" ? intent.attributeName : null,
+        sheets: state.sheets,
+      });
+      if (!roll) return null;
+
+      const nextRollLog = [...state.rollLog, roll].slice(-MAX_ROLL_LOG);
+      const nextState: DndMapperState = { ...state, rollLog: nextRollLog };
+      return { state: nextState, patch: { kind: "roll", roll } };
+    }
+
+    case "rollTemplate": {
+      if (typeof intent.templateId !== "string") return null;
+
+      let template: RollTemplate | undefined = BUILTIN_ROLL_TEMPLATES.find((t) => t.id === intent.templateId);
+
+      if (!template) {
+        template = state.globalRollTemplates.find((t) => t.id === intent.templateId);
+      }
+
+      const sheetId = typeof intent.sheetId === "string" ? intent.sheetId : null;
+      if (!template && sheetId && state.sheets[sheetId]) {
+        template = state.sheets[sheetId].rollTemplates.find((t: RollTemplate) => t.id === intent.templateId);
+      }
+
+      if (!template) return null;
+
+      const modeOverride =
+        intent.modeOverride === "Advantage" ||
+        intent.modeOverride === "Disadvantage" ||
+        intent.modeOverride === "Normal"
+          ? intent.modeOverride
+          : undefined;
+      const mode = modeOverride ?? template.mode;
+
+      const roll = executeRoll(template.dice, mode, fromId, {
+        nowMs: now,
+        label: template.label || template.name,
+        tokenId: typeof intent.tokenId === "string" ? intent.tokenId : null,
+        sheetId,
+        attributeName: template.attributeName,
+        sheets: state.sheets,
+        flatModifierOverride: template.flatModifier,
+      });
+      if (!roll) return null;
+
+      const nextRollLog = [...state.rollLog, roll].slice(-MAX_ROLL_LOG);
+      const nextState: DndMapperState = { ...state, rollLog: nextRollLog };
+      return { state: nextState, patch: { kind: "roll", roll } };
+    }
+
+    case "createGlobalRollTemplate": {
+      if (!isDm(state, fromId)) return null;
+      const tmpl = intent.template as Omit<RollTemplate, "id" | "scope"> | undefined;
+      if (!tmpl || typeof tmpl.name !== "string" || !Array.isArray(tmpl.dice)) return null;
+      const diceVal = validateDiceTerms(tmpl.dice);
+      if (!diceVal.valid) return null;
+
+      const newTemplate: RollTemplate = {
+        id: generateGuid(),
+        name: tmpl.name.trim() || "New Template",
+        dice: [...tmpl.dice],
+        flatModifier: typeof tmpl.flatModifier === "number" ? tmpl.flatModifier : 0,
+        mode: tmpl.mode ?? "Normal",
+        attributeName: typeof tmpl.attributeName === "string" ? tmpl.attributeName : null,
+        label: typeof tmpl.label === "string" ? tmpl.label : tmpl.name,
+        scope: "Global",
+      };
+
+      const nextTemplates = [...state.globalRollTemplates, newTemplate];
+      const nextState: DndMapperState = { ...state, globalRollTemplates: nextTemplates };
+      return { state: nextState, patch: { kind: "globalRollTemplates", templates: nextTemplates } };
+    }
+
+    case "updateGlobalRollTemplate": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.templateId !== "string" || !intent.patch) return null;
+      const patch = intent.patch as Partial<Omit<RollTemplate, "id" | "scope">>;
+      const index = state.globalRollTemplates.findIndex((t) => t.id === intent.templateId);
+      if (index === -1) return null;
+
+      const existing = state.globalRollTemplates[index];
+      if (patch.dice) {
+        const diceVal = validateDiceTerms(patch.dice);
+        if (!diceVal.valid) return null;
+      }
+
+      const updated: RollTemplate = {
+        ...existing,
+        name: typeof patch.name === "string" ? patch.name.trim() : existing.name,
+        dice: patch.dice ? [...patch.dice] : existing.dice,
+        flatModifier: typeof patch.flatModifier === "number" ? patch.flatModifier : existing.flatModifier,
+        mode: patch.mode ?? existing.mode,
+        attributeName: patch.attributeName !== undefined ? patch.attributeName : existing.attributeName,
+        label: typeof patch.label === "string" ? patch.label : existing.label,
+      };
+
+      const nextTemplates = [...state.globalRollTemplates];
+      nextTemplates[index] = updated;
+      const nextState: DndMapperState = { ...state, globalRollTemplates: nextTemplates };
+      return { state: nextState, patch: { kind: "globalRollTemplates", templates: nextTemplates } };
+    }
+
+    case "deleteGlobalRollTemplate": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.templateId !== "string") return null;
+
+      const nextTemplates = state.globalRollTemplates.filter((t) => t.id !== intent.templateId);
+      const nextState: DndMapperState = { ...state, globalRollTemplates: nextTemplates };
+      return { state: nextState, patch: { kind: "globalRollTemplates", templates: nextTemplates } };
+    }
+
+    case "createRollTemplate": {
+      if (typeof intent.sheetId !== "string") return null;
+      const tmpl = intent.template as Omit<RollTemplate, "id" | "scope"> | undefined;
+      if (!tmpl || typeof tmpl.name !== "string" || !Array.isArray(tmpl.dice)) return null;
+      const sheet = state.sheets[intent.sheetId];
+      if (!sheet || !mayEditSheet(state, fromId, sheet)) return null;
+
+      const diceVal = validateDiceTerms(tmpl.dice);
+      if (!diceVal.valid) return null;
+
+      const newTemplate: RollTemplate = {
+        id: generateGuid(),
+        name: tmpl.name.trim() || "New Template",
+        dice: [...tmpl.dice],
+        flatModifier: typeof tmpl.flatModifier === "number" ? tmpl.flatModifier : 0,
+        mode: tmpl.mode ?? "Normal",
+        attributeName: typeof tmpl.attributeName === "string" ? tmpl.attributeName : null,
+        label: typeof tmpl.label === "string" ? tmpl.label : tmpl.name,
+        scope: "Sheet",
+      };
+
+      const nextSheet: CharacterSheet = {
+        ...sheet,
+        rollTemplates: [...sheet.rollTemplates, newTemplate],
+      };
+      const nextSheets = { ...state.sheets, [sheet.id]: nextSheet };
+      const nextState: DndMapperState = { ...state, sheets: nextSheets };
+      return { state: nextState, patch: { kind: "sheet", sheet: nextSheet } };
+    }
+
+    case "updateRollTemplate": {
+      if (typeof intent.sheetId !== "string" || typeof intent.templateId !== "string" || !intent.patch) return null;
+      const patch = intent.patch as Partial<Omit<RollTemplate, "id" | "scope">>;
+      const sheet = state.sheets[intent.sheetId];
+      if (!sheet || !mayEditSheet(state, fromId, sheet)) return null;
+
+      const index = sheet.rollTemplates.findIndex((t) => t.id === intent.templateId);
+      if (index === -1) return null;
+
+      const existing = sheet.rollTemplates[index];
+      if (patch.dice) {
+        const diceVal = validateDiceTerms(patch.dice);
+        if (!diceVal.valid) return null;
+      }
+
+      const updated: RollTemplate = {
+        ...existing,
+        name: typeof patch.name === "string" ? patch.name.trim() : existing.name,
+        dice: patch.dice ? [...patch.dice] : existing.dice,
+        flatModifier: typeof patch.flatModifier === "number" ? patch.flatModifier : existing.flatModifier,
+        mode: patch.mode ?? existing.mode,
+        attributeName: patch.attributeName !== undefined ? patch.attributeName : existing.attributeName,
+        label: typeof patch.label === "string" ? patch.label : existing.label,
+      };
+
+      const nextRollTemplates = [...sheet.rollTemplates];
+      nextRollTemplates[index] = updated;
+      const nextSheet: CharacterSheet = { ...sheet, rollTemplates: nextRollTemplates };
+      const nextSheets = { ...state.sheets, [sheet.id]: nextSheet };
+      const nextState: DndMapperState = { ...state, sheets: nextSheets };
+      return { state: nextState, patch: { kind: "sheet", sheet: nextSheet } };
+    }
+
+    case "deleteRollTemplate": {
+      if (typeof intent.sheetId !== "string" || typeof intent.templateId !== "string") return null;
+      const sheet = state.sheets[intent.sheetId];
+      if (!sheet || !mayEditSheet(state, fromId, sheet)) return null;
+
+      const nextRollTemplates = sheet.rollTemplates.filter((t) => t.id !== intent.templateId);
+      const nextSheet: CharacterSheet = { ...sheet, rollTemplates: nextRollTemplates };
+      const nextSheets = { ...state.sheets, [sheet.id]: nextSheet };
+      const nextState: DndMapperState = { ...state, sheets: nextSheets };
+      return { state: nextState, patch: { kind: "sheet", sheet: nextSheet } };
+    }
+
+    case "clearRollLog": {
+      if (!isDm(state, fromId)) return null;
+      const nextState: DndMapperState = { ...state, rollLog: [] };
+      return { state: nextState, patch: { kind: "rollLogCleared" } };
     }
 
     default:

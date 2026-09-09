@@ -40,15 +40,26 @@ import "../canvas/dndm-image-inspector";
 import "../canvas/dndm-toolbar";
 import "../lobby/dndm-lobby";
 import "../modals/dndm-permissions";
+import "../modals/dndm-roll-history";
+import "../modals/dndm-roll-template-library";
 import "../panels/dndm-character-sheet";
 import type { SheetPatch } from "../panels/dndm-character-sheet";
 import "../panels/dndm-layer-panel";
 import "../panels/dndm-map-list";
 import "../panels/dndm-my-token";
+import "../panels/dndm-quick-roll-footer";
+import "../panels/dndm-roll-log";
 import "../panels/dndm-saves-panel";
 import "../panels/dndm-token-panel";
 import "../toast/dndm-toast";
 import "../upload/dndm-image-upload";
+import {
+  getReadableTextColor,
+  resolveDiceColor,
+  resolveDiceColorForToken,
+} from "../../game/color";
+import type { RollMode, RollResult, RollTemplate } from "../../game/domain";
+import { DEFAULT_DICE_SCALE, diceOverlay } from "../dice/diceOverlay";
 
 const log = createLogger("app");
 
@@ -56,6 +67,7 @@ const MIN_RAIL_PX = 200;
 const MAX_RAIL_PX = 600;
 const CLICK_THRESHOLD_PX = 4;
 const STORAGE_PREFIX = "dndm.rail.";
+const DICE_SCALE_STORAGE_KEY = "dndm.dice.scale";
 
 function clampRail(px: number): number {
   return Math.max(MIN_RAIL_PX, Math.min(MAX_RAIL_PX, px));
@@ -77,6 +89,25 @@ function saveRailWidth(side: "left" | "right", role: "dm" | "player", px: number
     window.sessionStorage?.setItem(STORAGE_PREFIX + role + "." + side, String(Math.round(px)));
   } catch {
     // ignore quota/privacy errors
+  }
+}
+
+function loadDiceScale(fallback = DEFAULT_DICE_SCALE): number {
+  try {
+    const v = window.localStorage?.getItem(DICE_SCALE_STORAGE_KEY);
+    if (!v) return fallback;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) && n >= 25 && n <= 250 ? n : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveDiceScale(scale: number): void {
+  try {
+    window.localStorage?.setItem(DICE_SCALE_STORAGE_KEY, String(scale));
+  } catch {
+    // ignore
   }
 }
 
@@ -115,6 +146,12 @@ export class DndmApp extends GameElement {
   @state() private selectedSheetId: string | null = null;
   @state() private currentZoom = 1.0;
   @state() private settingsModalOpen = false;
+  @state() private rollTemplateLibraryOpen = false;
+  @state() private rollHistoryOpen = false;
+  @state() private diceSoundEnabled = false;
+  @state() private diceScale: number = loadDiceScale(DEFAULT_DICE_SCALE);
+
+  private seenRollIds = new Set<string>();
 
   // Drag resizing tracking
   private activeResizeSide: "left" | "right" | null = null;
@@ -136,6 +173,7 @@ export class DndmApp extends GameElement {
     super.connectedCallback();
     document.addEventListener("click", this.onGlobalPanelCollapseClick);
     window.addEventListener("dndm-open-sheet", this.onOpenSheet);
+    diceOverlay.setDiceScale(this.diceScale);
     void this.libraryService.attach();
   }
 
@@ -146,6 +184,15 @@ export class DndmApp extends GameElement {
     cancelAnimationFrame(this.rafId);
     this.controller?.destroy();
     void this.libraryService.detach();
+    diceOverlay.detach();
+  }
+
+  override updated(changedProperties: Map<string, unknown>): void {
+    super.updated(changedProperties);
+    const overlayEl = this.renderRoot.querySelector("#dndm-dice-overlay") as HTMLElement | null;
+    if (overlayEl && overlayEl !== diceOverlay.getContainer()) {
+      void diceOverlay.attach(overlayEl);
+    }
   }
 
   /** Attach the controller main.ts built. Safe to call once. */
@@ -153,6 +200,7 @@ export class DndmApp extends GameElement {
     void this.libraryService.attach();
     this.controller = controller;
     this.match = controller.view.state;
+    this.seenRollIds = new Set((this.match.rollLog ?? []).map((r) => r.id));
     this.isOwner = controller.isOwner;
     this.assetSource = createAssetSource(
       this.launchMode,
@@ -210,6 +258,8 @@ export class DndmApp extends GameElement {
     this.style.setProperty("--dndm-rail-w-right", `${this.rightRailWidth}px`);
     this.style.setProperty("--dndm-rail-pad-left", leftPad);
     this.style.setProperty("--dndm-rail-pad-right", rightPad);
+
+    diceOverlay.updateDimensions();
 
     const map = fx.map();
     if (map) {
@@ -417,6 +467,7 @@ export class DndmApp extends GameElement {
   }
 
   private onStateChanged(state: Readonly<MatchState>): void {
+    const prevRollLog = this.match?.rollLog ?? [];
     const prevMapId = this.match.activeMapId;
     this.match = state;
 
@@ -450,6 +501,37 @@ export class DndmApp extends GameElement {
 
     if (this.isDm) {
       this.libraryService.onStateChanged(state);
+    }
+
+    const currentRollLog = state.rollLog ?? [];
+
+    if (currentRollLog.length === 0 && prevRollLog.length > 0) {
+      this.seenRollIds.clear();
+    }
+
+    const newRolls = currentRollLog.filter((r) => !this.seenRollIds.has(r.id));
+    for (const roll of newRolls) {
+      this.seenRollIds.add(roll.id);
+
+      const isVisible =
+        this.isDm ||
+        state.settings.rollsVisibleToPlayers ||
+        roll.rollerUserId === this.controller?.playerId;
+
+      if (isVisible) {
+        const diceColor = roll.tokenId
+          ? resolveDiceColorForToken(state, roll.tokenId)
+          : resolveDiceColor(state, roll.rollerUserId);
+        const fontColor = getReadableTextColor(diceColor);
+
+        diceOverlay.roll(roll, diceColor, fontColor).catch((err) => {
+          log.warn("Dice roll animation error:", err);
+        });
+      }
+    }
+
+    if (this.seenRollIds.size > 200) {
+      this.seenRollIds = new Set(currentRollLog.map((r) => r.id));
     }
   }
 
@@ -661,6 +743,7 @@ export class DndmApp extends GameElement {
           @dragleave=${this.onCanvasDragLeave}
           @drop=${this.onCanvasDrop}
         >
+          <div class="dndm-dice-canvas-overlay" id="dndm-dice-overlay"></div>
           ${!active
             ? html`
                 <div class="dndm-empty">
@@ -784,6 +867,56 @@ export class DndmApp extends GameElement {
                     `
                   : nothing}
               `}
+
+          <dndm-quick-roll-footer
+            .state=${this.match}
+            .isDm=${this.isDm}
+            .currentUserId=${this.controller?.playerId ?? null}
+            .selectedSheetId=${this.selectedSheetId}
+            .soundEnabled=${this.diceSoundEnabled}
+            .onToggleSound=${() => {
+              this.diceSoundEnabled = !this.diceSoundEnabled;
+              diceOverlay.setSoundEnabled(this.diceSoundEnabled);
+            }}
+            .diceScale=${this.diceScale}
+            .onChangeDiceScale=${(scale: number) => {
+              this.diceScale = scale;
+              saveDiceScale(scale);
+              diceOverlay.setDiceScale(scale);
+            }}
+            .onRollDice=${(
+              formula: string,
+              mode: RollMode,
+              label?: string,
+              sheetId?: string | null,
+              attributeName?: string | null,
+            ) => {
+              this.send({
+                kind: "rollDice",
+                formula,
+                mode,
+                label,
+                tokenId: myToken?.id ?? null,
+                sheetId: sheetId ?? this.selectedSheetId ?? null,
+                attributeName,
+              });
+            }}
+            .onRollTemplate=${(templateId: string, modeOverride?: RollMode, sheetId?: string | null) => {
+              this.send({
+                kind: "rollTemplate",
+                templateId,
+                modeOverride,
+                tokenId: myToken?.id ?? null,
+                sheetId: sheetId ?? this.selectedSheetId ?? null,
+              });
+            }}
+            .onOpenHistory=${() => {
+              this.rollHistoryOpen = true;
+            }}
+            .onOpenTemplates=${() => {
+              this.rollTemplateLibraryOpen = true;
+            }}
+          ></dndm-quick-roll-footer>
         </main>
 
         <!-- Right Rail -->
@@ -846,6 +979,26 @@ export class DndmApp extends GameElement {
               .onSetSchemaPreset=${(preset: AttributePreset) =>
                 this.send({ kind: "setSchemaPreset", preset })}
             ></dndm-character-sheet>
+            <dndm-roll-log
+              .state=${this.match}
+              .isDm=${this.isDm}
+              .currentUserId=${this.controller?.playerId ?? null}
+              .onClearLog=${() => this.send({ kind: "clearRollLog" })}
+              .onReRoll=${(r: RollResult, modeOverride?: RollMode) => {
+                this.send({
+                  kind: "rollDice",
+                  formula: r.formula,
+                  mode: modeOverride ?? r.mode,
+                  label: r.label,
+                  tokenId: r.tokenId,
+                  sheetId: r.originalAttributeRef?.sheetId ?? this.selectedSheetId ?? null,
+                  attributeName: r.originalAttributeRef?.attributeName ?? null,
+                });
+              }}
+              .onOpenHistory=${() => {
+                this.rollHistoryOpen = true;
+              }}
+            ></dndm-roll-log>
           </div>
         </aside>
 
@@ -860,6 +1013,57 @@ export class DndmApp extends GameElement {
             this.settingsModalOpen = false;
           }}
         ></dndm-permissions>
+
+        <dndm-roll-template-library
+          ?isOpen=${this.rollTemplateLibraryOpen}
+          .state=${this.match}
+          .sheetId=${this.selectedSheetId}
+          .isDm=${this.isDm}
+          .currentUserId=${this.controller?.playerId ?? null}
+          .onCreateGlobalTemplate=${(template: Omit<RollTemplate, "id" | "scope">) =>
+            this.send({ kind: "createGlobalRollTemplate", template })}
+          .onUpdateGlobalTemplate=${(
+            templateId: string,
+            patch: Partial<Omit<RollTemplate, "id" | "scope">>,
+          ) => this.send({ kind: "updateGlobalRollTemplate", templateId, patch })}
+          .onDeleteGlobalTemplate=${(templateId: string) =>
+            this.send({ kind: "deleteGlobalRollTemplate", templateId })}
+          .onCreateSheetTemplate=${(
+            sheetId: string,
+            template: Omit<RollTemplate, "id" | "scope">,
+          ) => this.send({ kind: "createRollTemplate", sheetId, template })}
+          .onUpdateSheetTemplate=${(
+            sheetId: string,
+            templateId: string,
+            patch: Partial<Omit<RollTemplate, "id" | "scope">>,
+          ) => this.send({ kind: "updateRollTemplate", sheetId, templateId, patch })}
+          .onDeleteSheetTemplate=${(sheetId: string, templateId: string) =>
+            this.send({ kind: "deleteRollTemplate", sheetId, templateId })}
+          .onClose=${() => {
+            this.rollTemplateLibraryOpen = false;
+          }}
+        ></dndm-roll-template-library>
+
+        <dndm-roll-history
+          ?isOpen=${this.rollHistoryOpen}
+          .state=${this.match}
+          .isDm=${this.isDm}
+          .currentUserId=${this.controller?.playerId ?? null}
+          .onReRoll=${(r: RollResult, modeOverride?: RollMode) => {
+            this.send({
+              kind: "rollDice",
+              formula: r.formula,
+              mode: modeOverride ?? r.mode,
+              label: r.label,
+              tokenId: r.tokenId,
+              sheetId: r.originalAttributeRef?.sheetId ?? this.selectedSheetId ?? null,
+              attributeName: r.originalAttributeRef?.attributeName ?? null,
+            });
+          }}
+          .onClose=${() => {
+            this.rollHistoryOpen = false;
+          }}
+        ></dndm-roll-history>
 
         <dndm-toast></dndm-toast>
       </div>

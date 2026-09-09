@@ -11,7 +11,7 @@ import globals from "globals";
  */
 export default tseslint.config(
   {
-    ignores: ["dist/**", "dist-game/**", "node_modules/**", "addons/**", "public/**"],
+    ignores: ["dist/**", "dist-game/**", "node_modules/**", "addons/**", "public/**", "src/lib/**"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

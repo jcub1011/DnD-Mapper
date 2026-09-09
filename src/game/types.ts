@@ -31,6 +31,9 @@ import type {
   MapSummary,
   NewMapImage,
   NewToken,
+  RollMode,
+  RollResult,
+  RollTemplate,
   StatusEffect,
   StatusEffectTemplate,
   Token,
@@ -149,7 +152,54 @@ export type Intent =
   | { readonly kind: "deleteCustomTemplate"; readonly templateId: string }
   | { readonly kind: "applyCustomTemplate"; readonly templateId: string; readonly characterName?: string; readonly scopedMapId?: string | null }
   | { readonly kind: "duplicateCustomTemplate"; readonly templateId: string }
-  | { readonly kind: "reorderCustomTemplates"; readonly templateIds: readonly string[] };
+  | { readonly kind: "reorderCustomTemplates"; readonly templateIds: readonly string[] }
+  // dice & roll templates (Phase 7)
+  | {
+      readonly kind: "rollDice";
+      readonly formula: string;
+      readonly mode: RollMode;
+      readonly label?: string;
+      readonly tokenId?: string | null;
+      readonly sheetId?: string | null;
+      readonly attributeName?: string | null;
+    }
+  | {
+      readonly kind: "rollTemplate";
+      readonly templateId: string;
+      readonly modeOverride?: RollMode;
+      readonly tokenId?: string | null;
+      readonly sheetId?: string | null;
+    }
+  | {
+      readonly kind: "createGlobalRollTemplate";
+      readonly template: Omit<RollTemplate, "id" | "scope">;
+    }
+  | {
+      readonly kind: "updateGlobalRollTemplate";
+      readonly templateId: string;
+      readonly patch: Partial<Omit<RollTemplate, "id" | "scope">>;
+    }
+  | {
+      readonly kind: "deleteGlobalRollTemplate";
+      readonly templateId: string;
+    }
+  | {
+      readonly kind: "createRollTemplate";
+      readonly sheetId: string;
+      readonly template: Omit<RollTemplate, "id" | "scope">;
+    }
+  | {
+      readonly kind: "updateRollTemplate";
+      readonly sheetId: string;
+      readonly templateId: string;
+      readonly patch: Partial<Omit<RollTemplate, "id" | "scope">>;
+    }
+  | {
+      readonly kind: "deleteRollTemplate";
+      readonly sheetId: string;
+      readonly templateId: string;
+    }
+  | { readonly kind: "clearRollLog" };
 
 /**
  * Authority → clients narrowed patches.
@@ -177,7 +227,10 @@ export type Patch =
   | { readonly kind: "effectTemplate"; readonly template: StatusEffectTemplate }
   | { readonly kind: "effectTemplateRemoved"; readonly templateId: string }
   | { readonly kind: "customTemplate"; readonly template: CustomTemplate }
-  | { readonly kind: "customTemplateRemoved"; readonly templateId: string };
+  | { readonly kind: "customTemplateRemoved"; readonly templateId: string }
+  | { readonly kind: "roll"; readonly roll: RollResult }
+  | { readonly kind: "rollLogCleared" }
+  | { readonly kind: "globalRollTemplates"; readonly templates: readonly RollTemplate[] };
 
 /** Import chunk budget for campaign streaming (~39% of 512 KiB cap). */
 export const CHUNK_BUDGET = 200_000;
