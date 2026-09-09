@@ -26,7 +26,7 @@ import {
   zoomAtAnchor,
   type ViewportState,
 } from "./viewport";
-import type { GameMap, GridConfig, MapImage, Token, FocusRect } from "../../game/domain";
+import type { CharacterSheet, GameMap, GridConfig, MapImage, Token, FocusRect } from "../../game/domain";
 import type { FogMaskB64 } from "../../game/fog";
 import type { AssetSource } from "../../assets/assetSource";
 import { FogLayer } from "./fogLayer";
@@ -208,6 +208,10 @@ export class MapScene extends Phaser.Scene {
 
   updateTokens(tokens: readonly Token[]): void {
     this.tokenLayer.setTokens(tokens);
+  }
+
+  updateSheets(sheets: Readonly<Record<string, CharacterSheet>>): void {
+    this.tokenLayer.setSheets(sheets);
   }
 
   updateFog(mask: FogMaskB64): void {

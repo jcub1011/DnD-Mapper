@@ -7,7 +7,7 @@
 import Phaser from "phaser";
 import { DEPTH } from "./depth";
 import { CELL } from "./viewport";
-import type { GridConfig, Token } from "../../game/domain";
+import type { CharacterSheet, GridConfig, Token } from "../../game/domain";
 import { TOKEN_RADIUS, TOKEN_OWNER_HALO_RADIUS, TOKEN_STACK_CHIP_RADIUS } from "../../game/domain";
 import { snapToken } from "../../game/snapping";
 import {
@@ -30,6 +30,7 @@ export class TokenLayer {
   private readonly popoverGfx: Phaser.GameObjects.Graphics;
 
   private tokens: readonly Token[] = [];
+  private sheets: Readonly<Record<string, CharacterSheet>> = {};
   private grid: GridConfig = {
     widthCells: 30,
     heightCells: 20,
@@ -59,6 +60,11 @@ export class TokenLayer {
 
   setGrid(grid: GridConfig): void {
     this.grid = grid;
+  }
+
+  setSheets(sheets: Readonly<Record<string, CharacterSheet>>): void {
+    this.sheets = sheets;
+    this.rebuildTokens();
   }
 
   setTokens(tokens: readonly Token[]): void {
@@ -154,7 +160,9 @@ export class TokenLayer {
 
   private populateTokenContainer(container: Phaser.GameObjects.Container, token: Token): void {
     const radius = TOKEN_RADIUS * CELL;
-    const colorInt = parseInt(token.color.replace("#", ""), 16) || 0x888888;
+    const sheet = token.sheetId ? this.sheets[token.sheetId] : null;
+    const effectiveColor = sheet?.color && sheet.color.trim().length > 0 ? sheet.color : token.color;
+    const colorInt = parseInt(effectiveColor.replace("#", ""), 16) || 0x888888;
 
     // 1. Owner Halo
     if (token.ownerUserId) {
@@ -175,7 +183,7 @@ export class TokenLayer {
 
     // 3. Label text (initial)
     const initial = token.name.trim().length > 0 ? token.name.trim()[0].toUpperCase() : "?";
-    const textColor = getReadableTextColor(token.color);
+    const textColor = getReadableTextColor(effectiveColor);
     const text = this.scene.add.text(0, 0, initial, {
       fontSize: `${Math.round(0.42 * CELL)}px`,
       fontFamily: '"Cormorant Garamond", Georgia, serif',
@@ -241,6 +249,15 @@ export class TokenLayer {
         const now = Date.now();
         if (now - lastClickTime < 350) {
           this.onTokenDoubleClick?.(token.id);
+          if (token.sheetId) {
+            window.dispatchEvent(
+              new CustomEvent<{ sheetId: string }>("dndm-open-sheet", {
+                bubbles: true,
+                composed: true,
+                detail: { sheetId: token.sheetId },
+              }),
+            );
+          }
         } else {
           // Check if this token belongs to a multi-token stack
           const cellKey = `${Math.floor(token.x)},${Math.floor(token.y)}`;
@@ -319,7 +336,9 @@ export class TokenLayer {
       if (!t) continue;
 
       const chipContainer = this.scene.add.container(chip.x * CELL, chip.y * CELL);
-      const colorInt = parseInt(t.color.replace("#", ""), 16) || 0x888888;
+      const chipSheet = t.sheetId ? this.sheets[t.sheetId] : null;
+      const chipColor = chipSheet?.color && chipSheet.color.trim().length > 0 ? chipSheet.color : t.color;
+      const colorInt = parseInt(chipColor.replace("#", ""), 16) || 0x888888;
 
       const g = this.scene.add.graphics();
       g.fillStyle(colorInt, 1);
@@ -329,7 +348,7 @@ export class TokenLayer {
       chipContainer.add(g);
 
       const initial = t.name.trim().length > 0 ? t.name.trim()[0].toUpperCase() : "?";
-      const textColor = getReadableTextColor(t.color);
+      const textColor = getReadableTextColor(chipColor);
       const txt = this.scene.add.text(0, 0, initial, {
         fontSize: `${Math.round(0.35 * CELL)}px`,
         fontFamily: '"Cormorant Garamond", Georgia, serif',
@@ -346,6 +365,15 @@ export class TokenLayer {
         const now = Date.now();
         if (now - lastChipClick < 350) {
           this.onTokenDoubleClick?.(t.id);
+          if (t.sheetId) {
+            window.dispatchEvent(
+              new CustomEvent<{ sheetId: string }>("dndm-open-sheet", {
+                bubbles: true,
+                composed: true,
+                detail: { sheetId: t.sheetId },
+              }),
+            );
+          }
         }
         lastChipClick = now;
       });

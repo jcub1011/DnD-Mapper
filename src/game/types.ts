@@ -13,8 +13,14 @@
  */
 
 import type {
+  AttributePreset,
+  AttributeRow,
+  AttributeSchema,
+  AttributeValue,
   CampaignHeader,
   CenterViewportRequest,
+  CharacterSheet,
+  CustomTemplate,
   DndMapperPhase,
   DndMapperSettings,
   DndMapperState,
@@ -25,6 +31,8 @@ import type {
   MapSummary,
   NewMapImage,
   NewToken,
+  StatusEffect,
+  StatusEffectTemplate,
   Token,
 } from "./domain.js";
 
@@ -113,7 +121,35 @@ export type Intent =
       readonly maps: readonly GameMap[];
     }
   | { readonly kind: "commitImport"; readonly token: string }
-  | { readonly kind: "startSession" };
+  | { readonly kind: "startSession" }
+  // sheets (9 intents; assignCharacterToPlayer in Phase 11)
+  | { readonly kind: "createSheet"; readonly characterName: string; readonly scopedMapId?: string | null; readonly ownerUserId?: string | null }
+  | { readonly kind: "updateSheet"; readonly sheetId: string; readonly patch: Partial<Pick<CharacterSheet, "characterName" | "color" | "scopedMapId" | "notes">> }
+  | { readonly kind: "deleteSheet"; readonly sheetId: string }
+  | { readonly kind: "duplicateSheet"; readonly sheetId: string }
+  | { readonly kind: "assignSheetOwner"; readonly sheetId: string; readonly ownerUserId: string | null }
+  | { readonly kind: "setSheetHp"; readonly sheetId: string; readonly hp: number | null }
+  | { readonly kind: "setSheetMaxHp"; readonly sheetId: string; readonly maxHp: number | null }
+  | { readonly kind: "setSheetAc"; readonly sheetId: string; readonly ac: number | null }
+  | { readonly kind: "updateAttributeValues"; readonly sheetId: string; readonly values: Readonly<Record<string, AttributeValue>> }
+  // schemas (3 intents)
+  | { readonly kind: "setSchemaPreset"; readonly preset: AttributePreset }
+  | { readonly kind: "updateSchemaRows"; readonly rows: readonly AttributeRow[]; readonly initiativeAttributeName?: string | null }
+  | { readonly kind: "setInitiativeAttribute"; readonly attributeName: string | null }
+  // status effects (6 intents)
+  | { readonly kind: "applyStatusEffect"; readonly sheetId: string; readonly effect: Omit<StatusEffect, "id" | "appliedUtc"> }
+  | { readonly kind: "updateStatusEffect"; readonly sheetId: string; readonly effectId: string; readonly patch: Partial<Omit<StatusEffect, "id" | "appliedUtc">> }
+  | { readonly kind: "removeStatusEffect"; readonly sheetId: string; readonly effectId: string }
+  | { readonly kind: "createEffectTemplate"; readonly template: Omit<StatusEffectTemplate, "id"> }
+  | { readonly kind: "updateEffectTemplate"; readonly templateId: string; readonly patch: Partial<Omit<StatusEffectTemplate, "id">> }
+  | { readonly kind: "deleteEffectTemplate"; readonly templateId: string }
+  // custom templates (6 intents)
+  | { readonly kind: "createCustomTemplate"; readonly template: Omit<CustomTemplate, "id"> }
+  | { readonly kind: "updateCustomTemplate"; readonly templateId: string; readonly patch: Partial<Omit<CustomTemplate, "id">> }
+  | { readonly kind: "deleteCustomTemplate"; readonly templateId: string }
+  | { readonly kind: "applyCustomTemplate"; readonly templateId: string; readonly characterName?: string; readonly scopedMapId?: string | null }
+  | { readonly kind: "duplicateCustomTemplate"; readonly templateId: string }
+  | { readonly kind: "reorderCustomTemplates"; readonly templateIds: readonly string[] };
 
 /**
  * Authority → clients narrowed patches.
@@ -134,7 +170,14 @@ export type Patch =
   | { readonly kind: "mapList"; readonly maps: readonly MapSummary[] } // metadata only, no tokens/images
   | { readonly kind: "map"; readonly map: GameMap } // ONE map in full
   | { readonly kind: "dm"; readonly dmPlayerId: string } // succession
-  | { readonly kind: "phase"; readonly phase: DndMapperPhase };
+  | { readonly kind: "phase"; readonly phase: DndMapperPhase }
+  | { readonly kind: "sheet"; readonly sheet: CharacterSheet }
+  | { readonly kind: "sheetRemoved"; readonly sheetId: string }
+  | { readonly kind: "schema"; readonly schema: AttributeSchema; readonly initiativeAttributeName: string | null }
+  | { readonly kind: "effectTemplate"; readonly template: StatusEffectTemplate }
+  | { readonly kind: "effectTemplateRemoved"; readonly templateId: string }
+  | { readonly kind: "customTemplate"; readonly template: CustomTemplate }
+  | { readonly kind: "customTemplateRemoved"; readonly templateId: string };
 
 /** Import chunk budget for campaign streaming (~39% of 512 KiB cap). */
 export const CHUNK_BUDGET = 200_000;

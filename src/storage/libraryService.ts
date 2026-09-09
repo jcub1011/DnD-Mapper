@@ -13,6 +13,7 @@
 
 import type {
   CharacterSheet,
+  CustomTemplate,
   DndMapperSettings,
   DndMapperState,
   GameMap,
@@ -50,7 +51,7 @@ const SAVE_DEBOUNCE_MS = 500;
 export interface PersistedFingerprint {
   readonly maps: readonly (GameMap | MapSummary)[];
   readonly sheets: Readonly<Record<string, CharacterSheet>>;
-  readonly customTemplates: Readonly<Record<string, NamedTemplate>>;
+  readonly customTemplates: Readonly<Record<string, NamedTemplate | CustomTemplate>>;
   readonly globalRollTemplates: readonly RollTemplate[];
   readonly settings: DndMapperSettings;
   readonly attributeSchema: AttributeSchema;
@@ -486,7 +487,7 @@ export class LibraryService {
       if (s) sheetsRecord[s.id] = s;
     }
 
-    const templatesRecord: Record<string, NamedTemplate> = {};
+    const templatesRecord: Record<string, NamedTemplate | CustomTemplate> = {};
     for (const t of core.customTemplates || []) {
       templatesRecord[t.id] = t;
     }
@@ -514,6 +515,7 @@ export class LibraryService {
       activeMapId: maps.length > 0 ? maps[0].id : null,
       sheets: sheetsRecord,
       customTemplates: templatesRecord,
+      statusEffectTemplates: {},
       rollLog: [],
       globalRollTemplates: core.globalRollTemplates || [],
       activeSchemaTemplateId: core.activeSchemaTemplateId || null,

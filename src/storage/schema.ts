@@ -11,6 +11,7 @@
 
 import type {
   CharacterSheet,
+  CustomTemplate,
   DndMapperSettings,
   GameMap,
   LoadedDiceRule,
@@ -68,7 +69,7 @@ export interface LibraryCoreSnapshot {
   readonly attributeSchema: AttributeSchema;
   readonly activeSchemaTemplateId: string | null;
   readonly initiativeAttributeName: string | null;
-  readonly customTemplates: readonly NamedTemplate[];
+  readonly customTemplates: readonly (NamedTemplate | CustomTemplate)[];
   readonly globalRollTemplates: readonly RollTemplate[];
   readonly loadedDiceRules: readonly LoadedDiceRule[];
   readonly mapIds: readonly string[];

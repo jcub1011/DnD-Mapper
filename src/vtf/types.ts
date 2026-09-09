@@ -16,6 +16,7 @@ import type {
   GridConfig,
   LoadedDiceRule,
   NamedTemplate,
+  CustomTemplate,
   RollTemplate,
 } from "../game/domain.js";
 
@@ -148,7 +149,7 @@ export interface DndMapperGlobalVendor {
   readonly attributeSchema?: AttributeSchema;
   readonly activeSchemaTemplateId?: string | null;
   readonly initiativeAttributeName?: string | null;
-  readonly customTemplates?: readonly NamedTemplate[];
+  readonly customTemplates?: readonly (NamedTemplate | CustomTemplate)[];
   readonly globalRollTemplates?: readonly RollTemplate[];
   readonly loadedDiceRules?: readonly LoadedDiceRule[];
   readonly mapOrder?: readonly string[];
@@ -182,7 +183,7 @@ export interface LibraryCoreSnapshot {
   readonly attributeSchema: AttributeSchema;
   readonly activeSchemaTemplateId: string | null;
   readonly initiativeAttributeName: string | null;
-  readonly customTemplates: readonly NamedTemplate[];
+  readonly customTemplates: readonly (NamedTemplate | CustomTemplate)[];
   readonly globalRollTemplates: readonly RollTemplate[];
   readonly loadedDiceRules: readonly LoadedDiceRule[];
   readonly mapIds: readonly string[];

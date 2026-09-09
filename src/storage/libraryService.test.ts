@@ -75,6 +75,7 @@ function createMockState(): DndMapperState {
     activeMapId: "map-1",
     sheets: { "sheet-1": sheet1 },
     customTemplates: {},
+    statusEffectTemplates: {},
     rollLog: [],
     globalRollTemplates: [],
     activeSchemaTemplateId: null,
@@ -165,7 +166,7 @@ describe("LibraryService and Sharded Persistence", () => {
       expect(onSavingChanged).toHaveBeenCalledWith(true);
 
       // Wait for debounce timer (30ms) to fire and flush to complete
-      await new Promise((resolve) => setTimeout(resolve, 80));
+      await new Promise((resolve) => setTimeout(resolve, 150));
 
       expect(service.isSaving).toBe(false);
       expect(onSavingChanged).toHaveBeenLastCalledWith(false);

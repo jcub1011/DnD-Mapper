@@ -10,18 +10,36 @@
  */
 
 import type {
+  AttributePreset,
+  AttributeRow,
+  AttributeSchema,
+  AttributeValue,
   CampaignHeader,
+  CharacterSheet,
+  CustomTemplate,
   DndMapperSettings,
   DndMapperState,
   FocusRect,
   GameMap,
   GridConfig,
   MapSummary,
+  NamedTemplate,
   NewMapImage,
   NewToken,
+  StatusEffect,
+  StatusEffectTemplate,
   Token,
 } from "./domain.js";
-import { createDefaultDndMapperState, isFullMap, toMapSummary } from "./domain.js";
+import {
+  clampHpToEffectiveMax,
+  createDefaultAttributeSchema,
+  createDefaultDndMapperState,
+  isCustomTemplate,
+  isFullMap,
+  reconcileSheetValues,
+  resolveEffectiveMaxHp,
+  toMapSummary,
+} from "./domain.js";
 import { clearFog, decodeFog, encodeFog, fillFog, setCellsFogged } from "./fog.js";
 import {
   addImageToMap,
@@ -35,6 +53,7 @@ import {
   reorderMaps,
   setMapImageHidden,
   setMapImageLocked,
+  timestampToIsoUtc,
   transformMapImage,
   updateMapGrid,
 } from "./maps.js";
@@ -53,6 +72,32 @@ import type { Patch, PlayerInfo } from "./types.js";
 /** The DM is the lobby owner (dmPlayerId in state). */
 export function isDm(state: DndMapperState, playerId: string): boolean {
   return state.dmPlayerId !== null && state.dmPlayerId === playerId;
+}
+
+/** Determines if a player may view a character sheet in the roster / UI. */
+export function mayViewSheet(state: DndMapperState, fromId: string, sheet: CharacterSheet): boolean {
+  if (isDm(state, fromId)) return true;
+  if (sheet.ownerUserId === null) return false;
+  if (sheet.ownerUserId === fromId) return true;
+  return state.settings.playersCanSeeOtherSheets;
+}
+
+/** Determines if a player may view private fields (notes and HP) of a sheet. */
+export function mayViewSheetNotesAndHp(state: DndMapperState, fromId: string, sheet: CharacterSheet): boolean {
+  return isDm(state, fromId) || sheet.ownerUserId === fromId;
+}
+
+/** Determines if a player may edit a character sheet. */
+export function mayEditSheet(state: DndMapperState, fromId: string, sheet: CharacterSheet): boolean {
+  if (isDm(state, fromId)) return true;
+  switch (state.settings.sheetEditByOthers) {
+    case "HostOnly":
+      return false;
+    case "Anyone":
+      return true;
+    case "OwnersAndHost":
+      return sheet.ownerUserId === fromId;
+  }
 }
 
 /** Determines if a player may move a specific token. */
@@ -829,6 +874,693 @@ export function applyIntent(
           phase: "Playing",
         },
       };
+    }
+
+    // ── Sheets ──────────────────────────────────────────────────────────────
+    case "createSheet": {
+      if (typeof intent.characterName !== "string") return null;
+      const name = intent.characterName.trim();
+      if (name.length === 0) return null;
+
+      const dm = isDm(state, fromId);
+      const ownerUserId = dm
+        ? typeof intent.ownerUserId === "string"
+          ? intent.ownerUserId
+          : null
+        : fromId;
+
+      if (!dm) {
+        const alreadyOwns = Object.values(state.sheets).some((s) => s.ownerUserId === fromId);
+        if (alreadyOwns) return null;
+      }
+
+      const newId = generateGuid();
+      const initialValues: Record<string, AttributeValue> = {};
+      for (const row of state.attributeSchema.rows) {
+        initialValues[row.name] = row.default;
+      }
+
+      const sheet: CharacterSheet = {
+        id: newId,
+        ownerUserId,
+        representsUserId: null,
+        characterName: name,
+        values: initialValues,
+        notes: "",
+        hp: null,
+        maxHp: null,
+        armorClass: null,
+        color: "#4a90e2",
+        scopedMapId: typeof intent.scopedMapId === "string" ? intent.scopedMapId : null,
+        statusEffects: [],
+        rollTemplates: [],
+      };
+
+      const nextSheets = { ...state.sheets, [newId]: sheet };
+      const nextState: DndMapperState = { ...state, sheets: nextSheets };
+      return {
+        state: nextState,
+        patch: { kind: "sheet", sheet },
+      };
+    }
+
+    case "updateSheet": {
+      if (typeof intent.sheetId !== "string" || !intent.patch || typeof intent.patch !== "object") {
+        return null;
+      }
+      const sheet = state.sheets[intent.sheetId];
+      if (!sheet) return null;
+      if (!mayEditSheet(state, fromId, sheet)) return null;
+
+      const patch = intent.patch as Partial<Pick<CharacterSheet, "characterName" | "color" | "scopedMapId" | "notes">>;
+      const nextName = typeof patch.characterName === "string" && patch.characterName.trim().length > 0
+        ? patch.characterName.trim()
+        : sheet.characterName;
+      const nextColor = typeof patch.color === "string" ? patch.color : sheet.color;
+      const nextNotes = typeof patch.notes === "string" ? patch.notes : sheet.notes;
+      const nextScope = patch.scopedMapId !== undefined
+        ? (typeof patch.scopedMapId === "string" ? patch.scopedMapId : null)
+        : sheet.scopedMapId;
+
+      const updatedSheet: CharacterSheet = {
+        ...sheet,
+        characterName: nextName,
+        color: nextColor,
+        notes: nextNotes,
+        scopedMapId: nextScope,
+      };
+
+      let nextMaps = state.maps;
+      if (nextName !== sheet.characterName) {
+        nextMaps = state.maps.map((m) => {
+          if (!isFullMap(m)) return m;
+          let changed = false;
+          const nextTokens = m.tokens.map((t) => {
+            if (t.sheetId === sheet.id && t.name !== nextName) {
+              changed = true;
+              return { ...t, name: nextName };
+            }
+            return t;
+          });
+          return changed ? { ...m, tokens: nextTokens } : m;
+        });
+      }
+
+      const nextSheets = { ...state.sheets, [sheet.id]: updatedSheet };
+      const nextState: DndMapperState = { ...state, sheets: nextSheets, maps: nextMaps };
+      return {
+        state: nextState,
+        patch: { kind: "sheet", sheet: updatedSheet },
+      };
+    }
+
+    case "deleteSheet": {
+      if (typeof intent.sheetId !== "string") return null;
+      if (!isDm(state, fromId)) return null;
+      const sheet = state.sheets[intent.sheetId];
+      if (!sheet) return null;
+
+      const nextMaps = state.maps.map((m) => {
+        if (!isFullMap(m)) return m;
+        let changed = false;
+        const nextTokens = m.tokens.map((t) => {
+          if (t.sheetId === intent.sheetId) {
+            changed = true;
+            return { ...t, sheetId: null };
+          }
+          return t;
+        });
+        return changed ? { ...m, tokens: nextTokens } : m;
+      });
+
+      const nextSheets = { ...state.sheets };
+      delete nextSheets[intent.sheetId];
+      const nextState: DndMapperState = { ...state, sheets: nextSheets, maps: nextMaps };
+      return {
+        state: nextState,
+        patch: { kind: "sheetRemoved", sheetId: intent.sheetId },
+      };
+    }
+
+    case "duplicateSheet": {
+      if (typeof intent.sheetId !== "string") return null;
+      if (!isDm(state, fromId)) return null;
+      const sheet = state.sheets[intent.sheetId];
+      if (!sheet) return null;
+
+      const newId = generateGuid();
+      const clone: CharacterSheet = {
+        ...sheet,
+        id: newId,
+        characterName: `${sheet.characterName} (copy)`,
+        ownerUserId: null,
+        representsUserId: null,
+        statusEffects: sheet.statusEffects.map((e) => ({ ...e })),
+        rollTemplates: sheet.rollTemplates.map((r) => ({ ...r })),
+      };
+
+      const nextSheets = { ...state.sheets, [newId]: clone };
+      const nextState: DndMapperState = { ...state, sheets: nextSheets };
+      return {
+        state: nextState,
+        patch: { kind: "sheet", sheet: clone },
+      };
+    }
+
+    case "assignSheetOwner": {
+      if (typeof intent.sheetId !== "string") return null;
+      if (!isDm(state, fromId)) return null;
+      const sheet = state.sheets[intent.sheetId];
+      if (!sheet) return null;
+
+      const nextOwner = typeof intent.ownerUserId === "string" ? intent.ownerUserId : null;
+      const updatedSheet: CharacterSheet = {
+        ...sheet,
+        ownerUserId: nextOwner,
+      };
+
+      const nextMaps = state.maps.map((m) => {
+        if (!isFullMap(m)) return m;
+        let changed = false;
+        const nextTokens = m.tokens.map((t) => {
+          if (t.sheetId === sheet.id) {
+            changed = true;
+            return {
+              ...t,
+              ownerUserId: nextOwner,
+              type: nextOwner ? ("PlayerToken" as const) : ("NPCToken" as const),
+            };
+          }
+          return t;
+        });
+        return changed ? { ...m, tokens: nextTokens } : m;
+      });
+
+      const nextSheets = { ...state.sheets, [sheet.id]: updatedSheet };
+      const nextState: DndMapperState = { ...state, sheets: nextSheets, maps: nextMaps };
+      return {
+        state: nextState,
+        patch: { kind: "sheet", sheet: updatedSheet },
+      };
+    }
+
+    case "setSheetHp": {
+      if (typeof intent.sheetId !== "string") return null;
+      const sheet = state.sheets[intent.sheetId];
+      if (!sheet) return null;
+      if (!mayEditSheet(state, fromId, sheet)) return null;
+
+      let nextHp = typeof intent.hp === "number" ? Math.max(0, intent.hp) : null;
+      if (nextHp !== null) {
+        const effMax = resolveEffectiveMaxHp(sheet);
+        if (effMax !== null && nextHp > effMax) {
+          nextHp = effMax;
+        }
+      }
+
+      const updatedSheet: CharacterSheet = { ...sheet, hp: nextHp };
+      const nextSheets = { ...state.sheets, [sheet.id]: updatedSheet };
+      const nextState: DndMapperState = { ...state, sheets: nextSheets };
+      return {
+        state: nextState,
+        patch: { kind: "sheet", sheet: updatedSheet },
+      };
+    }
+
+    case "setSheetMaxHp": {
+      if (typeof intent.sheetId !== "string") return null;
+      const sheet = state.sheets[intent.sheetId];
+      if (!sheet) return null;
+      if (!mayEditSheet(state, fromId, sheet)) return null;
+
+      const nextMaxHp = typeof intent.maxHp === "number" ? Math.max(0, intent.maxHp) : null;
+      let updatedSheet: CharacterSheet = { ...sheet, maxHp: nextMaxHp };
+      updatedSheet = clampHpToEffectiveMax(updatedSheet);
+
+      const nextSheets = { ...state.sheets, [sheet.id]: updatedSheet };
+      const nextState: DndMapperState = { ...state, sheets: nextSheets };
+      return {
+        state: nextState,
+        patch: { kind: "sheet", sheet: updatedSheet },
+      };
+    }
+
+    case "setSheetAc": {
+      if (typeof intent.sheetId !== "string") return null;
+      const sheet = state.sheets[intent.sheetId];
+      if (!sheet) return null;
+      if (!mayEditSheet(state, fromId, sheet)) return null;
+
+      const nextAc = typeof intent.ac === "number" ? Math.max(0, intent.ac) : null;
+      const updatedSheet: CharacterSheet = { ...sheet, armorClass: nextAc };
+      const nextSheets = { ...state.sheets, [sheet.id]: updatedSheet };
+      const nextState: DndMapperState = { ...state, sheets: nextSheets };
+      return {
+        state: nextState,
+        patch: { kind: "sheet", sheet: updatedSheet },
+      };
+    }
+
+    case "updateAttributeValues": {
+      if (typeof intent.sheetId !== "string" || !intent.values || typeof intent.values !== "object") {
+        return null;
+      }
+      const sheet = state.sheets[intent.sheetId];
+      if (!sheet) return null;
+      if (!mayEditSheet(state, fromId, sheet)) return null;
+
+      const validRows = new Map(state.attributeSchema.rows.map((r) => [r.name, r]));
+      const nextValues = { ...sheet.values };
+      for (const [k, v] of Object.entries(intent.values as Record<string, unknown>)) {
+        const row = validRows.get(k);
+        if (row && v && typeof v === "object" && "kind" in v && row.type === (v as AttributeValue).kind) {
+          nextValues[k] = v as AttributeValue;
+        }
+      }
+
+      const updatedSheet: CharacterSheet = { ...sheet, values: nextValues };
+      const nextSheets = { ...state.sheets, [sheet.id]: updatedSheet };
+      const nextState: DndMapperState = { ...state, sheets: nextSheets };
+      return {
+        state: nextState,
+        patch: { kind: "sheet", sheet: updatedSheet },
+      };
+    }
+
+    // ── Schemas ─────────────────────────────────────────────────────────────
+    case "setSchemaPreset": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.preset !== "string") return null;
+      const newSchema = createDefaultAttributeSchema(intent.preset as AttributePreset);
+
+      const nextSheets: Record<string, CharacterSheet> = {};
+      for (const [id, s] of Object.entries(state.sheets)) {
+        nextSheets[id] = reconcileSheetValues(s, newSchema);
+      }
+
+      const nextState: DndMapperState = {
+        ...state,
+        attributeSchema: newSchema,
+        sheets: nextSheets,
+      };
+      return {
+        state: nextState,
+        patch: {
+          kind: "schema",
+          schema: newSchema,
+          initiativeAttributeName: state.initiativeAttributeName,
+        },
+      };
+    }
+
+    case "updateSchemaRows": {
+      if (!isDm(state, fromId)) return null;
+      if (!Array.isArray(intent.rows) || intent.rows.length === 0) return null;
+
+      const seen = new Set<string>();
+      for (const row of intent.rows) {
+        if (!row || typeof row.name !== "string" || row.name.trim().length === 0) return null;
+        const lower = row.name.trim().toLowerCase();
+        if (seen.has(lower)) return null;
+        seen.add(lower);
+      }
+
+      const newSchema: AttributeSchema = {
+        preset: "Custom",
+        rows: intent.rows as readonly AttributeRow[],
+      };
+
+      const nextSheets: Record<string, CharacterSheet> = {};
+      for (const [id, s] of Object.entries(state.sheets)) {
+        nextSheets[id] = reconcileSheetValues(s, newSchema);
+      }
+
+      const initiativeAttr = intent.initiativeAttributeName !== undefined
+        ? (typeof intent.initiativeAttributeName === "string" ? intent.initiativeAttributeName : null)
+        : state.initiativeAttributeName;
+
+      const nextState: DndMapperState = {
+        ...state,
+        attributeSchema: newSchema,
+        initiativeAttributeName: initiativeAttr,
+        sheets: nextSheets,
+      };
+      return {
+        state: nextState,
+        patch: {
+          kind: "schema",
+          schema: newSchema,
+          initiativeAttributeName: initiativeAttr,
+        },
+      };
+    }
+
+    case "setInitiativeAttribute": {
+      if (!isDm(state, fromId)) return null;
+      const attrName = typeof intent.attributeName === "string" ? intent.attributeName : null;
+      const nextState: DndMapperState = {
+        ...state,
+        initiativeAttributeName: attrName,
+      };
+      return {
+        state: nextState,
+        patch: {
+          kind: "schema",
+          schema: state.attributeSchema,
+          initiativeAttributeName: attrName,
+        },
+      };
+    }
+
+    // ── Status Effects ──────────────────────────────────────────────────────
+    case "applyStatusEffect": {
+      if (typeof intent.sheetId !== "string" || !intent.effect || typeof intent.effect !== "object") {
+        return null;
+      }
+      const sheet = state.sheets[intent.sheetId];
+      if (!sheet) return null;
+      if (!mayEditSheet(state, fromId, sheet)) return null;
+
+      const rawEffect = intent.effect as Record<string, unknown>;
+      if (typeof rawEffect.name !== "string" || rawEffect.name.trim().length === 0) {
+        return null;
+      }
+
+      const newEffect: StatusEffect = {
+        id: generateGuid(),
+        name: rawEffect.name.trim(),
+        appliedUtc: timestampToIsoUtc(now),
+        attributeDeltas: Array.isArray(rawEffect.attributeDeltas) ? (rawEffect.attributeDeltas as StatusEffect["attributeDeltas"]) : [],
+        maxHpDelta: typeof rawEffect.maxHpDelta === "number" ? rawEffect.maxHpDelta : null,
+        onApplyHpDelta: typeof rawEffect.onApplyHpDelta === "number" ? rawEffect.onApplyHpDelta : null,
+        notes: typeof rawEffect.notes === "string" ? rawEffect.notes : "",
+      };
+
+      let updatedSheet: CharacterSheet = {
+        ...sheet,
+        statusEffects: [...sheet.statusEffects, newEffect],
+      };
+
+      if (newEffect.onApplyHpDelta !== null) {
+        const effMax = resolveEffectiveMaxHp(updatedSheet);
+        const baseHp = sheet.hp ?? effMax;
+        if (baseHp !== null) {
+          const targetHp = baseHp + newEffect.onApplyHpDelta;
+          updatedSheet = {
+            ...updatedSheet,
+            hp: effMax !== null ? Math.max(0, Math.min(targetHp, effMax)) : Math.max(0, targetHp),
+          };
+        }
+      }
+
+      updatedSheet = clampHpToEffectiveMax(updatedSheet);
+
+      const nextSheets = { ...state.sheets, [sheet.id]: updatedSheet };
+      const nextState: DndMapperState = { ...state, sheets: nextSheets };
+      return {
+        state: nextState,
+        patch: { kind: "sheet", sheet: updatedSheet },
+      };
+    }
+
+    case "updateStatusEffect": {
+      if (typeof intent.sheetId !== "string" || typeof intent.effectId !== "string" || !intent.patch) {
+        return null;
+      }
+      const sheet = state.sheets[intent.sheetId];
+      if (!sheet) return null;
+      if (!mayEditSheet(state, fromId, sheet)) return null;
+
+      const idx = sheet.statusEffects.findIndex((e) => e.id === intent.effectId);
+      if (idx === -1) return null;
+
+      const existing = sheet.statusEffects[idx];
+      const patch = intent.patch as Partial<Omit<StatusEffect, "id" | "appliedUtc">>;
+      const updatedEffect: StatusEffect = {
+        ...existing,
+        name: typeof patch.name === "string" && patch.name.trim().length > 0 ? patch.name.trim() : existing.name,
+        attributeDeltas: Array.isArray(patch.attributeDeltas) ? patch.attributeDeltas : existing.attributeDeltas,
+        maxHpDelta: patch.maxHpDelta !== undefined ? patch.maxHpDelta : existing.maxHpDelta,
+        onApplyHpDelta: patch.onApplyHpDelta !== undefined ? patch.onApplyHpDelta : existing.onApplyHpDelta,
+        notes: typeof patch.notes === "string" ? patch.notes : existing.notes,
+      };
+
+      const nextEffects = [...sheet.statusEffects];
+      nextEffects[idx] = updatedEffect;
+
+      let updatedSheet: CharacterSheet = {
+        ...sheet,
+        statusEffects: nextEffects,
+      };
+      updatedSheet = clampHpToEffectiveMax(updatedSheet);
+
+      const nextSheets = { ...state.sheets, [sheet.id]: updatedSheet };
+      const nextState: DndMapperState = { ...state, sheets: nextSheets };
+      return {
+        state: nextState,
+        patch: { kind: "sheet", sheet: updatedSheet },
+      };
+    }
+
+    case "removeStatusEffect": {
+      if (typeof intent.sheetId !== "string" || typeof intent.effectId !== "string") {
+        return null;
+      }
+      const sheet = state.sheets[intent.sheetId];
+      if (!sheet) return null;
+      if (!mayEditSheet(state, fromId, sheet)) return null;
+
+      const nextEffects = sheet.statusEffects.filter((e) => e.id !== intent.effectId);
+      if (nextEffects.length === sheet.statusEffects.length) return null;
+
+      let updatedSheet: CharacterSheet = {
+        ...sheet,
+        statusEffects: nextEffects,
+      };
+      updatedSheet = clampHpToEffectiveMax(updatedSheet);
+
+      const nextSheets = { ...state.sheets, [sheet.id]: updatedSheet };
+      const nextState: DndMapperState = { ...state, sheets: nextSheets };
+      return {
+        state: nextState,
+        patch: { kind: "sheet", sheet: updatedSheet },
+      };
+    }
+
+    case "createEffectTemplate": {
+      if (!isDm(state, fromId)) return null;
+      const t = intent.template as Omit<StatusEffectTemplate, "id"> | undefined;
+      if (!t || typeof t.name !== "string" || t.name.trim().length === 0) {
+        return null;
+      }
+      const id = generateGuid();
+      const template: StatusEffectTemplate = {
+        id,
+        name: t.name.trim(),
+        attributeDeltas: Array.isArray(t.attributeDeltas) ? t.attributeDeltas : [],
+        maxHpDelta: typeof t.maxHpDelta === "number" ? t.maxHpDelta : null,
+        onApplyHpDelta: typeof t.onApplyHpDelta === "number" ? t.onApplyHpDelta : null,
+        notes: typeof t.notes === "string" ? t.notes : "",
+      };
+
+      const nextTemplates = { ...state.statusEffectTemplates, [id]: template };
+      const nextState: DndMapperState = { ...state, statusEffectTemplates: nextTemplates };
+      return {
+        state: nextState,
+        patch: { kind: "effectTemplate", template },
+      };
+    }
+
+    case "updateEffectTemplate": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.templateId !== "string" || !intent.patch) return null;
+      const existing = state.statusEffectTemplates[intent.templateId];
+      if (!existing) return null;
+
+      const patch = intent.patch as Partial<Omit<StatusEffectTemplate, "id">>;
+      const updated: StatusEffectTemplate = {
+        ...existing,
+        name: typeof patch.name === "string" && patch.name.trim().length > 0 ? patch.name.trim() : existing.name,
+        attributeDeltas: Array.isArray(patch.attributeDeltas) ? patch.attributeDeltas : existing.attributeDeltas,
+        maxHpDelta: patch.maxHpDelta !== undefined ? patch.maxHpDelta : existing.maxHpDelta,
+        onApplyHpDelta: patch.onApplyHpDelta !== undefined ? patch.onApplyHpDelta : existing.onApplyHpDelta,
+        notes: typeof patch.notes === "string" ? patch.notes : existing.notes,
+      };
+
+      const nextTemplates = { ...state.statusEffectTemplates, [intent.templateId]: updated };
+      const nextState: DndMapperState = { ...state, statusEffectTemplates: nextTemplates };
+      return {
+        state: nextState,
+        patch: { kind: "effectTemplate", template: updated },
+      };
+    }
+
+    case "deleteEffectTemplate": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.templateId !== "string") return null;
+      if (!state.statusEffectTemplates[intent.templateId]) return null;
+
+      const nextTemplates = { ...state.statusEffectTemplates };
+      delete nextTemplates[intent.templateId];
+      const nextState: DndMapperState = { ...state, statusEffectTemplates: nextTemplates };
+      return {
+        state: nextState,
+        patch: { kind: "effectTemplateRemoved", templateId: intent.templateId },
+      };
+    }
+
+    // ── Custom Templates ────────────────────────────────────────────────────
+    case "createCustomTemplate": {
+      if (!isDm(state, fromId)) return null;
+      const t = intent.template as Omit<CustomTemplate, "id"> | undefined;
+      if (!t || typeof t.name !== "string" || t.name.trim().length === 0) {
+        return null;
+      }
+      const id = generateGuid();
+      const template: CustomTemplate = {
+        id,
+        name: t.name.trim(),
+        description: typeof t.description === "string" ? t.description : "",
+        values: t.values && typeof t.values === "object" ? t.values : {},
+        maxHp: typeof t.maxHp === "number" ? t.maxHp : null,
+        armorClass: typeof t.armorClass === "number" ? t.armorClass : null,
+        color: typeof t.color === "string" ? t.color : "#4a90e2",
+        notes: typeof t.notes === "string" ? t.notes : "",
+        statusEffectTemplates: Array.isArray(t.statusEffectTemplates) ? t.statusEffectTemplates : [],
+        rollTemplates: Array.isArray(t.rollTemplates) ? t.rollTemplates : [],
+      };
+
+      const nextCustom = { ...state.customTemplates, [id]: template };
+      const nextState: DndMapperState = { ...state, customTemplates: nextCustom };
+      return {
+        state: nextState,
+        patch: { kind: "customTemplate", template },
+      };
+    }
+
+    case "updateCustomTemplate": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.templateId !== "string" || !intent.patch) return null;
+      const existing = state.customTemplates[intent.templateId];
+      if (!existing || !isCustomTemplate(existing)) return null;
+
+      const patch = intent.patch as Partial<Omit<CustomTemplate, "id">>;
+      const updated: CustomTemplate = {
+        ...existing,
+        name: typeof patch.name === "string" && patch.name.trim().length > 0 ? patch.name.trim() : existing.name,
+        description: typeof patch.description === "string" ? patch.description : existing.description,
+        values: patch.values ? patch.values : existing.values,
+        maxHp: patch.maxHp !== undefined ? patch.maxHp : existing.maxHp,
+        armorClass: patch.armorClass !== undefined ? patch.armorClass : existing.armorClass,
+        color: typeof patch.color === "string" ? patch.color : existing.color,
+        notes: typeof patch.notes === "string" ? patch.notes : existing.notes,
+        statusEffectTemplates: Array.isArray(patch.statusEffectTemplates) ? patch.statusEffectTemplates : existing.statusEffectTemplates,
+        rollTemplates: Array.isArray(patch.rollTemplates) ? patch.rollTemplates : existing.rollTemplates,
+      };
+
+      const nextCustom = { ...state.customTemplates, [intent.templateId]: updated };
+      const nextState: DndMapperState = { ...state, customTemplates: nextCustom };
+      return {
+        state: nextState,
+        patch: { kind: "customTemplate", template: updated },
+      };
+    }
+
+    case "deleteCustomTemplate": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.templateId !== "string") return null;
+      if (!state.customTemplates[intent.templateId]) return null;
+
+      const nextCustom = { ...state.customTemplates };
+      delete nextCustom[intent.templateId];
+      const nextState: DndMapperState = { ...state, customTemplates: nextCustom };
+      return {
+        state: nextState,
+        patch: { kind: "customTemplateRemoved", templateId: intent.templateId },
+      };
+    }
+
+    case "applyCustomTemplate": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.templateId !== "string") return null;
+      const template = state.customTemplates[intent.templateId];
+      if (!template || !isCustomTemplate(template)) return null;
+
+      const newId = generateGuid();
+      const name = typeof intent.characterName === "string" && intent.characterName.trim().length > 0
+        ? intent.characterName.trim()
+        : template.name;
+
+      const sheetValues: Record<string, AttributeValue> = {};
+      for (const row of state.attributeSchema.rows) {
+        if (template.values[row.name] && template.values[row.name].kind === row.type) {
+          sheetValues[row.name] = template.values[row.name];
+        } else {
+          sheetValues[row.name] = row.default;
+        }
+      }
+
+      const newSheet: CharacterSheet = {
+        id: newId,
+        ownerUserId: null,
+        representsUserId: null,
+        characterName: name,
+        values: sheetValues,
+        notes: template.notes,
+        hp: template.maxHp,
+        maxHp: template.maxHp,
+        armorClass: template.armorClass,
+        color: template.color || "#4a90e2",
+        scopedMapId: typeof intent.scopedMapId === "string" ? intent.scopedMapId : null,
+        statusEffects: [],
+        rollTemplates: [...template.rollTemplates],
+      };
+
+      const nextSheets = { ...state.sheets, [newId]: newSheet };
+      const nextState: DndMapperState = { ...state, sheets: nextSheets };
+      return {
+        state: nextState,
+        patch: { kind: "sheet", sheet: newSheet },
+      };
+    }
+
+    case "duplicateCustomTemplate": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.templateId !== "string") return null;
+      const existing = state.customTemplates[intent.templateId];
+      if (!existing || !isCustomTemplate(existing)) return null;
+
+      const newId = generateGuid();
+      const clone: CustomTemplate = {
+        ...existing,
+        id: newId,
+        name: `${existing.name} (copy)`,
+      };
+
+      const nextCustom = { ...state.customTemplates, [newId]: clone };
+      const nextState: DndMapperState = { ...state, customTemplates: nextCustom };
+      return {
+        state: nextState,
+        patch: { kind: "customTemplate", template: clone },
+      };
+    }
+
+    case "reorderCustomTemplates": {
+      if (!isDm(state, fromId)) return null;
+      if (!Array.isArray(intent.templateIds)) return null;
+      const nextCustom: Record<string, CustomTemplate | NamedTemplate> = {};
+      for (const id of intent.templateIds) {
+        if (typeof id === "string" && state.customTemplates[id]) {
+          nextCustom[id] = state.customTemplates[id];
+        }
+      }
+      for (const [id, t] of Object.entries(state.customTemplates)) {
+        if (!nextCustom[id]) {
+          nextCustom[id] = t;
+        }
+      }
+      const nextState: DndMapperState = { ...state, customTemplates: nextCustom };
+      return { state: nextState, patch: null };
     }
 
     default:

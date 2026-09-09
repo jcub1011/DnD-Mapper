@@ -252,6 +252,134 @@ export interface NamedTemplate {
   readonly initiativeAttributeName: string | null;
 }
 
+export interface CustomTemplate {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly values: Readonly<Record<string, AttributeValue>>;
+  readonly maxHp: number | null;
+  readonly armorClass: number | null;
+  readonly color: string;
+  readonly notes: string;
+  readonly statusEffectTemplates: readonly StatusEffectTemplate[];
+  readonly rollTemplates: readonly RollTemplate[];
+}
+
+export function isCustomTemplate(template: NamedTemplate | CustomTemplate): template is CustomTemplate {
+  return "values" in template;
+}
+
+export const STANDARD_STATUS_EFFECT_TEMPLATES: readonly StatusEffectTemplate[] = [
+  { id: "cond-blinded", name: "Blinded", attributeDeltas: [], maxHpDelta: null, onApplyHpDelta: null, notes: "Can't see. Attack rolls against have advantage; attacks have disadvantage. Automatically fails ability checks requiring sight." },
+  { id: "cond-charmed", name: "Charmed", attributeDeltas: [], maxHpDelta: null, onApplyHpDelta: null, notes: "Can't attack charmer. Charmer has advantage on social ability checks against creature." },
+  { id: "cond-deafened", name: "Deafened", attributeDeltas: [], maxHpDelta: null, onApplyHpDelta: null, notes: "Can't hear. Automatically fails ability checks requiring hearing." },
+  { id: "cond-frightened", name: "Frightened", attributeDeltas: [], maxHpDelta: null, onApplyHpDelta: null, notes: "Disadvantage on ability checks and attack rolls while source of fear is in line of sight. Can't willingly move closer." },
+  { id: "cond-grappled", name: "Grappled", attributeDeltas: [], maxHpDelta: null, onApplyHpDelta: null, notes: "Speed becomes 0. Ends if grappler is incapacitated or moved away." },
+  { id: "cond-incapacitated", name: "Incapacitated", attributeDeltas: [], maxHpDelta: null, onApplyHpDelta: null, notes: "Can't take actions or reactions." },
+  { id: "cond-invisible", name: "Invisible", attributeDeltas: [], maxHpDelta: null, onApplyHpDelta: null, notes: "Impossible to see without special senses. Attack rolls against have disadvantage; attacks have advantage." },
+  { id: "cond-paralyzed", name: "Paralyzed", attributeDeltas: [], maxHpDelta: null, onApplyHpDelta: null, notes: "Incapacitated and can't move or speak. Automatically fails STR and DEX saves. Attacks against have advantage; melee within 5 ft is critical hit." },
+  { id: "cond-petrified", name: "Petrified", attributeDeltas: [], maxHpDelta: null, onApplyHpDelta: null, notes: "Transformed into solid inanimate substance. Incapacitated, resistance to all damage, immune to poison/disease." },
+  { id: "cond-poisoned", name: "Poisoned", attributeDeltas: [], maxHpDelta: null, onApplyHpDelta: null, notes: "Disadvantage on attack rolls and ability checks." },
+  { id: "cond-prone", name: "Prone", attributeDeltas: [], maxHpDelta: null, onApplyHpDelta: null, notes: "Can only crawl. Disadvantage on attack rolls. Attacks against within 5 ft have advantage, otherwise disadvantage." },
+  { id: "cond-restrained", name: "Restrained", attributeDeltas: [], maxHpDelta: null, onApplyHpDelta: null, notes: "Speed 0. Attack rolls against have advantage; attacks have disadvantage. Disadvantage on DEX saves." },
+  { id: "cond-stunned", name: "Stunned", attributeDeltas: [], maxHpDelta: null, onApplyHpDelta: null, notes: "Incapacitated, can't move, speak falteringly. Automatically fails STR and DEX saves. Attacks against have advantage." },
+  { id: "cond-unconscious", name: "Unconscious", attributeDeltas: [], maxHpDelta: null, onApplyHpDelta: null, notes: "Incapacitated, can't move or speak, unaware of surroundings. Drops held items, falls prone. Attacks against have advantage; within 5 ft critical." },
+  { id: "cond-exhaustion", name: "Exhaustion", attributeDeltas: [], maxHpDelta: null, onApplyHpDelta: null, notes: "Disadvantage on ability checks; speed halved (Lv 2); disadvantage on attacks/saves (Lv 3); max HP halved (Lv 4); speed 0 (Lv 5); death (Lv 6)." },
+  { id: "cond-concentrating", name: "Concentrating", attributeDeltas: [], maxHpDelta: null, onApplyHpDelta: null, notes: "Concentrating on a spell or magical effect. Taking damage requires a CON save (DC 10 or half damage)." },
+];
+
+export function resolveEffectiveMaxHp(sheet: CharacterSheet): number | null {
+  if (sheet.maxHp === null) return null;
+  let delta = 0;
+  for (const effect of sheet.statusEffects) {
+    delta += effect.maxHpDelta ?? 0;
+  }
+  return sheet.maxHp + delta;
+}
+
+export interface ContributionEntry {
+  readonly source: string;
+  readonly delta: number;
+}
+
+export interface AttributeContribution {
+  readonly effectiveValue: AttributeValue;
+  readonly effectiveModifier: number;
+  readonly valueBreakdown: readonly ContributionEntry[];
+}
+
+export function resolveAttributeContribution(
+  sheet: CharacterSheet,
+  attributeName: string,
+  baseValue: AttributeValue,
+): AttributeContribution {
+  const entries: ContributionEntry[] = [
+    { source: attributeName, delta: baseValue.kind !== "Text" ? baseValue.value : 0 },
+  ];
+  let deltaSum = 0;
+  for (const effect of sheet.statusEffects) {
+    for (const d of effect.attributeDeltas) {
+      if (d.attributeName === attributeName) {
+        entries.push({ source: effect.name, delta: d.delta });
+        deltaSum += d.delta;
+      }
+    }
+  }
+
+  let effectiveValue: AttributeValue = baseValue;
+  if (baseValue.kind === "Score") {
+    effectiveValue = { kind: "Score", value: baseValue.value + deltaSum };
+  } else if (baseValue.kind === "Modifier") {
+    effectiveValue = { kind: "Modifier", value: baseValue.value + deltaSum };
+  }
+
+  return {
+    effectiveValue,
+    effectiveModifier: getModifier(effectiveValue),
+    valueBreakdown: entries,
+  };
+}
+
+export function resolveAttributeValue(
+  sheet: CharacterSheet,
+  attributeName: string,
+): AttributeValue {
+  const baseValue = sheet.values[attributeName] ?? { kind: "Score", value: 10 };
+  return resolveAttributeContribution(sheet, attributeName, baseValue).effectiveValue;
+}
+
+export function clampHpToEffectiveMax(sheet: CharacterSheet): CharacterSheet {
+  const effectiveMax = resolveEffectiveMaxHp(sheet);
+  if (effectiveMax !== null && sheet.hp !== null && sheet.hp > effectiveMax) {
+    return { ...sheet, hp: effectiveMax };
+  }
+  return sheet;
+}
+
+export function reconcileSheetValues(
+  sheet: CharacterSheet,
+  schema: AttributeSchema,
+): CharacterSheet {
+  const allowed = new Map<string, AttributeRow>();
+  for (const row of schema.rows) {
+    allowed.set(row.name, row);
+  }
+
+  const nextValues: Record<string, AttributeValue> = {};
+  for (const [name, val] of Object.entries(sheet.values)) {
+    const row = allowed.get(name);
+    if (row && row.type === val.kind) {
+      nextValues[name] = val;
+    }
+  }
+  for (const row of schema.rows) {
+    if (!(row.name in nextValues)) {
+      nextValues[row.name] = row.default;
+    }
+  }
+  return { ...sheet, values: nextValues };
+}
+
 export interface DiceTerm {
   readonly count: number;
   readonly sides: number;
@@ -407,7 +535,8 @@ export interface CampaignHeader {
   readonly attributeSchema?: AttributeSchema;
   readonly activeMapId?: string | null;
   readonly sheets?: Readonly<Record<string, CharacterSheet>>;
-  readonly customTemplates?: Readonly<Record<string, NamedTemplate>>;
+  readonly customTemplates?: Readonly<Record<string, CustomTemplate | NamedTemplate>>;
+  readonly statusEffectTemplates?: Readonly<Record<string, StatusEffectTemplate>>;
   readonly globalRollTemplates?: readonly RollTemplate[];
   readonly activeSchemaTemplateId?: string | null;
   readonly initiativeAttributeName?: string | null;
@@ -424,7 +553,8 @@ export interface DndMapperState {
   readonly maps: readonly (GameMap | MapSummary)[];
   readonly activeMapId: string | null;
   readonly sheets: Readonly<Record<string, CharacterSheet>>;
-  readonly customTemplates: Readonly<Record<string, NamedTemplate>>;
+  readonly customTemplates: Readonly<Record<string, CustomTemplate | NamedTemplate>>;
+  readonly statusEffectTemplates: Readonly<Record<string, StatusEffectTemplate>>;
   readonly rollLog: readonly RollResult[];
   readonly globalRollTemplates: readonly RollTemplate[];
   readonly activeSchemaTemplateId: string | null;
@@ -446,6 +576,9 @@ export function createDefaultDndMapperState(dmPlayerId: string | null = null): D
     activeMapId: null,
     sheets: {},
     customTemplates: {},
+    statusEffectTemplates: Object.fromEntries(
+      STANDARD_STATUS_EFFECT_TEMPLATES.map((t) => [t.id, t]),
+    ),
     rollLog: [],
     globalRollTemplates: [],
     activeSchemaTemplateId: null,

@@ -19,6 +19,7 @@ import type {
   GridConfig,
   MapImage,
   NamedTemplate,
+  CustomTemplate,
   Token,
   TokenIconKind,
   TokenType,
@@ -510,7 +511,7 @@ export async function importVtf(blob: Blob): Promise<UnpackResult> {
   const sheetsRecord: Record<string, CharacterSheet> = {};
   for (const s of sheets) sheetsRecord[s.id] = s;
 
-  const templatesRecord: Record<string, NamedTemplate> = {};
+  const templatesRecord: Record<string, NamedTemplate | CustomTemplate> = {};
   for (const t of core.customTemplates) templatesRecord[t.id] = t;
 
   const state: DndMapperState = {
@@ -521,6 +522,7 @@ export async function importVtf(blob: Blob): Promise<UnpackResult> {
     activeMapId: maps.length > 0 ? maps[0].id : null,
     sheets: sheetsRecord,
     customTemplates: templatesRecord,
+    statusEffectTemplates: {},
     rollLog: [],
     globalRollTemplates: core.globalRollTemplates,
     activeSchemaTemplateId: core.activeSchemaTemplateId,

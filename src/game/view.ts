@@ -8,8 +8,8 @@
  * Merges narrowed absolute patches by kind instead of replacing wholesale.
  */
 
-import type { DndMapperState, GameMap, MapSummary, Token } from "./domain.js";
-import { createDefaultDndMapperState, isFullMap } from "./domain.js";
+import type { CharacterSheet, DndMapperState, GameMap, MapSummary, Token } from "./domain.js";
+import { createDefaultDndMapperState, isFullMap, reconcileSheetValues } from "./domain.js";
 import type { Patch } from "./types.js";
 
 export class MatchView {
@@ -212,6 +212,65 @@ export class MatchView {
 
       case "phase": {
         this._state = { ...this._state, phase: patch.phase };
+        break;
+      }
+
+      case "sheet": {
+        const nextSheets = { ...this._state.sheets, [patch.sheet.id]: patch.sheet };
+        this._state = { ...this._state, sheets: nextSheets };
+        break;
+      }
+
+      case "sheetRemoved": {
+        const nextSheets = { ...this._state.sheets };
+        delete nextSheets[patch.sheetId];
+        this._state = { ...this._state, sheets: nextSheets };
+        break;
+      }
+
+      case "schema": {
+        const nextSheets: Record<string, CharacterSheet> = {};
+        for (const [id, s] of Object.entries(this._state.sheets)) {
+          nextSheets[id] = reconcileSheetValues(s, patch.schema);
+        }
+        this._state = {
+          ...this._state,
+          attributeSchema: patch.schema,
+          initiativeAttributeName: patch.initiativeAttributeName,
+          sheets: nextSheets,
+        };
+        break;
+      }
+
+      case "effectTemplate": {
+        const nextTemplates = {
+          ...this._state.statusEffectTemplates,
+          [patch.template.id]: patch.template,
+        };
+        this._state = { ...this._state, statusEffectTemplates: nextTemplates };
+        break;
+      }
+
+      case "effectTemplateRemoved": {
+        const nextTemplates = { ...this._state.statusEffectTemplates };
+        delete nextTemplates[patch.templateId];
+        this._state = { ...this._state, statusEffectTemplates: nextTemplates };
+        break;
+      }
+
+      case "customTemplate": {
+        const nextTemplates = {
+          ...this._state.customTemplates,
+          [patch.template.id]: patch.template,
+        };
+        this._state = { ...this._state, customTemplates: nextTemplates };
+        break;
+      }
+
+      case "customTemplateRemoved": {
+        const nextTemplates = { ...this._state.customTemplates };
+        delete nextTemplates[patch.templateId];
+        this._state = { ...this._state, customTemplates: nextTemplates };
         break;
       }
     }

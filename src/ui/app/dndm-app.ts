@@ -15,10 +15,13 @@ import type { DndmImageUpload } from "../upload/dndm-image-upload";
 import {
   createDefaultDndMapperState,
   isFullMap,
+  type AttributePreset,
+  type AttributeValue,
   type GameMap,
   type GridConfig,
   type MapImage,
   type NewMapImage,
+  type StatusEffect,
   type Token,
 } from "../../game/domain";
 import type { Intent, MatchState } from "../../game/types";
@@ -37,6 +40,8 @@ import "../canvas/dndm-image-inspector";
 import "../canvas/dndm-toolbar";
 import "../lobby/dndm-lobby";
 import "../modals/dndm-permissions";
+import "../panels/dndm-character-sheet";
+import type { SheetPatch } from "../panels/dndm-character-sheet";
 import "../panels/dndm-layer-panel";
 import "../panels/dndm-map-list";
 import "../panels/dndm-my-token";
@@ -107,6 +112,7 @@ export class DndmApp extends GameElement {
   @state() private fogBrushMode: "paint" | "erase" = "paint";
   @state() private fogBrushRadius = 1;
   @state() private selectedImageId: string | null = null;
+  @state() private selectedSheetId: string | null = null;
   @state() private currentZoom = 1.0;
   @state() private settingsModalOpen = false;
 
@@ -117,15 +123,26 @@ export class DndmApp extends GameElement {
   private resizeCurrentPx = 0;
   private resizeMoved = false;
 
+  private onOpenSheet = (e: Event): void => {
+    const customEvent = e as CustomEvent<{ sheetId: string }>;
+    if (customEvent.detail?.sheetId) {
+      this.selectedSheetId = customEvent.detail.sheetId;
+      this.rightCollapsed = false;
+      this.updateRailCssVars();
+    }
+  };
+
   override connectedCallback(): void {
     super.connectedCallback();
     document.addEventListener("click", this.onGlobalPanelCollapseClick);
+    window.addEventListener("dndm-open-sheet", this.onOpenSheet);
     void this.libraryService.attach();
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     document.removeEventListener("click", this.onGlobalPanelCollapseClick);
+    window.removeEventListener("dndm-open-sheet", this.onOpenSheet);
     cancelAnimationFrame(this.rafId);
     this.controller?.destroy();
     void this.libraryService.detach();
@@ -381,6 +398,7 @@ export class DndmApp extends GameElement {
     const activeMap = this.activeMap;
     if (activeMap) {
       map.setMap(activeMap, this.isDm, this.assetSource);
+      map.updateSheets(this.match.sheets);
     }
 
     if (this.match.focusRect) {
@@ -408,10 +426,12 @@ export class DndmApp extends GameElement {
       if (activeMap) {
         if (prevMapId !== activeMap.id) {
           map.setMap(activeMap, this.isDm, this.assetSource);
+          map.updateSheets(state.sheets);
         } else {
           map.updateGrid(activeMap.grid);
           map.updateTokens(activeMap.tokens);
           map.updateImages(activeMap.images);
+          map.updateSheets(state.sheets);
           if (activeMap.fogMask) {
             map.updateFog(activeMap.fogMask);
           }
@@ -786,6 +806,46 @@ export class DndmApp extends GameElement {
                   ></dndm-my-token>
                 `
               : nothing}
+            <dndm-character-sheet
+              .sheets=${this.match.sheets}
+              .selectedSheetId=${this.selectedSheetId}
+              .activeMapId=${this.match.activeMapId}
+              .attributeSchema=${this.match.attributeSchema}
+              .statusEffectTemplates=${this.match.statusEffectTemplates}
+              .customTemplates=${this.match.customTemplates}
+              .settings=${this.match.settings}
+              .isDm=${this.isDm}
+              .currentUserId=${this.controller?.playerId ?? null}
+              .roster=${this.roster}
+              .maps=${this.match.maps}
+              .onSelectSheet=${(id: string | null) => {
+                this.selectedSheetId = id;
+              }}
+              .onCreateSheet=${(characterName?: string, scopedMapId?: string | null) =>
+                this.send({ kind: "createSheet", characterName: characterName || "New Character", scopedMapId })}
+              .onUpdateSheet=${(sheetId: string, patch: SheetPatch) =>
+                this.send({ kind: "updateSheet", sheetId, patch })}
+              .onAssignSheetOwner=${(sheetId: string, ownerUserId: string | null) =>
+                this.send({ kind: "assignSheetOwner", sheetId, ownerUserId })}
+              .onSetSheetHp=${(sheetId: string, hp: number | null) =>
+                this.send({ kind: "setSheetHp", sheetId, hp })}
+              .onSetSheetMaxHp=${(sheetId: string, maxHp: number | null) =>
+                this.send({ kind: "setSheetMaxHp", sheetId, maxHp })}
+              .onSetSheetAc=${(sheetId: string, ac: number | null) =>
+                this.send({ kind: "setSheetAc", sheetId, ac })}
+              .onDeleteSheet=${(sheetId: string) =>
+                this.send({ kind: "deleteSheet", sheetId })}
+              .onDuplicateSheet=${(sheetId: string) =>
+                this.send({ kind: "duplicateSheet", sheetId })}
+              .onUpdateAttributeValues=${(sheetId: string, values: Readonly<Record<string, AttributeValue>>) =>
+                this.send({ kind: "updateAttributeValues", sheetId, values })}
+              .onApplyStatusEffect=${(sheetId: string, effect: Omit<StatusEffect, "id" | "appliedUtc">) =>
+                this.send({ kind: "applyStatusEffect", sheetId, effect })}
+              .onRemoveStatusEffect=${(sheetId: string, effectId: string) =>
+                this.send({ kind: "removeStatusEffect", sheetId, effectId })}
+              .onSetSchemaPreset=${(preset: AttributePreset) =>
+                this.send({ kind: "setSchemaPreset", preset })}
+            ></dndm-character-sheet>
           </div>
         </aside>
 

@@ -4,12 +4,16 @@ import {
   clearPendingImports,
   createState,
   isDm,
+  mayEditSheet,
   mayMoveToken,
   maySpawnToken,
+  mayViewSheet,
+  mayViewSheetNotesAndHp,
   projectSnapshot,
 } from "./rules";
 import type {
   CampaignHeader,
+  CharacterSheet,
   DndMapperState,
   GameMap,
   NewMapImage,
@@ -455,3 +459,94 @@ describe("projectSnapshot", () => {
     expect("widthCells" in inactiveInSnapshot).toBe(true);
   });
 });
+
+describe("Character Sheet Permissions (Phase 6)", () => {
+  const mockSheet = (ownerUserId: string | null): CharacterSheet => ({
+    id: "sheet-1",
+    ownerUserId,
+    representsUserId: null,
+    characterName: "Test Character",
+    values: {},
+    notes: "Secret backstory",
+    hp: 20,
+    maxHp: 20,
+    armorClass: 14,
+    color: "#4a90e2",
+    scopedMapId: null,
+    statusEffects: [],
+    rollTemplates: [],
+  });
+
+  describe("mayEditSheet", () => {
+    it("DM can edit any sheet regardless of settings", () => {
+      const state = setupMatch();
+      const sheet = mockSheet("player-1");
+      expect(mayEditSheet(state, "dm-1", sheet)).toBe(true);
+    });
+
+    it("evaluates HostOnly: non-DM players cannot edit sheets", () => {
+      let state = setupMatch();
+      state = { ...state, settings: { ...state.settings, sheetEditByOthers: "HostOnly" } };
+      const sheet = mockSheet("player-1");
+      expect(mayEditSheet(state, "player-1", sheet)).toBe(false);
+      expect(mayEditSheet(state, "player-2", sheet)).toBe(false);
+    });
+
+    it("evaluates OwnersAndHost: owner can edit, others cannot", () => {
+      let state = setupMatch();
+      state = { ...state, settings: { ...state.settings, sheetEditByOthers: "OwnersAndHost" } };
+      const sheet = mockSheet("player-1");
+      expect(mayEditSheet(state, "player-1", sheet)).toBe(true);
+      expect(mayEditSheet(state, "player-2", sheet)).toBe(false);
+    });
+
+    it("evaluates Anyone: all players can edit any sheet", () => {
+      let state = setupMatch();
+      state = { ...state, settings: { ...state.settings, sheetEditByOthers: "Anyone" } };
+      const sheet = mockSheet("player-1");
+      expect(mayEditSheet(state, "player-1", sheet)).toBe(true);
+      expect(mayEditSheet(state, "player-2", sheet)).toBe(true);
+    });
+  });
+
+  describe("mayViewSheet", () => {
+    it("DM can view any sheet", () => {
+      const state = setupMatch();
+      expect(mayViewSheet(state, "dm-1", mockSheet("player-1"))).toBe(true);
+      expect(mayViewSheet(state, "dm-1", mockSheet(null))).toBe(true);
+    });
+
+    it("hides unowned (NPC) sheets from non-DM players", () => {
+      const state = setupMatch();
+      expect(mayViewSheet(state, "player-1", mockSheet(null))).toBe(false);
+    });
+
+    it("hides sheets owned by others when playersCanSeeOtherSheets is false", () => {
+      let state = setupMatch();
+      state = { ...state, settings: { ...state.settings, playersCanSeeOtherSheets: false } };
+      const sheet1 = mockSheet("player-1");
+      // Player 1 can see their own sheet
+      expect(mayViewSheet(state, "player-1", sheet1)).toBe(true);
+      // Player 2 cannot see Player 1's sheet
+      expect(mayViewSheet(state, "player-2", sheet1)).toBe(false);
+    });
+
+    it("shows sheets owned by others when playersCanSeeOtherSheets is true", () => {
+      let state = setupMatch();
+      state = { ...state, settings: { ...state.settings, playersCanSeeOtherSheets: true } };
+      const sheet1 = mockSheet("player-1");
+      expect(mayViewSheet(state, "player-2", sheet1)).toBe(true);
+    });
+  });
+
+  describe("mayViewSheetNotesAndHp", () => {
+    it("allows DM and owner to view notes and HP, but hides from others", () => {
+      const state = setupMatch();
+      const sheet = mockSheet("player-1");
+      expect(mayViewSheetNotesAndHp(state, "dm-1", sheet)).toBe(true);
+      expect(mayViewSheetNotesAndHp(state, "player-1", sheet)).toBe(true);
+      expect(mayViewSheetNotesAndHp(state, "player-2", sheet)).toBe(false);
+    });
+  });
+});
+
