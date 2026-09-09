@@ -99,8 +99,9 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
   - `SimpleD20`: Single `Modifier` row.
   - `Custom`: Fully user-defined rows.
 - **HP & Combat Calculations**:
-  - `EffectiveMaxHpResolver`: Calculates effective maximum HP taking into account status effects and temporary HP adjustments.
-  - HP Bar rendering with current HP, max HP, temporary HP, and unconscious / dead indicator when HP ≤ 0.
+  - `EffectiveMaxHpResolver`: Calculates effective maximum HP by summing base `maxHp` with all active `StatusEffect.maxHpDelta` values. Returns `null` when `sheet.maxHp` is `null`. Clamping to effective max occurs when HP updates, not inside the resolver itself; the resolver does not clamp to 1 and does not adjust for temporary HP (which is not in the domain model).
+  - `StatusEffect.onApplyHpDelta`: One-time, non-reversing adjustment applied to current HP when the effect is added (inside the same engine transaction), clamped to effective max HP. It is not reversed on effect removal.
+  - HP Bar rendering with current HP, max HP, and unconscious / dead indicator when HP ≤ 0.
 - **Notes & Markdown**:
   - Embedded Markdown notes editor with rendered preview. Replace legacy Markdig with a client-side parser (e.g. `snarkdown` or lightweight zero-dependency parser).
 - **Token Linkage**:
@@ -119,9 +120,17 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
 - `updateAttributeValues(sheetId, values)`
 - `setSchemaPreset(preset)`
 - `updateSchemaRows(rows, initiativeAttributeName)`
+- `saveCustomTemplate(name)`
+- `createCustomTemplate(template)`
+- `deleteCustomTemplate(templateId)`
+- `updateCustomTemplate(templateId, patch)`
+- `renameCustomTemplate(templateId, name)`
+- `applyCustomTemplate(templateId)`
 - `applyStatusEffect(sheetId, effect)`
+- `updateStatusEffect(sheetId, effectId, patch)`
 - `removeStatusEffect(sheetId, effectId)`
 - `createStatusEffectTemplate(template)`
+- `updateStatusEffectTemplate(templateId, patch)`
 - `deleteStatusEffectTemplate(templateId)`
 
 #### 4. UI Components (Lit)
@@ -152,10 +161,10 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
   - Copy the **38 `.webp` textures** (`astral`, `bronze01..04`, `dragon`, `fire`, `ice`, `marble`, `metal`, `stone`, `tiger`, `wood`, etc.) to `public/assets/dice/textures/`.
   - Copy the **75 `.mp3` sound files** (`sounds/dicehit/` 45 + `sounds/surfaces/` 30) to `public/assets/dice/sounds/`.
   - Vendor `dice-box-threejs` (Three.js + Cannon-es physics) into `src/lib/dice-box/` or as an external script bundle.
-- **Overlay Canvas & Prewarming**:
+- **Overlay Canvas & WebGL Context Safety**:
   - Component `<dndm-dice-canvas>`: Transparent overlay positioned over the viewport.
-  - Multi-instance management: Separate `DiceBox` instances keyed by `"user:{id}"` or `"token:{id}"` so simultaneous NPC rolls and player rolls don't clobber each other.
-  - Prewarm NPC dice boxes upon entering combat to avoid Three.js initialization lag during mass rolls.
+  - **Single WebGL Context**: Rather than allocating separate `DiceBox` instances per user/token (which exhausts the browser's 8–16 WebGL context ceiling and terminates Phaser's battlemap renderer), manage all active tumbling dice inside a **single shared transparent Three.js overlay canvas** with die pooling.
+  - **Sound Configuration**: Audio defaults to disabled (`sounds: false`), matching legacy `dndMapperDiceBox.js:89` to prevent Web Audio buffer saturation during multi-die bursts and respect browser autoplay policies. Provide an optional UI audio toggle in settings.
 - **Animation Gating (`DiceAnimationTracker`)**:
   - When a roll intent commits, the `RollResult` is broadcast to clients, but `<dndm-roll-log>` and display views **hide the result** until the local 3D dice finish tumbling (tracked by `rollId`).
   - Interrupt handling: If a new roll arrives for the same key while one is animating, instantly settle the previous roll so results are never permanently hidden.
@@ -171,14 +180,15 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
   - Built-in templates: d4, d6, d8, d10, d12, d20, d100, 2d6, 4d6 (deterministic GUIDs `d0000000-...-0000000101..109`).
   - Global templates authored by the DM (e.g. standard attacks, spell saves).
   - Sheet-scoped templates (character-specific weapons, spells, skill checks with linked attribute modifiers like `DEX`).
+  - Scope property: Each template carries `scope: RollTemplateScope` ("BuiltIn" | "Global" | "Sheet").
   - Modal `<dndm-roll-template-library>`: Author, edit, delete templates.
 
 #### 4. Roll Log & History
 - **Replicated Roll Log**:
   - Replicated in match state with a **cap of 50 rolls** (`RollLogCap = 50`).
-  - Each `RollResult` stores: roller ID, timestamp, formula string, modifier breakdown, individual die results, total, mode (Normal/Advantage/Disadvantage), natural 20 / natural 1 flags, applied loaded-dice rules, and linked token ID.
+  - Each `RollResult` stores: roller ID, forcedBy ID, timestamp, formula string, modifier breakdown, individual die results (`DieRoll` with `sides`, `value`, `discarded: boolean`), total, mode, flat modifier, attribute modifier, natural 20 / natural 1 flags, applied loaded-dice rules (`LoadedDiceRuleStamp[]`), original dice terms (`DiceTerm[]`), original attribute reference (`AttributeRef | null`), and linked token ID.
 - **Visibility Filtering**:
-  - `rollsVisibleToPlayers` session setting: when false, players only see their own rolls.
+  - `rollsVisibleToPlayers` session setting: Under KnockBox broadcast mode, delta patches are broadcast identically to all peers; when this setting is false, `MatchView` and the UI filter non-DM views so players only see their own rolls client-side (matching Part 1 Decision `D2`).
   - DM can toggle secret rolls.
 - **Modal `<dndm-roll-history>`**: Searchable, filterable modal viewing all rolls from the session.
 
@@ -201,9 +211,9 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
 - **Conditions**:
   - `currentMap`: Matches active map ID.
   - `diceTypeRolled`: Sides match (e.g. 20).
-  - `rollerIs`: Specific player ID or DM.
+  - `rollerIs`: Matches character sheet ID (`rollerSheetId`), or `GmTarget` (`00000000-0000-0000-0000-000000000000`) for unattributed GM rolls.
   - `rollModeIs`: Normal, Advantage, Disadvantage.
-  - `combatActive`: Active combat in progress.
+  - `combatActive`: Parameterless flag condition (matches when active combat is in progress).
   - `rollLabelContains`: Substring match on roll label/name.
   - `hostKeyHeld`: DM holds a specific key on their keyboard (e.g. Space, 1, H) when the roll occurs.
   - Compound conditions: `allOf`, `anyOf`, `not`.
@@ -211,16 +221,17 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
   - `setResult`: Force die face to value (clamped to `[1, sides]`).
   - `clampMax`: Cap maximum face.
   - `clampMin`: Floor minimum face.
-  - `biasLower`: Roll twice, take lower (or subtract bias).
-  - `biasHigher`: Roll twice, take higher (or add bias).
-  - `rerollOn`: Reroll if face equals target.
+  - `biasLower`: Roll extra dice (`rerollCount`), keep minimum (or subtract bias).
+  - `biasHigher`: Roll extra dice (`rerollCount`), keep maximum (or add bias).
+  - `rerollOn`: Reroll once if face is in `values`.
 - **Auditing & Stamping**:
-  - Matched rule IDs and names are stamped on `RollResult.appliedRules`.
-  - `LoadedDiceRuleVisibility`: `Hidden` (players never see stamps), `VisibleToHostOnly`, or `VisibleToAll`.
+  - Matched rule IDs and names are stamped on `RollResult.appliedRules` as `LoadedDiceRuleStamp` objects.
+  - `LoadedDiceRuleVisibility`: Under broadcast mode, rule stamps are filtered client-side in player roll log views according to setting (`Hidden` = never shown to players, `VisibleToHostOnly` = rendered only in DM client, `VisibleToAll` = rendered for all players).
   - `LoadedDicePlayerIndicator`: Visual cue on player screen (`None`, `Subtle`, `Obvious`).
 
 #### 3. Host Key Streaming (`dndMapperHostInput.js` Port)
 - Track keys currently held by the DM using `keydown`/`keyup`/`blur` listeners on the host browser.
+- Ignore key events when the active focused element is an input, textarea, or contenteditable field to prevent text entry from triggering loaded dice rules.
 - Normalize key names (e.g. `" "` -> `"Space"`).
 - Debounce and send `updateHostKeys` intents to the authority without exceeding the 30 msg/s rate limit.
 
@@ -263,17 +274,22 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
   }
   ```
 - **Lifecycle & Turn Order**:
-  - `startCombat`: Pulls all tokens from the active map into `turnOrder`. Phase becomes `WaitingForRolls`.
+  - `startCombat`: Accepts `npcTokenIds?: readonly string[]` (selected NPC tokens) and automatically pulls in all connected player tokens from the lobby roster, matching legacy `StartInitiativeAsync`. Phase becomes `WaitingForRolls`.
   - Rolling Initiative:
-    - Players roll initiative via character sheet (using linked `initiativeAttributeName`, default DEX) or flat d20.
-    - DM can click **"Roll all unset NPCs"** to batch-roll for all NPC tokens.
+    - Players submit initiative via character sheet (using linked `initiativeAttributeName`, default DEX) or flat d20 via `SubmitInitiativeRollAsync`.
+    - DM can force-roll for an unresponsive player via `forceInitiativeRoll(combatantId)`.
     - DM manual entry: `setNpcInitiative` sets `pendingInitiative` so manual scores can be staged without spoiling dice rolls.
-  - Sorting:
-    - Sorted descending by initiative score. Tie-breaking by character sheet DEX modifier, then roll timestamp.
+    - DM can click **"Roll all unset NPCs"** (`rollAllNpcInitiative`) to flush all staged pending values (back-solving visible d20 faces via `Math.clamp(pending - mod, 1, 20)`) and roll fresh d20s for truly unset NPCs.
+  - Sorting (`TurnOrderSorter`):
+    - Primary: Descending by initiative score (`initiativeRoll ?? -Infinity`).
+    - Secondary (Tie-breaker): Players before NPCs (`ownerUserId !== null ? 0 : 1`).
+    - Tertiary (Tie-breaker): Alphabetical by name (`name.localeCompare(other.name, undefined, { sensitivity: "base" })`).
+    - *(Note: DEX modifier is factored into the roll total, not used as a tie-breaker).*
   - Combat Execution:
     - Once all combatants have rolls (or DM forces start), phase transitions to `Active`.
     - **Next Turn (`>`)**: Advances `currentTurnIndex`. When reaching end of list, increments `roundNumber` and resets index to 0.
-    - **Previous Turn (`<`)**: Reverses turn index; decrements `roundNumber` if wrapping backwards.
+    - **Previous Turn (`<`)**: Reverses turn index; decrements `roundNumber` if wrapping backwards (clamped to minimum 1).
+    - **Add Combatant**: Mid-encounter additions require `initiativeRoll: number` so `TurnOrderSorter.findInsertionIndex` inserts them in the correct position without breaking turn indexing.
     - **End Combat**: Resets `CombatState` to null.
 
 #### 3. Map Canvas Integration
@@ -349,13 +365,14 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
 #### 2. Packaging Specification
 - Generates a valid Virtual Table Format v1.0.0 ZIP archive:
   - `manifest.json`: Spec version 1.0.0, campaign metadata.
-  - `global_state.json`: Custom templates, global roll templates, settings, attribute schema.
+  - `global_state.json`: Custom templates, global roll templates, settings, attribute schema, and `vendorData.knockbox_dnd_mapper.loadedDiceRules` (matching legacy `VtfPackager.cs` and target `src/vtf/import.ts:504`).
   - `scenes/scene_{mapId}.json`: Grid config, fog bitset, token instances, image layer order.
   - `entities/entity_{tokenId}.json` & `entities/sheet_{sheetId}.json`: Token and sheet definitions.
   - `assets/images/{imageId}.[png|jpg|webp]`: Raw image blobs extracted from IndexedDB.
-  - `extensions/knockbox_dnd_mapper.json`: Active combat state, phase, loaded dice rules.
+  - `extensions/knockbox_dnd_mapper.json`: Active combat state (`ActiveCombat`) and phase (`Phase`) only.
 - Pure browser ZIP creation using `CompressionStream('deflate-raw')`, local headers, central directory, and EOCD (porting `dndMapperVtfPackager.js`).
 - Triggers browser file download: `{CampaignName}_{yyyyMMdd_HHmm}.vtf`.
+- **Delayed URL Revocation**: Must use `setTimeout(() => URL.revokeObjectURL(url), 1000)` (matching `dndMapperVtfPackager.js:280`) rather than synchronous cleanup to avoid race conditions causing 0-byte downloaded files.
 - **UI**: Add an "Export" button to each slot row in `<dndm-saves-panel>`.
 
 ---
@@ -379,53 +396,101 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
 
 ---
 
-### Subsystem 9: Sandboxed Authority Verbs (~40 Verbs)
+### Subsystem 9: Sandboxed Authority Verbs (84 Total Verbs)
 
 #### 1. Legacy References
-- `Services/Logic/Games/DndMapperGameEngine.cs` (~84 total verbs, 3,703 lines)
+- `Services/Logic/Games/DndMapperGameEngine.cs` (84 total verbs across 83 async methods, 3,703 lines)
 
-#### 2. Verbs to Port into `src/game/rules.ts`
+#### 2. Master Verbs Accounting Table
 
-```
-Category            Verb / Intent                   Description
-────────────────────────────────────────────────────────────────────────────────────────────────────
-Sheets              createSheet                     Create character sheet
-                    updateSheet                     Update name, color, notes, scopedMapId
-                    deleteSheet                     Delete character sheet
-                    duplicateSheet                  Clone existing sheet
-                    assignSheetOwner                Set ownerUserId or clear to null
-                    setSheetHp                      Set current HP
-                    setSheetMaxHp                   Set maximum HP
-                    setSheetAc                      Set armor class
-                    updateAttributeValues           Update map of attribute scores/modifiers
-Attributes          setSchemaPreset                 Switch preset (5e Core, Skills, d20, Custom)
-                    updateSchemaRows                Add/edit/remove custom attribute rows
-                    setInitiativeAttribute          Choose attribute used for initiative
-Status Effects      applyStatusEffect               Add effect instance to sheet
-                    removeStatusEffect              Remove effect instance from sheet
-                    createEffectTemplate            Add reusable global effect template
-                    deleteEffectTemplate            Remove reusable global effect template
-Dice & Rolls        rollDice                        Execute standard dice roll with modifiers
-                    rollTemplate                    Roll using a defined RollTemplate
-                    clearRollLog                    Clear roll log (DM only)
-Loaded Dice         createLoadedDiceRule            Create new loaded dice rule
-                    updateLoadedDiceRule            Edit conditions/modifications/targets
-                    deleteLoadedDiceRule            Delete loaded dice rule
-                    toggleLoadedDiceRule            Enable / disable rule
-                    reorderLoadedDiceRules          Change rule priority order
-                    updateHostKeys                  Stream DM held keys for condition match
-Combat Tracker      startCombat                     Enter WaitingForRolls, populate combatants
-                    endCombat                       Clear active combat
-                    nextTurn                        Advance turn pointer and round count
-                    previousTurn                    Step backwards in turn order
-                    rollInitiative                  Roll initiative for player combatant
-                    setNpcInitiative                Stage pending manual NPC initiative
-                    rollAllUnsetNpcs                Batch roll for all unrolled NPCs
-                    addCombatant                    Add ad-hoc combatant to active combat
-                    removeCombatant                 Drop combatant from active combat
-Markup              updateMarkup                    Commit new or cleared SVG markup to map
-Lifecycle           endSession                      Return match to lobby phase
-```
+The table below accounts for all 84 legacy verbs across Part 1 (already implemented) and Part 2 (Phases 6–11):
+
+| Category | Verb / Intent | Status | Description |
+| :--- | :--- | :--- | :--- |
+| **Maps (8)** | `createMap` | Part 1 | Create a new map with dimensions and grid config |
+| | `switchMap` | Part 1 | Switch active map for all connected clients |
+| | `deleteMap` | Part 1 | Remove map and associated layers/tokens |
+| | `renameMap` | Part 1 | Rename map in campaign list |
+| | `reorderMaps` | Part 1 | Change display order of maps |
+| | `setGridConfig` | Part 1 | Update grid type, size, offset, and color |
+| | `duplicateMap` | Part 1 | Duplicate existing map with tokens/fog |
+| | `exportMapImage` | Part 1 | Export rendered map snapshot |
+| **Fog of War (5)** | `setFogBitset` | Part 1 | Update compressed fog bitset for current map |
+| | `fillFog` | Part 1 | Fill entire map with fog |
+| | `clearFog` | Part 1 | Clear all fog on current map |
+| | `revealAllFog` | Part 1 | Reveal entire map |
+| | `hideAllFog` | Part 1 | Hide entire map |
+| **Tokens (8)** | `createToken` | Part 1 | Place new token on map |
+| | `moveToken` | Part 1 | Move token to target coordinates |
+| | `deleteToken` | Part 1 | Delete token from map |
+| | `updateToken` | Part 1 | Update token size, elevation, tint, label |
+| | `reorderTokens` | Part 1 | Reorder token z-index |
+| | `duplicateToken` | Part 1 | Clone token on map |
+| | `spawnPlayerToken` | Part 1 | Spawn default player token on lobby join |
+| | `reassignTokenOwner` | Phase 11 | Reassign abandoned token to new player |
+| **Images (5)** | `placeImage` | Part 1 | Add background/overlay image to map |
+| | `transformImage` | Part 1 | Move, scale, or rotate image |
+| | `deleteImage` | Part 1 | Remove image from map |
+| | `reorderImages` | Part 1 | Change image layer order |
+| | `lockImage` | Part 1 | Lock/unlock image against accidental edits |
+| **Focus (2)** | `setFocusRect` | Part 1 | Set DM focus framing box |
+| | `clearFocusRect` | Part 1 | Reset focus framing box |
+| **Saves (3)** | `saveCampaign` | Part 1 | Persist campaign to local slot |
+| | `loadCampaign` | Part 1 | Restore campaign from local slot |
+| | `deleteCampaignSave` | Part 1 | Delete saved campaign slot |
+| **Sheets (10)** | `createSheet` | Phase 6 | Create character sheet |
+| | `updateSheet` | Phase 6 | Update name, color, notes, scopedMapId |
+| | `deleteSheet` | Phase 6 | Delete character sheet |
+| | `duplicateSheet` | Phase 6 | Clone existing sheet |
+| | `assignSheetOwner` | Phase 6 | Set ownerUserId or clear to null |
+| | `assignCharacterToPlayer` | Phase 11 | Reassign abandoned sheet to active player |
+| | `setSheetHp` | Phase 6 | Set current HP |
+| | `setSheetMaxHp` | Phase 6 | Set maximum base HP |
+| | `setSheetAc` | Phase 6 | Set armor class |
+| | `updateAttributeValues` | Phase 6 | Update map of attribute scores/modifiers |
+| **Attributes (3)** | `setSchemaPreset` | Phase 6 | Switch preset (5e Core, Skills, d20, Custom) |
+| | `updateSchemaRows` | Phase 6 | Add/edit/remove custom attribute rows |
+| | `setInitiativeAttribute` | Phase 6 | Choose attribute key used for initiative |
+| **Status Effects (6)** | `applyStatusEffect` | Phase 6 | Add status effect instance to sheet |
+| | `updateStatusEffect` | Phase 6 | Modify active status effect on sheet |
+| | `removeStatusEffect` | Phase 6 | Remove status effect instance from sheet |
+| | `createEffectTemplate` | Phase 6 | Add reusable global status effect template |
+| | `updateEffectTemplate` | Phase 6 | Update reusable status effect template |
+| | `deleteEffectTemplate` | Phase 6 | Remove reusable status effect template |
+| **Custom Templates (6)** | `createCustomTemplate` | Phase 6 | Create reusable character template |
+| | `updateCustomTemplate` | Phase 6 | Update character template schema/defaults |
+| | `deleteCustomTemplate` | Phase 6 | Remove character template |
+| | `applyCustomTemplate` | Phase 6 | Instantiate sheet from custom template |
+| | `duplicateCustomTemplate` | Phase 6 | Clone custom template |
+| | `reorderCustomTemplates` | Phase 6 | Reorder template list |
+| **Dice & Rolls (7)** | `rollDice` | Phase 7 | Execute standard dice roll with modifiers |
+| | `rollTemplate` | Phase 7 | Roll using a defined RollTemplate |
+| | `updateRollTemplate` | Phase 7 | Update sheet-scoped roll template |
+| | `createGlobalRollTemplate` | Phase 7 | Create campaign-level global roll template |
+| | `updateGlobalRollTemplate` | Phase 7 | Update campaign-level global roll template |
+| | `deleteGlobalRollTemplate` | Phase 7 | Remove global roll template |
+| | `clearRollLog` | Phase 7 | Clear roll history log (DM only) |
+| **Loaded Dice (6)** | `createLoadedDiceRule` | Phase 8 | Create new loaded dice rule |
+| | `updateLoadedDiceRule` | Phase 8 | Edit conditions/modifications/targets |
+| | `deleteLoadedDiceRule` | Phase 8 | Delete loaded dice rule |
+| | `toggleLoadedDiceRule` | Phase 8 | Enable / disable rule |
+| | `reorderLoadedDiceRules` | Phase 8 | Change rule priority order |
+| | `updateHostKeys` | Phase 8 | Stream DM held keys for condition match |
+| **Combat Tracker (11)** | `startCombat` | Phase 9 | Enter WaitingForRolls, populate combatants |
+| | `endCombat` | Phase 9 | Clear active combat |
+| | `nextTurn` | Phase 9 | Advance turn pointer and round count |
+| | `previousTurn` | Phase 9 | Step backwards in turn order (clamp round >= 1) |
+| | `rollInitiative` | Phase 9 | Roll initiative for player combatant |
+| | `forceInitiativeRoll` | Phase 9 | DM triggers roll for unrolled combatant |
+| | `setNpcInitiative` | Phase 9 | Stage pending manual NPC initiative |
+| | `rollAllUnsetNpcs` | Phase 9 | Batch roll for all unrolled NPCs |
+| | `rollAllNpcInitiative` | Phase 9 | Batch re-roll for all NPCs in combat |
+| | `addCombatant` | Phase 9 | Add ad-hoc combatant with initiative roll |
+| | `removeCombatant` | Phase 9 | Drop combatant from active combat |
+| **Markup Overlay (2)** | `updateMarkup` | Phase 10 | Commit new SVG markup to map |
+| | `clearMarkup` | Phase 10 | Clear all SVG markup for current map |
+| **Lifecycle (2)** | `endSession` | Phase 11 | Return match to lobby phase |
+| | `syncClientState` | Phase 11 | Full state synchronization request |
 
 #### 3. Wire Contract & 512 KiB Frame Protection
 - Authority patches must remain **narrowed**:
@@ -477,40 +542,46 @@ graph TD
     P10 --> P11
 ```
 
-### Phase 6: Character Sheets, Attribute Schemas, & Status Effects
+### [Phase 6: Character Sheets, Attribute Schemas, & Status Effects](phase-06-character-sheets.md)
+*Detailed technical plan: [`phase-06-character-sheets.md`](phase-06-character-sheets.md)*
 1. Authority types & rules: `CharacterSheet`, `AttributeSchema`, score-to-modifier formulas, effective HP calculation.
 2. Authority intents, narrowed patches (`{ kind: "sheet" }`, `{ kind: "schema" }`), and tests.
 3. Lit components: `<dndm-character-sheet>`, notes markdown renderer, `<dndm-sheet-settings-modal>`, `<dndm-schema-preset-modal>`, `<dndm-schema-cascade-warning>`.
 4. Status effects: `<dndm-status-effects>`, template library modal.
 5. Canvas hook: Token double-click opens linked character sheet.
 
-### Phase 7: 3D Physics Dice, Quick Roll Footer, & Roll Log
+### [Phase 7: 3D Physics Dice, Quick Roll Footer, & Roll Log](phase-07-dice-and-roll-log.md)
+*Detailed technical plan: [`phase-07-dice-and-roll-log.md`](phase-07-dice-and-roll-log.md)*
 1. Vendor `dice-box-threejs` with Three.js and Cannon-es; stage 38 textures and 75 sounds.
 2. Authority dice rolling engine: formula parsing (`2d6 + 3`), advantage/disadvantage, deterministic roll resolution.
 3. `<dndm-dice-canvas>`: Overlay, multi-box management, prewarming.
 4. `DiceAnimationTracker`: Gating roll-log reveal until dice finish tumbling.
 5. UI: `<dndm-quick-roll-footer>`, `<dndm-roll-log>`, `<dndm-roll-templates-modal>`, `<dndm-roll-history-modal>`.
 
-### Phase 8: Loaded Dice Engine & DM Secret Tampering
+### [Phase 8: Loaded Dice Engine & DM Secret Tampering](phase-08-loaded-dice.md)
+*Detailed technical plan: [`phase-08-loaded-dice.md`](phase-08-loaded-dice.md)*
 1. Sandboxed `LoadedDiceProcessor`: pure condition evaluator and modification applier.
 2. Authority integration: intercept rolls, apply matched rules, stamp `appliedRules`.
 3. Host key streaming: `keydown`/`keyup` tracking on DM client, debounced intent updates.
 4. UI: `<dndm-loaded-dice-panel>` in DM left rail, player indicator indicators (`LoadedDicePlayerIndicator`).
 
-### Phase 9: Initiative & Combat Tracker
+### [Phase 9: Initiative & Combat Tracker](phase-09-combat-and-initiative.md)
+*Detailed technical plan: [`phase-09-combat-and-initiative.md`](phase-09-combat-and-initiative.md)*
 1. Combat state machine: `WaitingForRolls` -> `Active`, round counting, turn index tracking.
-2. Turn order sorting: Descending initiative, DEX modifier tie-breaking.
+2. Turn order sorting: Descending initiative score -> Players before NPCs -> Alphabetical by name (DEX modifier is already factored into roll total, not evaluated as a separate tie-breaker).
 3. Staggered batch NPC rolling & manual `PendingInitiative` staging.
 4. UI: `<dndm-host-initiative>` in DM rail, `<dndm-initiative-banner>` for players.
 5. Canvas integration: Active turn token highlight halo in Phaser scene.
 
-### Phase 10: Freehand Canvas Markup Overlay & Projector Mode
+### [Phase 10: Freehand Canvas Markup Overlay & Projector Mode](phase-10-markup-and-display.md)
+*Detailed technical plan: [`phase-10-markup-and-display.md`](phase-10-markup-and-display.md)*
 1. Interactive SVG drawing layer on Phaser stage, pen/eraser/color/width tools, undo/redo, clear all.
 2. Pixel-to-cell transformation and storage in `GameMap.markupSvg`.
 3. Spacebar bypass for panning.
 4. Display theater mode: In-app fullscreen / detached window with 100% fog opacity, focus rect auto-framing, 250ms token animations, roll ticker.
 
-### Phase 11: Campaign Exporter (.vtf Packager) & Final Parity Polish
+### [Phase 11: Campaign Exporter (.vtf Packager) & Final Parity Polish](phase-11-vtf-export-and-lifecycle.md)
+*Detailed technical plan: [`phase-11-vtf-export-and-lifecycle.md`](phase-11-vtf-export-and-lifecycle.md)*
 1. Client-side `.vtf` ZIP packager (`CompressionStream('deflate-raw')`) packaging manifest, scenes, entities, images, and extensions.
 2. "Export" button on save slots in `<dndm-saves-panel>`.
 3. Disconnect handling: Player token -> NPC token conversion, `RepresentsUserId` preservation, and DM reassignment UI.
@@ -526,6 +597,8 @@ graph TD
 | **Intent Rate Limits (30 msg/s, 60 burst)** | 1008 terminal socket close | Debounce sheet text inputs (`300 ms`). Never send network intents on pointer-move during markup. |
 | **Cell-Unit vs. Pixel Coordinates** | Silent half-cell alignment drift | Persist all geometry (tokens, images, fog, markup) in cell units. Scale markup by `1 / CellPixels` on commit. |
 | **Three.js Main-Thread Jitter** | Rolling 10 NPC dice freezes frame rate | Prewarm dice boxes upon entering combat; stagger roll triggers across animation frames. |
+| **WebGL Context Ceiling (8–16 max)** | Context loss crashes Phaser battlemap | Do NOT instantiate separate DiceBox/Three.js contexts per token or user. Use a single shared transparent Three.js overlay canvas across the entire viewport. |
+| **KnockBox Delta Broadcast Mode** | Per-recipient delta filtering not supported by server | In KnockBox (`ServerAuthority.cs`), `perRecipient: false` broadcasts deltas to `"all"`. Secret data (rolls visible only to DM, hidden sheets, loaded dice stamps) must be filtered client-side in `MatchView` and Lit components (Decision D2). |
 | **Authority Sandbox Restrictions** | Server runtime error | No DOM, no timers, no `Date` object in `src/game/` (use `kb.now()`). Pure deterministic functions only. |
 | **Light DOM CSS Collisions** | Unintended global styling bleed | Prefix all ported CSS rules with `.dndm-*` component namespaces. |
 | **Spoilers Before Dice Settle** | Results visible in log while dice roll | Use `DiceAnimationTracker` to hide roll log entry until 3D dice finish tumbling. |
