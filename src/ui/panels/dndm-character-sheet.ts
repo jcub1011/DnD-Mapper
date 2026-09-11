@@ -586,6 +586,24 @@ export class DndmCharacterSheet extends GameElement {
           ?disabled=${!editable}
           @input=${(e: Event) => this.onNameInput(sheet.id, e)}
         />
+        ${this.isDm && sheet.ownerUserId === null
+          ? html`
+              <select
+                class="dndm-select dndm-select--small"
+                style="font-size: 0.75rem; padding: 2px 4px; max-width: 110px;"
+                title="Assign Owner"
+                @change=${(e: Event) => {
+                  const val = (e.target as HTMLSelectElement).value;
+                  if (val) {
+                    this.emitAssignSheetOwner(sheet.id, val);
+                  }
+                }}
+              >
+                <option value="">Assign Owner...</option>
+                ${this.roster.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
+              </select>
+            `
+          : nothing}
         ${this.isDm
           ? html`
               <button
@@ -609,6 +627,17 @@ export class DndmCharacterSheet extends GameElement {
           ⚙
         </button>
       </div>
+
+      ${sheet.representsUserId
+        ? html`
+            <div
+              class="dndm-sheet-provenance"
+              style="font-size: 0.78rem; color: var(--dndm-text-muted); font-style: italic; margin: -2px 0 6px 4px;"
+            >
+              (originally played by ${this.roster.find((p) => p.id === sheet.representsUserId)?.name ?? sheet.representsUserId})
+            </div>
+          `
+        : nothing}
 
       <!-- Vitals (HP & AC) -->
       ${canViewNotesAndHp

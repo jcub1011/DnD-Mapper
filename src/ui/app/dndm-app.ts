@@ -752,6 +752,8 @@ export class DndmApp extends GameElement {
 
                   <dndm-token-panel
                     .activeMap=${active}
+                    .isDm=${this.isDm}
+                    .roster=${this.roster}
                     .onCenterOnToken=${(x: number, y: number) => {
                       fx.map()?.centerOn(x, y);
                     }}
@@ -761,6 +763,8 @@ export class DndmApp extends GameElement {
                       this.send({ kind: "setTokenHidden", tokenId: id, hidden })}
                     .onDeleteToken=${(id: string) =>
                       this.send({ kind: "removeToken", tokenId: id })}
+                    .onReassignOwner=${(tokenId: string, newOwnerUserId: string | null) =>
+                      this.send({ kind: "reassignTokenOwner", tokenId, newOwnerUserId })}
                   ></dndm-token-panel>
 
                   <dndm-layer-panel

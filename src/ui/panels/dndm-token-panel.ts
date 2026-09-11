@@ -1,4 +1,4 @@
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { GameMap, Token } from "../../game/domain";
 import { GameElement } from "../app/GameElement";
@@ -11,6 +11,12 @@ export class DndmTokenPanel extends GameElement {
   @property({ attribute: false })
   activeMap: GameMap | null = null;
 
+  @property({ type: Boolean })
+  isDm = false;
+
+  @property({ attribute: false })
+  roster: readonly { id: string; name: string }[] = [];
+
   @property({ attribute: false })
   onCenterOnToken?: (x: number, y: number) => void;
 
@@ -22,6 +28,9 @@ export class DndmTokenPanel extends GameElement {
 
   @property({ attribute: false })
   onDeleteToken?: (tokenId: string) => void;
+
+  @property({ attribute: false })
+  onReassignOwner?: (tokenId: string, newOwnerUserId: string | null) => void;
 
   @state() private pendingDeleteToken: Token | null = null;
 
@@ -81,6 +90,17 @@ export class DndmTokenPanel extends GameElement {
     this.onDeleteToken?.(id);
   }
 
+  private handleReassignOwner(tokenId: string, newOwnerUserId: string | null): void {
+    this.dispatchEvent(
+      new CustomEvent<{ tokenId: string; newOwnerUserId: string | null }>("reassign-token-owner", {
+        bubbles: true,
+        composed: true,
+        detail: { tokenId, newOwnerUserId },
+      }),
+    );
+    this.onReassignOwner?.(tokenId, newOwnerUserId);
+  }
+
   override render(): TemplateResult {
     const tokens = this.activeMap?.tokens ?? [];
 
@@ -96,6 +116,8 @@ export class DndmTokenPanel extends GameElement {
               ? html`<div class="dndm-panel-empty">No tokens on this map.</div>`
               : tokens.map((t) => {
                   const isPlayer = t.type === "PlayerToken";
+                  const repPlayer = t.representsUserId ? this.roster.find((p) => p.id === t.representsUserId) : null;
+                  const repName = repPlayer ? repPlayer.name : t.representsUserId;
                   return html`
                     <div
                       class="dndm-tokenp-row"
@@ -107,8 +129,38 @@ export class DndmTokenPanel extends GameElement {
                         style="background: ${t.color};"
                         aria-hidden="true"
                       ></span>
-                      <span class="dndm-tokenp-name">${t.name}</span>
+                      <div style="flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column;">
+                        <span class="dndm-tokenp-name">${t.name}</span>
+                        ${t.representsUserId
+                          ? html`<span
+                              class="dndm-tokenp-subtitle"
+                              style="font-size: 0.72rem; color: var(--dndm-text-muted); font-style: italic;"
+                            >
+                              (originally played by ${repName})
+                            </span>`
+                          : nothing}
+                      </div>
                       <span class="dndm-tokenp-tag">${isPlayer ? "Player" : "NPC"}</span>
+                      ${this.isDm && t.ownerUserId === null
+                        ? html`
+                            <select
+                              class="dndm-select dndm-select--small"
+                              style="font-size: 0.75rem; padding: 1px 4px; max-width: 90px;"
+                              title="Assign Owner"
+                              @click=${(e: Event) => e.stopPropagation()}
+                              @change=${(e: Event) => {
+                                e.stopPropagation();
+                                const val = (e.target as HTMLSelectElement).value;
+                                this.handleReassignOwner(t.id, val || null);
+                              }}
+                            >
+                              <option value="">Assign...</option>
+                              ${this.roster.map(
+                                (p) => html`<option value=${p.id}>${p.name}</option>`,
+                              )}
+                            </select>
+                          `
+                        : nothing}
                       <dndm-rail-menu
                         menuTitle="Token actions"
                         .actions=${() => html`

@@ -156,6 +156,133 @@ export function createState(players: readonly PlayerInfo[]): DndMapperState {
   return createDefaultDndMapperState(dmPlayerId);
 }
 
+// ── Player Lifecycle & Abandonment (Phase 11) ────────────────────────────────
+
+/**
+ * Handles a player disconnecting from the session:
+ *   1. If the DM drops, promotes the oldest remaining peer in the roster.
+ *   2. If a non-DM drops:
+ *      - Converts their tokens to NPCToken on the board, ownerUserId = null,
+ *        recording representsUserId = leavingPlayerId so characters stay on the board.
+ *      - Updates any owned character sheets: ownerUserId = null, representsUserId = leavingPlayerId.
+ *      - Clears ownership on active combatants so DM can roll and manage them.
+ */
+export function handlePlayerLeft(
+  state: DndMapperState,
+  leavingPlayerId: string,
+  roster: readonly PlayerInfo[],
+): { state: DndMapperState; patch: Patch | null } {
+  let changed = false;
+
+  // 1. Owner succession: if leaving player was DM, promote oldest remaining peer
+  let newDmPlayerId = state.dmPlayerId;
+  if (leavingPlayerId === state.dmPlayerId) {
+    const successor = roster.find((p) => p.id !== leavingPlayerId)?.id ?? null;
+    newDmPlayerId = successor;
+    changed = true;
+  }
+
+  // 2. Maps & tokens: convert leaving player's tokens to NPCToken
+  const nextMaps: GameMap[] = [];
+  let tokenChanged = false;
+
+  for (const m of state.maps) {
+    if (!isFullMap(m)) {
+      nextMaps.push(m as unknown as GameMap);
+      continue;
+    }
+
+    let mapChanged = false;
+    const updatedTokens: Token[] = m.tokens.map((tok) => {
+      if (tok.ownerUserId === leavingPlayerId) {
+        mapChanged = true;
+        tokenChanged = true;
+        return {
+          ...tok,
+          type: "NPCToken" as const,
+          ownerUserId: null,
+          representsUserId: leavingPlayerId,
+        };
+      }
+      return tok;
+    });
+
+    if (mapChanged) {
+      nextMaps.push({ ...m, tokens: updatedTokens });
+    } else {
+      nextMaps.push(m);
+    }
+  }
+
+  // 3. Sheets: clear ownerUserId and set representsUserId on leaving player's sheets
+  let sheetChanged = false;
+  const nextSheets: Record<string, CharacterSheet> = {};
+  for (const [id, sheet] of Object.entries(state.sheets)) {
+    if (sheet.ownerUserId === leavingPlayerId) {
+      sheetChanged = true;
+      nextSheets[id] = {
+        ...sheet,
+        ownerUserId: null,
+        representsUserId: leavingPlayerId,
+      };
+    } else {
+      nextSheets[id] = sheet;
+    }
+  }
+
+  // 4. Combat: clear ownerUserId on leaving player's combatants
+  let nextCombat = state.activeCombat;
+  if (nextCombat) {
+    let combatChanged = false;
+    const nextTurnOrder = nextCombat.turnOrder.map((c) => {
+      if (c.ownerUserId === leavingPlayerId) {
+        combatChanged = true;
+        return {
+          ...c,
+          ownerUserId: null,
+        };
+      }
+      return c;
+    });
+    if (combatChanged) {
+      nextCombat = { ...nextCombat, turnOrder: nextTurnOrder };
+      changed = true;
+    }
+  }
+
+  if (tokenChanged || sheetChanged || newDmPlayerId !== state.dmPlayerId) {
+    changed = true;
+  }
+
+  if (!changed) {
+    return { state, patch: null };
+  }
+
+  const nextState: DndMapperState = {
+    ...state,
+    dmPlayerId: newDmPlayerId,
+    maps: nextMaps,
+    sheets: nextSheets,
+    activeCombat: nextCombat,
+  };
+
+  if (tokenChanged || sheetChanged) {
+    return {
+      state: nextState,
+      patch: {
+        kind: "full",
+        state: projectSnapshot(nextState),
+      },
+    };
+  }
+
+  // Only DM changed
+  return {
+    state: nextState,
+    patch: newDmPlayerId ? { kind: "dm", dmPlayerId: newDmPlayerId } : null,
+  };
+}
+
 // ── Snapshot Projection ──────────────────────────────────────────────────────
 
 /**
@@ -331,6 +458,7 @@ export function applyIntent(
   fromId: string,
   action: unknown,
   now: number,
+  roster?: readonly PlayerInfo[],
 ): ApplyIntentResult | null {
   if (typeof action !== "object" || action === null) return null;
   const intent = action as Record<string, unknown>;
@@ -428,6 +556,7 @@ export function applyIntent(
       };
     }
 
+    case "switchMap":
     case "setActiveMap": {
       if (!isDm(state, fromId)) return null;
       if (typeof intent.mapId !== "string") return null;
@@ -443,6 +572,7 @@ export function applyIntent(
       };
     }
 
+    case "setGridConfig":
     case "updateGrid": {
       if (!isDm(state, fromId)) return null;
       if (typeof intent.mapId !== "string" || !intent.grid || typeof intent.grid !== "object")
@@ -460,7 +590,19 @@ export function applyIntent(
       };
     }
 
+    case "exportMapImage": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.mapId !== "string") return null;
+      const mapExists = state.maps.some((m) => m.id === intent.mapId);
+      if (!mapExists) return null;
+      return {
+        state,
+        patch: null,
+      };
+    }
+
     // ── Tokens ──────────────────────────────────────────────────────────────
+    case "createToken":
     case "spawnToken": {
       if (typeof intent.mapId !== "string" || !intent.token || typeof intent.token !== "object")
         return null;
@@ -531,6 +673,7 @@ export function applyIntent(
       };
     }
 
+    case "deleteToken":
     case "removeToken": {
       if (typeof intent.tokenId !== "string") return null;
       const fullMaps = state.maps.filter(isFullMap);
@@ -560,6 +703,171 @@ export function applyIntent(
       };
     }
 
+    case "duplicateToken": {
+      if (typeof intent.tokenId !== "string") return null;
+      const fullMaps = state.maps.filter(isFullMap);
+      const found = findTokenById(fullMaps, intent.tokenId);
+      if (!found) return null;
+      if (!mayEditToken(state, fromId, found.token)) return null;
+
+      const cloned: Token = {
+        ...found.token,
+        id: generateGuid(),
+        name: `${found.token.name} (copy)`,
+        x: found.token.x + 1,
+        y: found.token.y + 1,
+      };
+
+      const nextMaps = fullMaps.map((m) => {
+        if (m.id === found.map.id) {
+          return { ...m, tokens: [...m.tokens, cloned] };
+        }
+        return m;
+      });
+
+      const nextState: DndMapperState = { ...state, maps: nextMaps };
+      return {
+        state: nextState,
+        patch: {
+          kind: "token",
+          token: cloned,
+        },
+      };
+    }
+
+    case "reorderTokens": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.mapId !== "string" || !Array.isArray(intent.tokenIds)) return null;
+      const fullMaps = state.maps.filter(isFullMap);
+      const targetMap = fullMaps.find((m) => m.id === intent.mapId);
+      if (!targetMap) return null;
+
+      const idOrder = intent.tokenIds as string[];
+      const tokenMap = new Map(targetMap.tokens.map((t) => [t.id, t]));
+      const ordered: Token[] = [];
+      for (const tid of idOrder) {
+        const t = tokenMap.get(tid);
+        if (t) {
+          ordered.push(t);
+          tokenMap.delete(tid);
+        }
+      }
+      for (const t of tokenMap.values()) {
+        ordered.push(t);
+      }
+
+      const updatedMap: GameMap = { ...targetMap, tokens: ordered };
+      const nextMaps = fullMaps.map((m) => (m.id === targetMap.id ? updatedMap : m));
+      const nextState: DndMapperState = { ...state, maps: nextMaps };
+      return {
+        state: nextState,
+        patch: {
+          kind: "map",
+          map: updatedMap,
+        },
+      };
+    }
+
+    case "spawnPlayerToken": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.playerId !== "string") return null;
+
+      const fullMaps = state.maps.filter(isFullMap);
+      const targetMapId = typeof intent.mapId === "string" ? intent.mapId : state.activeMapId;
+      const targetMap = fullMaps.find((m) => m.id === targetMapId) ?? fullMaps[0];
+      if (!targetMap) return null;
+
+      const spawnPos = targetMap.defaultSpawnPosition ?? {
+        x: Math.floor(targetMap.grid.widthCells / 2) + 0.5,
+        y: Math.floor(targetMap.grid.heightCells / 2) + 0.5,
+      };
+
+      const name =
+        typeof intent.name === "string" && intent.name.trim().length > 0
+          ? intent.name.trim()
+          : "Player";
+      const color = typeof intent.color === "string" ? intent.color : "#e8b849";
+
+      const newToken: Token = {
+        id: generateGuid(),
+        type: "PlayerToken",
+        ownerUserId: intent.playerId,
+        representsUserId: null,
+        name,
+        color,
+        iconKind: "Initial",
+        mapId: targetMap.id,
+        x: spawnPos.x,
+        y: spawnPos.y,
+        sheetId: null,
+        hidden: false,
+      };
+
+      const nextMaps = fullMaps.map((m) =>
+        m.id === targetMap.id ? { ...m, tokens: [...m.tokens, newToken] } : m,
+      );
+      const nextState: DndMapperState = { ...state, maps: nextMaps };
+      return {
+        state: nextState,
+        patch: {
+          kind: "token",
+          token: newToken,
+        },
+      };
+    }
+
+    case "reassignTokenOwner": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.tokenId !== "string") return null;
+      const newOwner = typeof intent.newOwnerUserId === "string" ? intent.newOwnerUserId : null;
+
+      const fullMaps = state.maps.filter(isFullMap);
+      const found = findTokenById(fullMaps, intent.tokenId);
+      if (!found) return null;
+
+      const updatedToken: Token = {
+        ...found.token,
+        type: newOwner !== null ? "PlayerToken" : "NPCToken",
+        ownerUserId: newOwner,
+        representsUserId: newOwner !== null ? null : found.token.representsUserId,
+      };
+
+      const nextMaps = fullMaps.map((m) => {
+        if (m.id === found.map.id) {
+          return {
+            ...m,
+            tokens: m.tokens.map((t) => (t.id === found.token.id ? updatedToken : t)),
+          };
+        }
+        return m;
+      });
+
+      let nextSheets = state.sheets;
+      if (found.token.sheetId && state.sheets[found.token.sheetId]) {
+        const sheet = state.sheets[found.token.sheetId];
+        const linkedSheet: CharacterSheet = {
+          ...sheet,
+          ownerUserId: newOwner,
+          representsUserId: newOwner !== null ? null : sheet.representsUserId,
+        };
+        nextSheets = { ...state.sheets, [sheet.id]: linkedSheet };
+      }
+
+      const nextState: DndMapperState = {
+        ...state,
+        maps: nextMaps,
+        sheets: nextSheets,
+      };
+
+      return {
+        state: nextState,
+        patch: {
+          kind: "full",
+          state: projectSnapshot(nextState),
+        },
+      };
+    }
+
     case "setTokenHidden": {
       if (!isDm(state, fromId)) return null;
       if (typeof intent.tokenId !== "string" || typeof intent.hidden !== "boolean") return null;
@@ -581,6 +889,7 @@ export function applyIntent(
     }
 
     // ── Images ──────────────────────────────────────────────────────────────
+    case "placeImage":
     case "addImage": {
       if (!isDm(state, fromId)) return null;
       if (typeof intent.mapId !== "string" || !intent.image || typeof intent.image !== "object")
@@ -634,6 +943,7 @@ export function applyIntent(
       };
     }
 
+    case "reorderImages":
     case "reorderImage": {
       if (!isDm(state, fromId)) return null;
       if (typeof intent.imageId !== "string" || typeof intent.layerOrder !== "number") return null;
@@ -654,6 +964,7 @@ export function applyIntent(
       };
     }
 
+    case "lockImage":
     case "setImageLocked": {
       if (!isDm(state, fromId)) return null;
       if (typeof intent.imageId !== "string" || typeof intent.locked !== "boolean") return null;
@@ -694,6 +1005,7 @@ export function applyIntent(
       };
     }
 
+    case "deleteImage":
     case "removeImage": {
       if (!isDm(state, fromId)) return null;
       if (typeof intent.imageId !== "string") return null;
@@ -711,6 +1023,27 @@ export function applyIntent(
     }
 
     // ── Fog ─────────────────────────────────────────────────────────────────
+    case "setFogBitset": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.mapId !== "string" || typeof intent.mask !== "string") return null;
+      const fullMaps = state.maps.filter(isFullMap);
+      const targetMap = fullMaps.find((m) => m.id === intent.mapId);
+      if (!targetMap) return null;
+
+      const nextMaps = fullMaps.map((m) =>
+        m.id === intent.mapId ? { ...m, fogMask: intent.mask as string } : m,
+      );
+      const nextState: DndMapperState = { ...state, maps: nextMaps };
+      return {
+        state: nextState,
+        patch: {
+          kind: "fog",
+          mapId: intent.mapId,
+          mask: intent.mask as string,
+        },
+      };
+    }
+
     case "paintFog": {
       if (!isDm(state, fromId)) return null;
       if (
@@ -747,6 +1080,7 @@ export function applyIntent(
       };
     }
 
+    case "hideAllFog":
     case "fillFog": {
       if (!isDm(state, fromId)) return null;
       if (typeof intent.mapId !== "string") return null;
@@ -770,6 +1104,7 @@ export function applyIntent(
       };
     }
 
+    case "revealAllFog":
     case "clearFog": {
       if (!isDm(state, fromId)) return null;
       if (typeof intent.mapId !== "string") return null;
@@ -855,6 +1190,18 @@ export function applyIntent(
       };
     }
 
+    case "clearFocusRect": {
+      if (!isDm(state, fromId)) return null;
+      const nextState: DndMapperState = { ...state, focusRect: null };
+      return {
+        state: nextState,
+        patch: {
+          kind: "focusRect",
+          rect: null,
+        },
+      };
+    }
+
     case "centerViewport": {
       if (!isDm(state, fromId)) return null;
       if (
@@ -880,7 +1227,7 @@ export function applyIntent(
       };
     }
 
-    // ── Settings ────────────────────────────────────────────────────────────
+    // ── Settings, Lifecycle & Campaign Saves (Phase 11) ──────────────────────
     case "updateSettings": {
       if (!isDm(state, fromId)) return null;
       if (!intent.patch || typeof intent.patch !== "object") return null;
@@ -896,6 +1243,35 @@ export function applyIntent(
           settings: nextSettings,
         },
       };
+    }
+
+    case "endSession": {
+      if (!isDm(state, fromId)) return null;
+      const nextState: DndMapperState = { ...state, phase: "Lobby" };
+      return {
+        state: nextState,
+        patch: {
+          kind: "phase",
+          phase: "Lobby",
+        },
+      };
+    }
+
+    case "syncClientState": {
+      return {
+        state,
+        patch: {
+          kind: "full",
+          state: projectSnapshot(state),
+        },
+      };
+    }
+
+    case "saveCampaign":
+    case "loadCampaign":
+    case "deleteCampaignSave": {
+      if (!isDm(state, fromId)) return null;
+      return { state, patch: null };
     }
 
     // ── Map On-Demand Fetch ──────────────────────────────────────────────────
@@ -1015,6 +1391,46 @@ export function applyIntent(
         newMapCreated = true;
       }
 
+      // Auto-spawn on session start:
+      // For each connected player in roster lacking an active token on active map, spawn one
+      let spawnedTokensCount = 0;
+      if (roster && roster.length > 0) {
+        const fullMaps = nextMaps.filter(isFullMap);
+        const targetMap = fullMaps.find((m) => m.id === nextActiveMapId);
+        if (targetMap) {
+          const spawnPos = targetMap.defaultSpawnPosition ?? {
+            x: Math.floor(targetMap.grid.widthCells / 2) + 0.5,
+            y: Math.floor(targetMap.grid.heightCells / 2) + 0.5,
+          };
+          const newTokens: Token[] = [];
+          for (const player of roster) {
+            const hasToken = targetMap.tokens.some((t) => t.ownerUserId === player.id);
+            if (!hasToken) {
+              newTokens.push({
+                id: generateGuid(),
+                type: "PlayerToken",
+                ownerUserId: player.id,
+                representsUserId: null,
+                name: player.displayName || "Player",
+                color: "#e8b849",
+                iconKind: "Initial",
+                mapId: targetMap.id,
+                x: spawnPos.x,
+                y: spawnPos.y,
+                sheetId: null,
+                hidden: false,
+              });
+              spawnedTokensCount++;
+            }
+          }
+          if (newTokens.length > 0) {
+            nextMaps = fullMaps.map((m) =>
+              m.id === targetMap.id ? { ...m, tokens: [...m.tokens, ...newTokens] } : m,
+            );
+          }
+        }
+      }
+
       const nextState: DndMapperState = {
         ...state,
         phase: "Playing",
@@ -1022,7 +1438,7 @@ export function applyIntent(
         activeMapId: nextActiveMapId,
       };
 
-      if (newMapCreated) {
+      if (newMapCreated || spawnedTokensCount > 0) {
         return {
           state: nextState,
           patch: {
@@ -1180,8 +1596,8 @@ export function applyIntent(
         characterName: `${sheet.characterName} (copy)`,
         ownerUserId: null,
         representsUserId: null,
-        statusEffects: sheet.statusEffects.map((e) => ({ ...e })),
-        rollTemplates: sheet.rollTemplates.map((r) => ({ ...r })),
+        statusEffects: (sheet.statusEffects || []).map((e) => ({ ...e })),
+        rollTemplates: (sheet.rollTemplates || []).map((r) => ({ ...r })),
       };
 
       const nextSheets = { ...state.sheets, [newId]: clone };
@@ -1192,27 +1608,38 @@ export function applyIntent(
       };
     }
 
+    case "assignCharacterToPlayer":
     case "assignSheetOwner": {
       if (typeof intent.sheetId !== "string") return null;
       if (!isDm(state, fromId)) return null;
       const sheet = state.sheets[intent.sheetId];
       if (!sheet) return null;
 
-      const nextOwner = typeof intent.ownerUserId === "string" ? intent.ownerUserId : null;
+      const nextOwner =
+        typeof intent.playerId === "string"
+          ? intent.playerId
+          : typeof intent.ownerUserId === "string"
+            ? intent.ownerUserId
+            : null;
+
       const updatedSheet: CharacterSheet = {
         ...sheet,
         ownerUserId: nextOwner,
+        representsUserId: nextOwner !== null ? null : sheet.representsUserId,
       };
 
+      let tokenUpdated = false;
       const nextMaps = state.maps.map((m) => {
         if (!isFullMap(m)) return m;
         let changed = false;
         const nextTokens = m.tokens.map((t) => {
           if (t.sheetId === sheet.id) {
             changed = true;
+            tokenUpdated = true;
             return {
               ...t,
               ownerUserId: nextOwner,
+              representsUserId: nextOwner !== null ? null : t.representsUserId,
               type: nextOwner ? ("PlayerToken" as const) : ("NPCToken" as const),
             };
           }
@@ -1223,6 +1650,15 @@ export function applyIntent(
 
       const nextSheets = { ...state.sheets, [sheet.id]: updatedSheet };
       const nextState: DndMapperState = { ...state, sheets: nextSheets, maps: nextMaps };
+      if (tokenUpdated) {
+        return {
+          state: nextState,
+          patch: {
+            kind: "full",
+            state: projectSnapshot(nextState),
+          },
+        };
+      }
       return {
         state: nextState,
         patch: { kind: "sheet", sheet: updatedSheet },
@@ -1678,7 +2114,7 @@ export function applyIntent(
         color: template.color || "#4a90e2",
         scopedMapId: typeof intent.scopedMapId === "string" ? intent.scopedMapId : null,
         statusEffects: [],
-        rollTemplates: [...template.rollTemplates],
+        rollTemplates: Array.isArray(template.rollTemplates) ? [...template.rollTemplates] : [],
       };
 
       const nextSheets = { ...state.sheets, [newId]: newSheet };

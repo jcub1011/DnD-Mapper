@@ -9,6 +9,7 @@ import "../modals/dndm-confirm";
 import "../shared/dndm-rail-menu";
 import { toastService } from "../toast/toastService";
 import "../vtf/dndm-vtf-import";
+import { exportCampaignSlot, triggerVtfDownload } from "../../vtf/export";
 
 function formatRelative(isoUtc: string): string {
   try {
@@ -158,9 +159,19 @@ export class DndmSavesPanel extends GameElement {
     }
   }
 
-  private async exportSlot(_slotId: string, e?: Event): Promise<void> {
+  private async exportSlot(slotId: string, e?: Event): Promise<void> {
     e?.stopPropagation();
-    toastService.info("VTF campaign export is not supported in this version.");
+    if (!this.libraryService || this.exportingSlotId !== null) return;
+    this.exportingSlotId = slotId;
+    try {
+      const { blob, fileName } = await exportCampaignSlot(this.libraryService, slotId);
+      triggerVtfDownload(blob, fileName);
+      toastService.success(`Exported ${fileName}`);
+    } catch (err) {
+      toastService.error(`Export failed: ${String(err)}`);
+    } finally {
+      this.exportingSlotId = null;
+    }
   }
 
   override render(): TemplateResult {

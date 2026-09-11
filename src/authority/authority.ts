@@ -19,6 +19,7 @@ import {
   applyIntent,
   clearPendingImportsForPlayer,
   createState,
+  handlePlayerLeft,
   projectSnapshot,
 } from "../game/rules";
 import type { DndMapperState, Patch, PlayerInfo } from "../game/types";
@@ -37,7 +38,7 @@ export function createAuthority(kb: Kb): Authority {
     },
 
     applyIntent(fromId: string, action: unknown): Patch | null {
-      const result = applyIntent(state, fromId, action, kb.now());
+      const result = applyIntent(state, fromId, action, kb.now(), roster);
       if (result === null) return null; // illegal intent — broadcast nothing
       state = result.state;
       if (result.patch === null) return null; // staged action with no broadcast
@@ -64,21 +65,19 @@ export function createAuthority(kb: Kb): Authority {
 
     onPlayerLeft(playerId: string): Patch | null {
       clearPendingImportsForPlayer(playerId);
+      const leavingDm = playerId === state.dmPlayerId;
       roster = roster.filter((p) => p.id !== playerId);
 
-      // OWNER SUCCESSION: If the DM drops, promote the next longest-standing player in the lobby.
-      if (playerId === state.dmPlayerId) {
-        const successor = roster.length > 0 ? roster[0].id : null;
-        if (successor) {
-          kb.setOwner(successor);
-          state = { ...state, dmPlayerId: successor };
-          kb.log.info(`dm left; promoted ${successor}`);
-          return { kind: "dm", dmPlayerId: successor };
-        }
-        state = { ...state, dmPlayerId: null };
+      const result = handlePlayerLeft(state, playerId, roster);
+      state = result.state;
+
+      if (leavingDm && state.dmPlayerId) {
+        kb.setOwner(state.dmPlayerId);
+        kb.log.info(`dm left; promoted ${state.dmPlayerId}`);
       }
 
-      return null;
+      if (!result.patch) return null;
+      return guardSize(result.patch, (msg) => kb.log.error(msg));
     },
   };
 }

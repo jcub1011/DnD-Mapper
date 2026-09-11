@@ -65,16 +65,31 @@ export type Intent =
   | { readonly kind: "duplicateMap"; readonly mapId: string }
   | { readonly kind: "reorderMaps"; readonly order: readonly string[] }
   | { readonly kind: "setActiveMap"; readonly mapId: string }
+  | { readonly kind: "switchMap"; readonly mapId: string }
   | { readonly kind: "updateGrid"; readonly mapId: string; readonly grid: GridConfig }
+  | { readonly kind: "setGridConfig"; readonly mapId: string; readonly grid: GridConfig }
+  | { readonly kind: "exportMapImage"; readonly mapId: string }
   // tokens
   | { readonly kind: "spawnToken"; readonly mapId: string; readonly token: NewToken }
+  | { readonly kind: "createToken"; readonly mapId: string; readonly token: NewToken }
   | { readonly kind: "moveToken"; readonly tokenId: string; readonly x: number; readonly y: number }
   | { readonly kind: "updateToken"; readonly tokenId: string; readonly patch: Partial<Token> }
   | { readonly kind: "removeToken"; readonly tokenId: string }
+  | { readonly kind: "deleteToken"; readonly tokenId: string }
+  | { readonly kind: "reorderTokens"; readonly mapId: string; readonly tokenIds: readonly string[] }
+  | { readonly kind: "duplicateToken"; readonly tokenId: string }
+  | { readonly kind: "spawnPlayerToken"; readonly playerId: string; readonly mapId?: string; readonly name?: string; readonly color?: string }
+  | { readonly kind: "reassignTokenOwner"; readonly tokenId: string; readonly newOwnerUserId: string | null }
   | { readonly kind: "setTokenHidden"; readonly tokenId: string; readonly hidden: boolean }
   // images
   | {
       readonly kind: "addImage";
+      readonly mapId: string;
+      readonly image: NewMapImage;
+      readonly imageId?: string;
+    }
+  | {
+      readonly kind: "placeImage";
       readonly mapId: string;
       readonly image: NewMapImage;
       readonly imageId?: string;
@@ -89,9 +104,12 @@ export type Intent =
       readonly rotation: number;
     }
   | { readonly kind: "reorderImage"; readonly imageId: string; readonly layerOrder: number }
+  | { readonly kind: "reorderImages"; readonly imageId: string; readonly layerOrder: number }
   | { readonly kind: "setImageLocked"; readonly imageId: string; readonly locked: boolean }
+  | { readonly kind: "lockImage"; readonly imageId: string; readonly locked: boolean }
   | { readonly kind: "setImageHidden"; readonly imageId: string; readonly hidden: boolean }
   | { readonly kind: "removeImage"; readonly imageId: string }
+  | { readonly kind: "deleteImage"; readonly imageId: string }
   // fog — ONE intent per stroke, never per cell
   | {
       readonly kind: "paintFog";
@@ -99,21 +117,31 @@ export type Intent =
       readonly cells: readonly number[];
       readonly fogged: boolean;
     }
+  | { readonly kind: "setFogBitset"; readonly mapId: string; readonly mask: string }
   | { readonly kind: "fillFog"; readonly mapId: string }
   | { readonly kind: "clearFog"; readonly mapId: string }
+  | { readonly kind: "revealAllFog"; readonly mapId: string }
+  | { readonly kind: "hideAllFog"; readonly mapId: string }
   // markup (Phase 10)
   | { readonly kind: "updateMarkup"; readonly mapId: string; readonly markupSvg: string | null }
   | { readonly kind: "clearMarkup"; readonly mapId: string }
   // viewport
   | { readonly kind: "setFocusRect"; readonly rect: FocusRect | null }
+  | { readonly kind: "clearFocusRect" }
   | {
       readonly kind: "centerViewport";
       readonly mapId: string;
       readonly x: number;
       readonly y: number;
     }
-  // session
+  // session & lifecycle (Phase 11)
   | { readonly kind: "updateSettings"; readonly patch: Partial<DndMapperSettings> }
+  | { readonly kind: "endSession" }
+  | { readonly kind: "syncClientState" }
+  // campaign saves
+  | { readonly kind: "saveCampaign"; readonly slotName?: string }
+  | { readonly kind: "loadCampaign"; readonly slotId: string }
+  | { readonly kind: "deleteCampaignSave"; readonly slotId: string }
   // campaign loading
   | { readonly kind: "requestMap"; readonly mapId: string }
   | {
@@ -130,12 +158,13 @@ export type Intent =
     }
   | { readonly kind: "commitImport"; readonly token: string }
   | { readonly kind: "startSession" }
-  // sheets (9 intents; assignCharacterToPlayer in Phase 11)
+  // sheets (10 intents; assignCharacterToPlayer in Phase 11)
   | { readonly kind: "createSheet"; readonly characterName: string; readonly scopedMapId?: string | null; readonly ownerUserId?: string | null }
   | { readonly kind: "updateSheet"; readonly sheetId: string; readonly patch: Partial<Pick<CharacterSheet, "characterName" | "color" | "scopedMapId" | "notes">> }
   | { readonly kind: "deleteSheet"; readonly sheetId: string }
   | { readonly kind: "duplicateSheet"; readonly sheetId: string }
   | { readonly kind: "assignSheetOwner"; readonly sheetId: string; readonly ownerUserId: string | null }
+  | { readonly kind: "assignCharacterToPlayer"; readonly sheetId: string; readonly playerId: string | null }
   | { readonly kind: "setSheetHp"; readonly sheetId: string; readonly hp: number | null }
   | { readonly kind: "setSheetMaxHp"; readonly sheetId: string; readonly maxHp: number | null }
   | { readonly kind: "setSheetAc"; readonly sheetId: string; readonly ac: number | null }
