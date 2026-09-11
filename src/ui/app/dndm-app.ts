@@ -58,16 +58,9 @@ import "../toast/dndm-toast";
 import "../upload/dndm-image-upload";
 import "../markup/dndm-markup-overlay";
 import "../display/dndm-display-roll-ticker";
-import {
-  filterDisplayImages,
-  filterDisplayTokens,
-} from "../display/displayProjection";
+import { filterDisplayImages, filterDisplayTokens } from "../display/displayProjection";
 import { resolveActiveTurnTokenId } from "../../game/combat";
-import {
-  getReadableTextColor,
-  resolveDiceColor,
-  resolveDiceColorForToken,
-} from "../../game/color";
+import { getReadableTextColor, resolveDiceColor, resolveDiceColorForToken } from "../../game/color";
 import type { LoadedDiceRule, RollMode, RollResult, RollTemplate } from "../../game/domain";
 import { HostInputTracker } from "../../net/hostInput";
 import { DEFAULT_DICE_SCALE, diceOverlay } from "../dice/diceOverlay";
@@ -77,6 +70,7 @@ const log = createLogger("app");
 const MIN_RAIL_PX = 200;
 const MAX_RAIL_PX = 600;
 const CLICK_THRESHOLD_PX = 4;
+const COLLAPSE_THRESHOLD_PX = 140;
 const STORAGE_PREFIX = "dndm.rail.";
 const DICE_SCALE_STORAGE_KEY = "dndm.dice.scale";
 
@@ -174,6 +168,7 @@ export class DndmApp extends GameElement {
   private resizeStartWidth = 0;
   private resizeCurrentPx = 0;
   private resizeMoved = false;
+  private isCollapsedAtDragStart = false;
 
   private onOpenSheet = (e: Event): void => {
     const customEvent = e as CustomEvent<{ sheetId: string }>;
@@ -213,6 +208,9 @@ export class DndmApp extends GameElement {
     document.removeEventListener("click", this.onGlobalPanelCollapseClick);
     window.removeEventListener("dndm-open-sheet", this.onOpenSheet);
     window.removeEventListener("keydown", this.onEscapeKey);
+    window.removeEventListener("pointermove", this.onWindowPointerMove);
+    window.removeEventListener("pointerup", this.onWindowPointerUp);
+    window.removeEventListener("pointercancel", this.onWindowPointerUp);
     this.displaySyncChannel?.close();
     cancelAnimationFrame(this.rafId);
     this.controller?.destroy();
@@ -263,7 +261,12 @@ export class DndmApp extends GameElement {
       this.roster = players;
       const prevOwner = this.isOwner;
       this.isOwner = isOwner;
-      if (isOwner && players.length === 1 && !this.hasSweptLocalBlobs && this.launchMode === "local-tab") {
+      if (
+        isOwner &&
+        players.length === 1 &&
+        !this.hasSweptLocalBlobs &&
+        this.launchMode === "local-tab"
+      ) {
         this.hasSweptLocalBlobs = true;
         const idb = new IdbBlobTransport();
         idb.clear().finally(() => idb.close());
@@ -307,6 +310,14 @@ export class DndmApp extends GameElement {
     this.style.setProperty("--dndm-rail-pad-left", leftPad);
     this.style.setProperty("--dndm-rail-pad-right", rightPad);
 
+    const playingEl = this.renderRoot.querySelector(".dnd-mapper-playing") as HTMLElement | null;
+    if (playingEl) {
+      playingEl.style.setProperty("--dndm-rail-w-left", `${this.leftRailWidth}px`);
+      playingEl.style.setProperty("--dndm-rail-w-right", `${this.rightRailWidth}px`);
+      playingEl.style.setProperty("--dndm-rail-pad-left", leftPad);
+      playingEl.style.setProperty("--dndm-rail-pad-right", rightPad);
+    }
+
     diceOverlay.updateDimensions();
 
     const map = fx.map();
@@ -349,20 +360,44 @@ export class DndmApp extends GameElement {
   };
 
   // ── Rail Resize & Click Collapse Handling ──────────────────────────────────
+  private toggleRailCollapse(side: "left" | "right"): void {
+    if (side === "left") {
+      this.leftCollapsed = !this.leftCollapsed;
+    } else {
+      this.rightCollapsed = !this.rightCollapsed;
+    }
+    this.updateRailCssVars();
+  }
+
+  private readonly onWindowPointerMove = (e: PointerEvent): void => {
+    this.onRailResizeMove(e);
+  };
+
+  private readonly onWindowPointerUp = (e: PointerEvent): void => {
+    if (this.activeResizeSide) {
+      this.endRailResize(this.activeResizeSide, e);
+    }
+  };
+
   private startRailResize(side: "left" | "right", e: PointerEvent): void {
     if (e.button !== 0) return;
     this.activeResizeSide = side;
     this.resizeStartX = e.clientX;
+    this.isCollapsedAtDragStart = side === "left" ? this.leftCollapsed : this.rightCollapsed;
     this.resizeStartWidth = side === "left" ? this.leftRailWidth : this.rightRailWidth;
     this.resizeCurrentPx = this.resizeStartWidth;
     this.resizeMoved = false;
 
-    const target = e.currentTarget as HTMLElement;
+    const target = e.currentTarget as HTMLElement | null;
     try {
-      target.setPointerCapture(e.pointerId);
+      target?.setPointerCapture(e.pointerId);
     } catch {
       // ignore
     }
+
+    window.addEventListener("pointermove", this.onWindowPointerMove);
+    window.addEventListener("pointerup", this.onWindowPointerUp);
+    window.addEventListener("pointercancel", this.onWindowPointerUp);
 
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
@@ -378,13 +413,47 @@ export class DndmApp extends GameElement {
     }
     this.resizeMoved = true;
     const delta = this.activeResizeSide === "left" ? dx : -dx;
-    const nextPx = clampRail(this.resizeStartWidth + delta);
-    this.resizeCurrentPx = nextPx;
 
-    if (this.activeResizeSide === "left") {
-      this.leftRailWidth = nextPx;
+    if (this.isCollapsedAtDragStart) {
+      if (delta >= COLLAPSE_THRESHOLD_PX) {
+        const nextPx = clampRail(Math.max(MIN_RAIL_PX, delta));
+        this.resizeCurrentPx = nextPx;
+        if (this.activeResizeSide === "left") {
+          this.leftCollapsed = false;
+          this.leftRailWidth = nextPx;
+        } else {
+          this.rightCollapsed = false;
+          this.rightRailWidth = nextPx;
+        }
+      } else {
+        if (this.activeResizeSide === "left") {
+          this.leftCollapsed = true;
+        } else {
+          this.rightCollapsed = true;
+        }
+      }
     } else {
-      this.rightRailWidth = nextPx;
+      const rawWidth = this.resizeStartWidth + delta;
+      if (rawWidth < COLLAPSE_THRESHOLD_PX) {
+        // Auto-collapsed: restore to resizeStartWidth upon uncollapsing
+        if (this.activeResizeSide === "left") {
+          this.leftCollapsed = true;
+          this.leftRailWidth = this.resizeStartWidth;
+        } else {
+          this.rightCollapsed = true;
+          this.rightRailWidth = this.resizeStartWidth;
+        }
+      } else {
+        const nextPx = clampRail(rawWidth);
+        this.resizeCurrentPx = nextPx;
+        if (this.activeResizeSide === "left") {
+          this.leftCollapsed = false;
+          this.leftRailWidth = nextPx;
+        } else {
+          this.rightCollapsed = false;
+          this.rightRailWidth = nextPx;
+        }
+      }
     }
     this.updateRailCssVars();
   }
@@ -393,9 +462,13 @@ export class DndmApp extends GameElement {
     if (!this.activeResizeSide) return;
     this.activeResizeSide = null;
 
-    const target = e.currentTarget as HTMLElement;
+    window.removeEventListener("pointermove", this.onWindowPointerMove);
+    window.removeEventListener("pointerup", this.onWindowPointerUp);
+    window.removeEventListener("pointercancel", this.onWindowPointerUp);
+
+    const target = e.currentTarget as HTMLElement | null;
     try {
-      target.releasePointerCapture(e.pointerId);
+      target?.releasePointerCapture(e.pointerId);
     } catch {
       // ignore
     }
@@ -406,15 +479,16 @@ export class DndmApp extends GameElement {
     const role = this.isDm ? "dm" : "player";
 
     if (this.resizeMoved) {
-      saveRailWidth(side, role, this.resizeCurrentPx);
-    } else {
-      // Click without drag toggles collapse
-      if (side === "left") {
-        this.leftCollapsed = !this.leftCollapsed;
+      const isCollapsed = side === "left" ? this.leftCollapsed : this.rightCollapsed;
+      if (isCollapsed) {
+        saveRailWidth(side, role, this.resizeStartWidth);
       } else {
-        this.rightCollapsed = !this.rightCollapsed;
+        saveRailWidth(side, role, this.resizeCurrentPx);
       }
       this.updateRailCssVars();
+    } else {
+      // Click without drag toggles collapse
+      this.toggleRailCollapse(side);
     }
   }
 
@@ -724,62 +798,63 @@ export class DndmApp extends GameElement {
 
     return html`
       <div
-        class="dnd-mapper-playing ${this.isDm ? "dnd-mapper-playing--host" : ""} ${this
-          .leftCollapsed
-          ? "dnd-mapper-playing--left-collapsed"
-          : ""} ${this.rightCollapsed ? "dnd-mapper-playing--right-collapsed" : ""}"
+        class="dnd-mapper-playing ${this.isDm ? "dnd-mapper-playing--host" : ""} ${
+          this.leftCollapsed ? "dnd-mapper-playing--left-collapsed" : ""
+        } ${this.rightCollapsed ? "dnd-mapper-playing--right-collapsed" : ""}"
+        style="--dndm-rail-w-left: ${this.leftRailWidth}px; --dndm-rail-w-right: ${this.rightRailWidth}px;"
       >
         <!-- Left Rail (DM Only) -->
-        ${this.isDm
-          ? html`
-              <aside class="dndm-rail dndm-rail--left">
-                <div class="dndm-rail-content">
-                  <dndm-map-list
-                    .maps=${maps}
-                    .activeMapId=${activeMapId}
-                    .onCreateMap=${() => this.send({ kind: "createMap", name: "New Map" })}
-                    .onSelectMap=${(id: string) => this.send({ kind: "setActiveMap", mapId: id })}
-                    .onRenameMap=${(id: string, name: string) =>
+        ${
+          this.isDm
+            ? html`
+                <aside class="dndm-rail dndm-rail--left">
+                  <div class="dndm-rail-content">
+                    <dndm-map-list
+                      .maps=${maps}
+                      .activeMapId=${activeMapId}
+                      .onCreateMap=${() => this.send({ kind: "createMap", name: "New Map" })}
+                      .onSelectMap=${(id: string) => this.send({ kind: "setActiveMap", mapId: id })}
+                      .onRenameMap=${(id: string, name: string) =>
                       this.send({ kind: "renameMap", mapId: id, name })}
-                    .onDuplicateMap=${(id: string) =>
+                      .onDuplicateMap=${(id: string) =>
                       this.send({ kind: "duplicateMap", mapId: id })}
-                    .onDeleteMap=${(id: string) => this.send({ kind: "deleteMap", mapId: id })}
-                    .onReorderMaps=${(order: readonly string[]) =>
+                      .onDeleteMap=${(id: string) => this.send({ kind: "deleteMap", mapId: id })}
+                      .onReorderMaps=${(order: readonly string[]) =>
                       this.send({ kind: "reorderMaps", order })}
-                    .onUpdateGrid=${(id: string, grid: GridConfig) =>
+                      .onUpdateGrid=${(id: string, grid: GridConfig) =>
                       this.send({ kind: "updateGrid", mapId: id, grid })}
-                  ></dndm-map-list>
+                    ></dndm-map-list>
 
-                  <dndm-token-panel
-                    .activeMap=${active}
-                    .isDm=${this.isDm}
-                    .roster=${this.roster}
-                    .onCenterOnToken=${(x: number, y: number) => {
+                    <dndm-token-panel
+                      .activeMap=${active}
+                      .isDm=${this.isDm}
+                      .roster=${this.roster}
+                      .onCenterOnToken=${(x: number, y: number) => {
                       fx.map()?.centerOn(x, y);
                     }}
-                    .onToggleIcon=${(id: string, iconKind: "Initial" | "Solid") =>
+                      .onToggleIcon=${(id: string, iconKind: "Initial" | "Solid") =>
                       this.send({ kind: "updateToken", tokenId: id, patch: { iconKind } })}
-                    .onToggleHidden=${(id: string, hidden: boolean) =>
+                      .onToggleHidden=${(id: string, hidden: boolean) =>
                       this.send({ kind: "setTokenHidden", tokenId: id, hidden })}
-                    .onDeleteToken=${(id: string) =>
+                      .onDeleteToken=${(id: string) =>
                       this.send({ kind: "removeToken", tokenId: id })}
-                    .onReassignOwner=${(tokenId: string, newOwnerUserId: string | null) =>
+                      .onReassignOwner=${(tokenId: string, newOwnerUserId: string | null) =>
                       this.send({ kind: "reassignTokenOwner", tokenId, newOwnerUserId })}
-                  ></dndm-token-panel>
+                    ></dndm-token-panel>
 
-                  <dndm-layer-panel
-                    .activeMap=${active}
-                    .selectedImageId=${this.selectedImageId}
-                    .assetSource=${this.assetSource}
-                    .onSelectImage=${(id: string | null) => {
+                    <dndm-layer-panel
+                      .activeMap=${active}
+                      .selectedImageId=${this.selectedImageId}
+                      .assetSource=${this.assetSource}
+                      .onSelectImage=${(id: string | null) => {
                       this.selectedImageId = id;
                       fx.map()?.selectImage(id);
                     }}
-                    .onToggleHidden=${(id: string, hidden: boolean) =>
+                      .onToggleHidden=${(id: string, hidden: boolean) =>
                       this.send({ kind: "setImageHidden", imageId: id, hidden })}
-                    .onToggleLocked=${(id: string, locked: boolean) =>
+                      .onToggleLocked=${(id: string, locked: boolean) =>
                       this.send({ kind: "setImageLocked", imageId: id, locked })}
-                    .onRenameImage=${(id: string, _name: string) => {
+                      .onRenameImage=${(id: string, _name: string) => {
                       const img = active?.images.find((i) => i.id === id);
                       if (img) {
                         this.send({
@@ -793,25 +868,29 @@ export class DndmApp extends GameElement {
                         });
                       }
                     }}
-                  >
-                    <dndm-image-upload
-                      slot="header-action"
-                      .compact=${true}
-                      .libraryService=${this.libraryService}
-                      .onImageUploaded=${async (newImg: NewMapImage, blob: Blob, imageId: string) => {
+                    >
+                      <dndm-image-upload
+                        slot="header-action"
+                        .compact=${true}
+                        .libraryService=${this.libraryService}
+                        .onImageUploaded=${async (
+                        newImg: NewMapImage,
+                        blob: Blob,
+                        imageId: string,
+                      ) => {
                         if (active) {
                           await this.assetSource.publish(imageId, blob);
                           this.send({ kind: "addImage", mapId: active.id, image: newImg, imageId });
                           toastService.success(`Added image layer "${newImg.name}"`);
                         }
                       }}
-                    ></dndm-image-upload>
-                  </dndm-layer-panel>
+                      ></dndm-image-upload>
+                    </dndm-layer-panel>
 
-                  <dndm-saves-panel
-                    .libraryService=${this.libraryService}
-                    .currentState=${this.match}
-                    .onLoadSlotState=${async (loaded: MatchState) => {
+                    <dndm-saves-panel
+                      .libraryService=${this.libraryService}
+                      .currentState=${this.match}
+                      .onLoadSlotState=${async (loaded: MatchState) => {
                       for (const map of loaded.maps) {
                         if ("images" in map) {
                           for (const img of map.images) {
@@ -833,85 +912,88 @@ export class DndmApp extends GameElement {
                         chunkCount: 1,
                       });
                     }}
-                  ></dndm-saves-panel>
+                    ></dndm-saves-panel>
 
-                  ${settings.loadedDiceEnabled
-                    ? html`
-                        <dndm-loaded-dice-panel
-                          .rules=${this.match.loadedDiceRules ?? []}
-                          .sheets=${this.match.sheets}
-                          .maps=${maps}
-                          .hostHeldKeys=${this.match.hostHeldKeys ?? []}
-                          .onCreateRule=${(rule: Omit<LoadedDiceRule, "id">) =>
+                    ${
+                    settings.loadedDiceEnabled
+                      ? html`
+                          <dndm-loaded-dice-panel
+                            .rules=${this.match.loadedDiceRules ?? []}
+                            .sheets=${this.match.sheets}
+                            .maps=${maps}
+                            .hostHeldKeys=${this.match.hostHeldKeys ?? []}
+                            .onCreateRule=${(rule: Omit<LoadedDiceRule, "id">) =>
                             this.send({ kind: "createLoadedDiceRule", rule })}
-                          .onUpdateRule=${(ruleId: string, patch: Partial<LoadedDiceRule>) =>
+                            .onUpdateRule=${(ruleId: string, patch: Partial<LoadedDiceRule>) =>
                             this.send({ kind: "updateLoadedDiceRule", ruleId, patch })}
-                          .onDeleteRule=${(ruleId: string) =>
+                            .onDeleteRule=${(ruleId: string) =>
                             this.send({ kind: "deleteLoadedDiceRule", ruleId })}
-                          .onToggleRule=${(ruleId: string, enabled: boolean) =>
+                            .onToggleRule=${(ruleId: string, enabled: boolean) =>
                             this.send({ kind: "toggleLoadedDiceRule", ruleId, enabled })}
-                          .onReorderRules=${(ruleIds: readonly string[]) =>
+                            .onReorderRules=${(ruleIds: readonly string[]) =>
                             this.send({ kind: "reorderLoadedDiceRules", ruleIds })}
-                        ></dndm-loaded-dice-panel>
-                      `
-                    : nothing}
+                          ></dndm-loaded-dice-panel>
+                        `
+                      : nothing
+                  }
 
-                  <section class="dndm-panel dndm-session-panel">
-                    <header class="dndm-panel-header">
-                      <span>Session</span>
-                    </header>
-                    <div class="dndm-panel-body dndm-session-actions">
-                      <button
-                        class="dndm-btn dndm-btn--icon"
-                        type="button"
-                        title="Session Settings"
-                        @click=${() => {
+                    <section class="dndm-panel dndm-session-panel">
+                      <header class="dndm-panel-header">
+                        <span>Session</span>
+                      </header>
+                      <div class="dndm-panel-body dndm-session-actions">
+                        <button
+                          class="dndm-btn dndm-btn--icon"
+                          type="button"
+                          title="Session Settings"
+                          @click=${() => {
                           this.settingsModalOpen = true;
                         }}
-                      >
-                        ${gearIcon()}
-                      </button>
-                      <button
-                        class="dndm-btn dndm-btn--ghost dndm-btn--small"
-                        type="button"
-                        @click=${() => {
+                        >
+                          ${gearIcon()}
+                        </button>
+                        <button
+                          class="dndm-btn dndm-btn--ghost dndm-btn--small"
+                          type="button"
+                          @click=${() => {
                           this.lobbyOpen = !this.lobbyOpen;
                           this.controller?.setLobbyOpen(this.lobbyOpen);
                         }}
-                      >
-                        ${this.lobbyOpen ? "Close Lobby" : "Open Lobby"}
-                      </button>
-                      <button
-                        class="dndm-btn dndm-btn--ghost dndm-btn--small"
-                        type="button"
-                        title="Enter Projector Theater Mode"
-                        @click=${() => this.toggleProjectorMode()}
-                      >
-                        📽️ Theater
-                      </button>
-                      <button
-                        class="dndm-btn dndm-btn--ghost dndm-btn--small"
-                        type="button"
-                        title="Open Projector in a new window"
-                        @click=${() => window.open("?view=display", "_blank")}
-                      >
-                        ↗ Popout
-                      </button>
-                    </div>
-                  </section>
-                </div>
+                        >
+                          ${this.lobbyOpen ? "Close Lobby" : "Open Lobby"}
+                        </button>
+                        <button
+                          class="dndm-btn dndm-btn--ghost dndm-btn--small"
+                          type="button"
+                          title="Enter Projector Theater Mode"
+                          @click=${() => this.toggleProjectorMode()}
+                        >
+                          📽️ Theater
+                        </button>
+                        <button
+                          class="dndm-btn dndm-btn--ghost dndm-btn--small"
+                          type="button"
+                          title="Open Projector in a new window"
+                          @click=${() => window.open("?view=display", "_blank")}
+                        >
+                          ↗ Popout
+                        </button>
+                      </div>
+                    </section>
+                  </div>
 
-                <div
-                  class="dndm-rail-resize dndm-rail-resize--left"
-                  title="Drag to resize, click to collapse"
-                  @pointerdown=${(e: PointerEvent) => this.startRailResize("left", e)}
-                  @pointermove=${(e: PointerEvent) => this.onRailResizeMove(e)}
-                  @pointerup=${(e: PointerEvent) => this.endRailResize("left", e)}
-                  @pointercancel=${(e: PointerEvent) => this.endRailResize("left", e)}
-                ></div>
-              </aside>
-            `
-          : nothing}
+                  <div
+                    class="dndm-rail-resize dndm-rail-resize--left"
+                    title="Drag to resize, click to collapse"
+                    @pointerdown=${(e: PointerEvent) => this.startRailResize("left", e)}
+                    @pointermove=${(e: PointerEvent) => this.onRailResizeMove(e)}
+                    @pointerup=${(e: PointerEvent) => this.endRailResize("left", e)}
+                    @pointercancel=${(e: PointerEvent) => this.endRailResize("left", e)}
+                  ></div>
+                </aside>
+              `
+            : nothing
+        }
 
         <!-- Canvas Area -->
         <main
@@ -936,65 +1018,72 @@ export class DndmApp extends GameElement {
             }}
           ></dndm-initiative-banner>
 
-          ${this.isDm && this.toolMode === "markup" && active
-            ? html`
-                <dndm-markup-overlay
-                  .activeMap=${active}
-                  .onCommitMarkup=${(svg: string | null) => {
+          ${
+            this.isDm && this.toolMode === "markup" && active
+              ? html`
+                  <dndm-markup-overlay
+                    .activeMap=${active}
+                    .onCommitMarkup=${(svg: string | null) => {
                     this.send({ kind: "updateMarkup", mapId: active.id, markupSvg: svg });
                   }}
-                  .onClose=${() => {
+                    .onClose=${() => {
                     this.toolMode = "none";
                     fx.map()?.setToolMode("none");
                   }}
-                ></dndm-markup-overlay>
-              `
-            : nothing}
-          ${!active
-            ? html`
-                <div class="dndm-empty">
-                  ${this.isDm
-                    ? html`<span>No active map. Create one from the <strong>Maps</strong> panel.</span>`
-                    : html`<span>Waiting for the DM to choose a map…</span>`}
-                </div>
-              `
-            : html`
-                <dndm-toolbar
-                  .isDm=${this.isDm}
-                  .zoom=${this.currentZoom}
-                  .showGridLines=${active.grid.showGridLines}
-                  .toolMode=${this.toolMode}
-                  .fogBrushMode=${this.fogBrushMode}
-                  .fogBrushRadius=${this.fogBrushRadius}
-                  .hasFocusRect=${this.match.focusRect !== null}
-                  .onToggleGrid=${(show: boolean) =>
+                  ></dndm-markup-overlay>
+                `
+              : nothing
+          }
+          ${
+            !active
+              ? html`
+                  <div class="dndm-empty">
+                    ${
+                    this.isDm
+                      ? html`<span
+                          >No active map. Create one from the <strong>Maps</strong> panel.</span
+                        >`
+                      : html`<span>Waiting for the DM to choose a map…</span>`
+                  }
+                  </div>
+                `
+              : html`
+                  <dndm-toolbar
+                    .isDm=${this.isDm}
+                    .zoom=${this.currentZoom}
+                    .showGridLines=${active.grid.showGridLines}
+                    .toolMode=${this.toolMode}
+                    .fogBrushMode=${this.fogBrushMode}
+                    .fogBrushRadius=${this.fogBrushRadius}
+                    .hasFocusRect=${this.match.focusRect !== null}
+                    .onToggleGrid=${(show: boolean) =>
                     this.send({
                       kind: "updateGrid",
                       mapId: active.id,
                       grid: { ...active.grid, showGridLines: show },
                     })}
-                  .onZoomIn=${() => fx.map()?.zoomIn()}
-                  .onZoomOut=${() => fx.map()?.zoomOut()}
-                  .onResetView=${() => fx.map()?.resetView()}
-                  .onSetToolMode=${(mode: ToolMode) => {
+                    .onZoomIn=${() => fx.map()?.zoomIn()}
+                    .onZoomOut=${() => fx.map()?.zoomOut()}
+                    .onResetView=${() => fx.map()?.resetView()}
+                    .onSetToolMode=${(mode: ToolMode) => {
                     this.toolMode = mode;
                     fx.map()?.setToolMode(mode);
                   }}
-                  .onSetFogBrushMode=${(mode: "paint" | "erase") => {
+                    .onSetFogBrushMode=${(mode: "paint" | "erase") => {
                     this.fogBrushMode = mode;
                     const m = fx.map();
                     if (m) m.fogBrushMode = mode;
                   }}
-                  .onCycleBrushRadius=${() => {
+                    .onCycleBrushRadius=${() => {
                     const next = (this.fogBrushRadius % 3) + 1;
                     this.fogBrushRadius = next;
                     const m = fx.map();
                     if (m) m.fogBrushRadius = next;
                   }}
-                  .onFillFog=${() => this.send({ kind: "fillFog", mapId: active.id })}
-                  .onClearFog=${() => this.send({ kind: "clearFog", mapId: active.id })}
-                  .onClearFocusRect=${() => this.send({ kind: "setFocusRect", rect: null })}
-                  .onCenterEveryone=${() => {
+                    .onFillFog=${() => this.send({ kind: "fillFog", mapId: active.id })}
+                    .onClearFog=${() => this.send({ kind: "clearFog", mapId: active.id })}
+                    .onClearFocusRect=${() => this.send({ kind: "setFocusRect", rect: null })}
+                    .onCenterEveryone=${() => {
                     const cam = fx.map()?.cameras.main;
                     if (cam) {
                       const world = cam.midPoint;
@@ -1007,18 +1096,16 @@ export class DndmApp extends GameElement {
                       toastService.info("Centered all players on current view");
                     }
                   }}
-                ></dndm-toolbar>
+                  ></dndm-toolbar>
 
-                ${this.isDm && this.selectedImage
-                  ? html`
-                      <div class="dndm-canvas-inspector">
-                        <dndm-image-inspector
-                          .image=${this.selectedImage}
-                          .maxLayerOrder=${Math.max(
-                            ...active.images.map((i) => i.layerOrder),
-                            0,
-                          )}
-                          .onTransform=${(patch: {
+                  ${
+                  this.isDm && this.selectedImage
+                    ? html`
+                        <div class="dndm-canvas-inspector">
+                          <dndm-image-inspector
+                            .image=${this.selectedImage}
+                            .maxLayerOrder=${Math.max(...active.images.map((i) => i.layerOrder), 0)}
+                            .onTransform=${(patch: {
                             x: number;
                             y: number;
                             width: number;
@@ -1033,7 +1120,7 @@ export class DndmApp extends GameElement {
                               });
                             }
                           }}
-                          .onReorder=${(layerOrder: number) => {
+                            .onReorder=${(layerOrder: number) => {
                             if (this.selectedImage) {
                               this.send({
                                 kind: "reorderImage",
@@ -1042,7 +1129,7 @@ export class DndmApp extends GameElement {
                               });
                             }
                           }}
-                          .onSetLocked=${(locked: boolean) => {
+                            .onSetLocked=${(locked: boolean) => {
                             if (this.selectedImage) {
                               this.send({
                                 kind: "setImageLocked",
@@ -1051,7 +1138,7 @@ export class DndmApp extends GameElement {
                               });
                             }
                           }}
-                          .onRemove=${async () => {
+                            .onRemove=${async () => {
                             if (this.selectedImage) {
                               const imgId = this.selectedImage.id;
                               await this.assetSource.release(imgId);
@@ -1064,15 +1151,17 @@ export class DndmApp extends GameElement {
                               fx.map()?.selectImage(null);
                             }
                           }}
-                          .onClose=${() => {
+                            .onClose=${() => {
                             this.selectedImageId = null;
                             fx.map()?.selectImage(null);
                           }}
-                        ></dndm-image-inspector>
-                      </div>
-                    `
-                  : nothing}
-              `}
+                          ></dndm-image-inspector>
+                        </div>
+                      `
+                    : nothing
+                }
+                `
+          }
 
           <dndm-quick-roll-footer
             .state=${this.match}
@@ -1107,7 +1196,11 @@ export class DndmApp extends GameElement {
                 attributeName,
               });
             }}
-            .onRollTemplate=${(templateId: string, modeOverride?: RollMode, sheetId?: string | null) => {
+            .onRollTemplate=${(
+              templateId: string,
+              modeOverride?: RollMode,
+              sheetId?: string | null,
+            ) => {
               this.send({
                 kind: "rollTemplate",
                 templateId,
@@ -1136,50 +1229,54 @@ export class DndmApp extends GameElement {
             @pointercancel=${(e: PointerEvent) => this.endRailResize("right", e)}
           ></div>
           <div class="dndm-rail-content">
-            ${this.isDm
-              ? html`
-                  <dndm-host-initiative
-                    .combat=${this.match.activeCombat}
-                    .activeMap=${active}
-                    .sheets=${this.match.sheets}
-                    .isDm=${this.isDm}
-                    .currentUserId=${this.controller?.playerId ?? null}
-                    .onStartCombat=${(mapId: string) => this.send({ kind: "startCombat", mapId })}
-                    .onEndCombat=${() => this.send({ kind: "endCombat" })}
-                    .onNextTurn=${() => this.send({ kind: "nextTurn" })}
-                    .onPreviousTurn=${() => this.send({ kind: "previousTurn" })}
-                    .onRollInitiative=${(combatantId: string) =>
+            ${
+              this.isDm
+                ? html`
+                    <dndm-host-initiative
+                      .combat=${this.match.activeCombat}
+                      .activeMap=${active}
+                      .sheets=${this.match.sheets}
+                      .isDm=${this.isDm}
+                      .currentUserId=${this.controller?.playerId ?? null}
+                      .onStartCombat=${(mapId: string) => this.send({ kind: "startCombat", mapId })}
+                      .onEndCombat=${() => this.send({ kind: "endCombat" })}
+                      .onNextTurn=${() => this.send({ kind: "nextTurn" })}
+                      .onPreviousTurn=${() => this.send({ kind: "previousTurn" })}
+                      .onRollInitiative=${(combatantId: string) =>
                       this.send({ kind: "rollInitiative", combatantId })}
-                    .onForceRoll=${(combatantId: string) =>
+                      .onForceRoll=${(combatantId: string) =>
                       this.send({ kind: "forceInitiativeRoll", combatantId })}
-                    .onSetNpcInitiative=${(combatantId: string, score: number) =>
+                      .onSetNpcInitiative=${(combatantId: string, score: number) =>
                       this.send({ kind: "setNpcInitiative", combatantId, score })}
-                    .onRollAllUnsetNpcs=${() => this.send({ kind: "rollAllUnsetNpcs" })}
-                    .onRollAllNpcInitiative=${() => this.send({ kind: "rollAllNpcInitiative" })}
-                    .onAddCombatant=${(tokenId: string, initiativeRoll: number) =>
+                      .onRollAllUnsetNpcs=${() => this.send({ kind: "rollAllUnsetNpcs" })}
+                      .onRollAllNpcInitiative=${() => this.send({ kind: "rollAllNpcInitiative" })}
+                      .onAddCombatant=${(tokenId: string, initiativeRoll: number) =>
                       this.send({ kind: "addCombatant", tokenId, initiativeRoll })}
-                    .onRemoveCombatant=${(combatantId: string) =>
+                      .onRemoveCombatant=${(combatantId: string) =>
                       this.send({ kind: "removeCombatant", combatantId })}
-                    .onFocusToken=${(tokenId: string) => {
+                      .onFocusToken=${(tokenId: string) => {
                       const tok = active?.tokens.find((t) => t.id === tokenId);
                       if (tok) {
                         fx.map()?.panToWorld(tok.x * 50, tok.y * 50);
                       }
                     }}
-                    .onSetSheetHp=${(sheetId: string, hp: number | null) =>
+                      .onSetSheetHp=${(sheetId: string, hp: number | null) =>
                       this.send({ kind: "setSheetHp", sheetId, hp })}
-                  ></dndm-host-initiative>
-                `
-              : nothing}
-            ${!this.isDm
-              ? html`
-                  <dndm-my-token
-                    .token=${myToken}
-                    .onChangeColor=${(tokenId: string, color: string) =>
+                    ></dndm-host-initiative>
+                  `
+                : nothing
+            }
+            ${
+              !this.isDm
+                ? html`
+                    <dndm-my-token
+                      .token=${myToken}
+                      .onChangeColor=${(tokenId: string, color: string) =>
                       this.send({ kind: "updateToken", tokenId, patch: { color } })}
-                  ></dndm-my-token>
-                `
-              : nothing}
+                    ></dndm-my-token>
+                  `
+                : nothing
+            }
             <dndm-character-sheet
               .sheets=${this.match.sheets}
               .selectedSheetId=${this.selectedSheetId}
@@ -1196,7 +1293,11 @@ export class DndmApp extends GameElement {
                 this.selectedSheetId = id;
               }}
               .onCreateSheet=${(characterName?: string, scopedMapId?: string | null) =>
-                this.send({ kind: "createSheet", characterName: characterName || "New Character", scopedMapId })}
+                this.send({
+                  kind: "createSheet",
+                  characterName: characterName || "New Character",
+                  scopedMapId,
+                })}
               .onUpdateSheet=${(sheetId: string, patch: SheetPatch) =>
                 this.send({ kind: "updateSheet", sheetId, patch })}
               .onAssignSheetOwner=${(sheetId: string, ownerUserId: string | null) =>
@@ -1207,14 +1308,17 @@ export class DndmApp extends GameElement {
                 this.send({ kind: "setSheetMaxHp", sheetId, maxHp })}
               .onSetSheetAc=${(sheetId: string, ac: number | null) =>
                 this.send({ kind: "setSheetAc", sheetId, ac })}
-              .onDeleteSheet=${(sheetId: string) =>
-                this.send({ kind: "deleteSheet", sheetId })}
+              .onDeleteSheet=${(sheetId: string) => this.send({ kind: "deleteSheet", sheetId })}
               .onDuplicateSheet=${(sheetId: string) =>
                 this.send({ kind: "duplicateSheet", sheetId })}
-              .onUpdateAttributeValues=${(sheetId: string, values: Readonly<Record<string, AttributeValue>>) =>
-                this.send({ kind: "updateAttributeValues", sheetId, values })}
-              .onApplyStatusEffect=${(sheetId: string, effect: Omit<StatusEffect, "id" | "appliedUtc">) =>
-                this.send({ kind: "applyStatusEffect", sheetId, effect })}
+              .onUpdateAttributeValues=${(
+                sheetId: string,
+                values: Readonly<Record<string, AttributeValue>>,
+              ) => this.send({ kind: "updateAttributeValues", sheetId, values })}
+              .onApplyStatusEffect=${(
+                sheetId: string,
+                effect: Omit<StatusEffect, "id" | "appliedUtc">,
+              ) => this.send({ kind: "applyStatusEffect", sheetId, effect })}
               .onRemoveStatusEffect=${(sheetId: string, effectId: string) =>
                 this.send({ kind: "removeStatusEffect", sheetId, effectId })}
               .onSetSchemaPreset=${(preset: AttributePreset) =>

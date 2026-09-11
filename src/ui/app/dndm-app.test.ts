@@ -175,9 +175,7 @@ describe("<dndm-app> Application Shell", () => {
       expect(app.querySelector(".dndm-rail--left")).toBeNull();
 
       // Emit roster event transferring ownership to user-bob
-      const updatedRoster: readonly KBPlayer[] = [
-        { id: "user-bob", displayName: "Bob" },
-      ];
+      const updatedRoster: readonly KBPlayer[] = [{ id: "user-bob", displayName: "Bob" }];
       controller.events.emit("roster", {
         players: updatedRoster,
         ownerId: "user-bob",
@@ -213,12 +211,8 @@ describe("<dndm-app> Application Shell", () => {
       rightHandle.dispatchEvent(
         new PointerEvent("pointerdown", { clientX: 500, button: 0, bubbles: true }),
       );
-      rightHandle.dispatchEvent(
-        new PointerEvent("pointermove", { clientX: 400, bubbles: true }),
-      );
-      rightHandle.dispatchEvent(
-        new PointerEvent("pointerup", { clientX: 400, bubbles: true }),
-      );
+      rightHandle.dispatchEvent(new PointerEvent("pointermove", { clientX: 400, bubbles: true }));
+      rightHandle.dispatchEvent(new PointerEvent("pointerup", { clientX: 400, bubbles: true }));
 
       await app.updateComplete;
       expect(window.sessionStorage.getItem("dndm.rail.dm.right")).toBe("420");
@@ -228,30 +222,45 @@ describe("<dndm-app> Application Shell", () => {
       rightHandle.dispatchEvent(
         new PointerEvent("pointerdown", { clientX: 500, button: 0, bubbles: true }),
       );
-      rightHandle.dispatchEvent(
-        new PointerEvent("pointermove", { clientX: 100, bubbles: true }),
-      );
-      rightHandle.dispatchEvent(
-        new PointerEvent("pointerup", { clientX: 100, bubbles: true }),
-      );
+      rightHandle.dispatchEvent(new PointerEvent("pointermove", { clientX: 100, bubbles: true }));
+      rightHandle.dispatchEvent(new PointerEvent("pointerup", { clientX: 100, bubbles: true }));
 
       await app.updateComplete;
       expect(window.sessionStorage.getItem("dndm.rail.dm.right")).toBe("600");
       expect(app.style.getPropertyValue("--dndm-rail-w-right")).toBe("600px");
 
-      // 3. Simulate drag below min 200px: move right by 500 -> clamped to 200
+      // 3. Simulate drag below min 200px (above collapse threshold 140px): move right by 420 -> 600 - 420 = 180 -> clamped to 200
       rightHandle.dispatchEvent(
         new PointerEvent("pointerdown", { clientX: 500, button: 0, bubbles: true }),
       );
-      rightHandle.dispatchEvent(
-        new PointerEvent("pointermove", { clientX: 1000, bubbles: true }),
-      );
-      rightHandle.dispatchEvent(
-        new PointerEvent("pointerup", { clientX: 1000, bubbles: true }),
-      );
+      rightHandle.dispatchEvent(new PointerEvent("pointermove", { clientX: 920, bubbles: true }));
+      rightHandle.dispatchEvent(new PointerEvent("pointerup", { clientX: 920, bubbles: true }));
 
       await app.updateComplete;
       expect(window.sessionStorage.getItem("dndm.rail.dm.right")).toBe("200");
+      expect(app.style.getPropertyValue("--dndm-rail-w-right")).toBe("200px");
+
+      // 4. Simulate drag below collapse threshold (<140px): auto-collapses and preserves starting width (200)
+      rightHandle.dispatchEvent(
+        new PointerEvent("pointerdown", { clientX: 500, button: 0, bubbles: true }),
+      );
+      rightHandle.dispatchEvent(new PointerEvent("pointermove", { clientX: 1000, bubbles: true }));
+      rightHandle.dispatchEvent(new PointerEvent("pointerup", { clientX: 1000, bubbles: true }));
+
+      await app.updateComplete;
+      const playingEl = app.querySelector(".dnd-mapper-playing");
+      expect(playingEl?.classList.contains("dnd-mapper-playing--right-collapsed")).toBe(true);
+      // Persisted width remembers where pointer started (200), avoiding uncollapsing to narrowest width
+      expect(window.sessionStorage.getItem("dndm.rail.dm.right")).toBe("200");
+      expect(app.style.getPropertyValue("--dndm-rail-w-right")).toBe("200px");
+
+      // 5. Uncollapsing restores back to the drag start width (200px)
+      rightHandle.dispatchEvent(
+        new PointerEvent("pointerdown", { clientX: 500, button: 0, bubbles: true }),
+      );
+      rightHandle.dispatchEvent(new PointerEvent("pointerup", { clientX: 500, bubbles: true }));
+      await app.updateComplete;
+      expect(playingEl?.classList.contains("dnd-mapper-playing--right-collapsed")).toBe(false);
       expect(app.style.getPropertyValue("--dndm-rail-w-right")).toBe("200px");
     });
 
@@ -297,12 +306,8 @@ describe("<dndm-app> Application Shell", () => {
       leftHandle.dispatchEvent(
         new PointerEvent("pointerdown", { clientX: 200, button: 0, bubbles: true }),
       );
-      leftHandle.dispatchEvent(
-        new PointerEvent("pointermove", { clientX: 202, bubbles: true }),
-      );
-      leftHandle.dispatchEvent(
-        new PointerEvent("pointerup", { clientX: 202, bubbles: true }),
-      );
+      leftHandle.dispatchEvent(new PointerEvent("pointermove", { clientX: 202, bubbles: true }));
+      leftHandle.dispatchEvent(new PointerEvent("pointerup", { clientX: 202, bubbles: true }));
 
       await app.updateComplete;
       const playingEl = app.querySelector(".dnd-mapper-playing");
@@ -312,12 +317,48 @@ describe("<dndm-app> Application Shell", () => {
       leftHandle.dispatchEvent(
         new PointerEvent("pointerdown", { clientX: 200, button: 0, bubbles: true }),
       );
-      leftHandle.dispatchEvent(
-        new PointerEvent("pointerup", { clientX: 200, bubbles: true }),
-      );
+      leftHandle.dispatchEvent(new PointerEvent("pointerup", { clientX: 200, bubbles: true }));
 
       await app.updateComplete;
       expect(playingEl?.classList.contains("dnd-mapper-playing--left-collapsed")).toBe(false);
+    });
+
+    it("uncollapses and resizes when dragging outward past threshold from collapsed state", async () => {
+      const map1 = makeMap("map-1", "Dungeon");
+      const controller = createMockController({
+        playerId: "dm-user",
+        isOwner: true,
+        state: {
+          phase: "Playing",
+          maps: [map1],
+          activeMapId: "map-1",
+        },
+      });
+      app.attach(controller);
+      await app.updateComplete;
+
+      const leftHandle = app.querySelector(".dndm-rail-resize--left") as HTMLElement;
+      const playingEl = app.querySelector(".dnd-mapper-playing");
+
+      // First, collapse the rail
+      leftHandle.dispatchEvent(
+        new PointerEvent("pointerdown", { clientX: 200, button: 0, bubbles: true }),
+      );
+      leftHandle.dispatchEvent(new PointerEvent("pointerup", { clientX: 200, bubbles: true }));
+      await app.updateComplete;
+      expect(playingEl?.classList.contains("dnd-mapper-playing--left-collapsed")).toBe(true);
+
+      // Drag outward from collapsed state past threshold: start at 28px, drag right by 250px
+      leftHandle.dispatchEvent(
+        new PointerEvent("pointerdown", { clientX: 28, button: 0, bubbles: true }),
+      );
+      leftHandle.dispatchEvent(new PointerEvent("pointermove", { clientX: 278, bubbles: true }));
+      leftHandle.dispatchEvent(new PointerEvent("pointerup", { clientX: 278, bubbles: true }));
+
+      await app.updateComplete;
+      expect(playingEl?.classList.contains("dnd-mapper-playing--left-collapsed")).toBe(false);
+      expect(window.sessionStorage.getItem("dndm.rail.dm.left")).toBe("250");
+      expect(app.style.getPropertyValue("--dndm-rail-w-left")).toBe("250px");
     });
   });
 

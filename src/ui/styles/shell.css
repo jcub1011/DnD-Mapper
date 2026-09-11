@@ -2,9 +2,16 @@
    Light DOM styles reaching all Lit components. Prefix: dndm- */
 
 /* ─── Playing Phase Shell Layout ────────────────────────────── */
-.dnd-mapper-playing {
+dndm-app {
   --dndm-rail-w-left: 280px;
   --dndm-rail-w-right: 320px;
+  --dndm-rail-collapsed: 28px;
+  --dndm-rollfooter-h: 2.75rem;
+  --dndm-rail-pad-left: 0px;
+  --dndm-rail-pad-right: var(--dndm-rail-w-right);
+}
+
+.dnd-mapper-playing {
   --dndm-rail-collapsed: 28px;
   --dndm-rollfooter-h: 2.75rem;
 
@@ -93,6 +100,55 @@
   flex: 1 1 auto;
   min-height: 0;
   container-type: inline-size;
+
+  --dndm-scrollbar-thumb: rgba(196, 116, 56, 0.35);
+  --dndm-scrollbar-track: rgba(12, 10, 8, 0.35);
+  scrollbar-width: thin;
+  scrollbar-color: var(--dndm-scrollbar-thumb) var(--dndm-scrollbar-track);
+}
+
+.dndm-rail-content:hover {
+  --dndm-scrollbar-thumb: rgba(196, 116, 56, 0.65);
+}
+
+/* Slim custom scrollbar for all scrollable containers inside rails */
+.dndm-rail [class*="scroll"],
+.dndm-rail .dndm-panel-body--scroll,
+.dndm-rail .dndm-character-sheet,
+.dndm-rail .dndm-roll-log {
+  --dndm-scrollbar-thumb: rgba(196, 116, 56, 0.35);
+  --dndm-scrollbar-track: rgba(12, 10, 8, 0.35);
+  scrollbar-width: thin;
+  scrollbar-color: var(--dndm-scrollbar-thumb) var(--dndm-scrollbar-track);
+}
+
+.dndm-rail [class*="scroll"]:hover,
+.dndm-rail .dndm-panel-body--scroll:hover,
+.dndm-rail .dndm-character-sheet:hover,
+.dndm-rail .dndm-roll-log:hover {
+  --dndm-scrollbar-thumb: rgba(196, 116, 56, 0.65);
+}
+
+@supports not (scrollbar-color: auto) {
+  .dndm-rail-content::-webkit-scrollbar,
+  .dndm-rail ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .dndm-rail-content::-webkit-scrollbar-track,
+  .dndm-rail ::-webkit-scrollbar-track {
+    background: rgba(12, 10, 8, 0.35);
+    border-radius: 3px;
+  }
+  .dndm-rail-content::-webkit-scrollbar-thumb,
+  .dndm-rail ::-webkit-scrollbar-thumb {
+    background: rgba(196, 116, 56, 0.35);
+    border-radius: 3px;
+  }
+  .dndm-rail-content::-webkit-scrollbar-thumb:hover,
+  .dndm-rail ::-webkit-scrollbar-thumb:hover {
+    background: rgba(196, 116, 56, 0.65);
+  }
 }
 
 .dnd-mapper-playing--left-collapsed .dndm-rail--left .dndm-rail-content,
