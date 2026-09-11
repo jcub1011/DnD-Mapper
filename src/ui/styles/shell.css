@@ -54,7 +54,9 @@
   background:
     var(--dndm-noise),
     linear-gradient(180deg, rgba(20, 17, 14, 0.72) 0%, rgba(16, 13, 11, 0.78) 100%);
-  background-size: 240px 240px, 100% 100%;
+  background-size:
+    240px 240px,
+    100% 100%;
   background-repeat: repeat, no-repeat;
   backdrop-filter: blur(10px) saturate(0.85);
   -webkit-backdrop-filter: blur(10px) saturate(0.85);
@@ -216,7 +218,9 @@
   font-size: 0.95rem;
   cursor: pointer;
   line-height: 1;
-  transition: background 120ms ease, border-color 120ms ease;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
 }
 
 .dndm-zoom-btn:hover {
@@ -319,7 +323,9 @@
   background: var(--dndm-bg-deep);
   border: 1px solid var(--dndm-border);
   cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
 }
 
 .dndm-mapsw-row:hover {
@@ -600,11 +606,11 @@
   align-items: center;
   gap: 0.6rem;
   padding: 0.55rem 0.85rem;
-  background:
-    var(--dndm-noise),
-    var(--dndm-panel-vignette),
-    var(--dndm-panel-gradient);
-  background-size: 240px 240px, 100% 100%, 100% 100%;
+  background: var(--dndm-noise), var(--dndm-panel-vignette), var(--dndm-panel-gradient);
+  background-size:
+    240px 240px,
+    100% 100%,
+    100% 100%;
   background-repeat: repeat, no-repeat, no-repeat;
   color: var(--dndm-text);
   border: 1px solid var(--dndm-border);
@@ -630,18 +636,36 @@
   line-height: 1.35;
 }
 
-.dndm-toast--success { border-left-color: var(--dndm-success); }
-.dndm-toast--success .dndm-toast-icon { color: var(--dndm-success); }
+.dndm-toast--success {
+  border-left-color: var(--dndm-success);
+}
+.dndm-toast--success .dndm-toast-icon {
+  color: var(--dndm-success);
+}
 
-.dndm-toast--warn { border-left-color: var(--dndm-ember-hi); }
-.dndm-toast--warn .dndm-toast-icon { color: var(--dndm-ember-hi); }
+.dndm-toast--warn {
+  border-left-color: var(--dndm-ember-hi);
+}
+.dndm-toast--warn .dndm-toast-icon {
+  color: var(--dndm-ember-hi);
+}
 
-.dndm-toast--danger { border-left-color: var(--dndm-danger); }
-.dndm-toast--danger .dndm-toast-icon { color: var(--dndm-danger); }
+.dndm-toast--danger {
+  border-left-color: var(--dndm-danger);
+}
+.dndm-toast--danger .dndm-toast-icon {
+  color: var(--dndm-danger);
+}
 
 @keyframes dndm-toast-in {
-  from { transform: translateX(8px); opacity: 0; }
-  to   { transform: translateX(0);   opacity: 1; }
+  from {
+    transform: translateX(8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
 }
 
 /* ─── Map Settings Modal ────────────────────────────────────── */
@@ -693,13 +717,22 @@
   font-family: var(--font-primary);
   background:
     var(--dndm-noise),
-    radial-gradient(ellipse at 50% 18%, rgba(196, 116, 56, 0.10), transparent 60%),
-    var(--dndm-void);
-  background-size: 240px 240px, 100% 100%, 100% 100%;
+    radial-gradient(ellipse at 50% 18%, rgba(196, 116, 56, 0.1), transparent 60%), var(--dndm-void);
+  background-size:
+    240px 240px,
+    100% 100%,
+    100% 100%;
   background-repeat: repeat, no-repeat, no-repeat;
   overflow-y: auto;
   pointer-events: auto;
   z-index: 20;
+}
+
+.dndm-lobby-view dndm-permissions {
+  display: block;
+  width: 100%;
+  max-width: 760px;
+  box-sizing: border-box;
 }
 
 .dndm-lobby-view .card {
@@ -708,12 +741,12 @@
   max-width: 760px;
   box-sizing: border-box;
   background-color: var(--dndm-bg-panel);
-  background-image:
-    var(--dndm-noise),
-    var(--dndm-panel-vignette),
-    var(--dndm-panel-gradient);
+  background-image: var(--dndm-noise), var(--dndm-panel-vignette), var(--dndm-panel-gradient);
   background-position: center, center, center;
-  background-size: 240px 240px, 100% 100%, 100% 100%;
+  background-size:
+    240px 240px,
+    100% 100%,
+    100% 100%;
   background-repeat: repeat, no-repeat, no-repeat;
   border: 1px solid var(--dndm-border);
   border-radius: 6px;
@@ -721,6 +754,68 @@
   box-shadow:
     inset 0 1px 0 var(--dndm-highlight),
     0 4px 14px rgba(0, 0, 0, 0.6);
+}
+
+/* ─── Lobby Game Settings (Responsive Wrapping Row) ─────────── */
+.dndm-lobby-view .dndm-permp .dndm-panel-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 0;
+  margin-top: 12px;
+}
+
+.dndm-lobby-view .dndm-permp .dndm-panel-section {
+  flex: 1 1 calc(50% - 12px);
+  min-width: 280px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 10px 14px;
+  border-top: none;
+  background: var(--dndm-bg-panel-2, #221b16);
+  border: 1px solid var(--dndm-border);
+  border-radius: 4px;
+  box-shadow: inset 0 1px 0 var(--dndm-highlight);
+}
+
+.dndm-lobby-view .dndm-permp .dndm-panel-section:has(.dndm-pillgroup) {
+  justify-content: flex-start;
+}
+
+.dndm-lobby-view .dndm-permp .dndm-pillgroup {
+  display: flex;
+  width: 100%;
+}
+
+.dndm-lobby-view .dndm-permp .dndm-pillgroup button {
+  flex: 1 1 0;
+  text-align: center;
+  padding: 0.45rem 0.4rem;
+  font-size: 0.88rem;
+  white-space: nowrap;
+}
+
+.dndm-lobby-view .dndm-permp .dndm-pillgroup button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.dndm-lobby-view .dndm-permp .dndm-panel-section.dndm-permp-reset {
+  flex: 1 1 100%;
+  min-width: 100%;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--dndm-ink-soft);
+  border-radius: 0;
+  box-shadow: none;
+  padding: 12px 0 0;
+  margin-top: 4px;
+  min-height: auto;
+  align-items: flex-start;
 }
 
 .dndm-lobby-view h3,
@@ -761,7 +856,10 @@
 
 .dndm-lobby-view button.player-chip {
   cursor: pointer;
-  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease;
 }
 
 .dndm-lobby-view button.player-chip:hover {

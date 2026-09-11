@@ -294,7 +294,9 @@ describe("UI Panels and Canvas Controls (07 — UI Shell)", () => {
 
       expect(el.textContent).toContain("Image");
 
-      const lockInput = el.querySelector('.dndm-imgi-lock input[type="checkbox"]') as HTMLInputElement;
+      const lockInput = el.querySelector(
+        '.dndm-imgi-lock input[type="checkbox"]',
+      ) as HTMLInputElement;
       expect(lockInput).not.toBeNull();
       lockInput.checked = true;
       lockInput.dispatchEvent(new Event("change"));
@@ -344,6 +346,31 @@ describe("UI Panels and Canvas Controls (07 — UI Shell)", () => {
       kickBtn.click();
       expect(onKickPlayer).toHaveBeenCalledWith("p2");
 
+      // 3. DM sees embedded Game Settings card with responsive sections and tooltips
+      const permissionsEl = el.querySelector("dndm-permissions");
+      expect(permissionsEl).not.toBeNull();
+      const settingsCard = el.querySelector(".card.dndm-permp--embedded");
+      expect(settingsCard).not.toBeNull();
+      const panelSections = settingsCard?.querySelectorAll(".dndm-panel-section");
+      expect(panelSections?.length).toBeGreaterThan(0);
+
+      // Verify loaded dice subtext is removed
+      expect(settingsCard?.querySelector(".dndm-dice-hint")).toBeNull();
+
+      // Verify all toggles have tooltips
+      const toggles = settingsCard?.querySelectorAll(".dndm-toggle");
+      expect(toggles?.length).toBe(4);
+      toggles?.forEach((toggle) => {
+        expect(toggle.getAttribute("title")).toBeTruthy();
+      });
+
+      // Verify all pillgroup option buttons have individual tooltips
+      const pillButtons = settingsCard?.querySelectorAll(".dndm-pillgroup button");
+      expect(pillButtons?.length).toBe(12); // 4 pillgroups * 3 options = 12
+      pillButtons?.forEach((btn) => {
+        expect(btn.getAttribute("title")).toBeTruthy();
+      });
+
       el.remove();
     });
 
@@ -391,7 +418,9 @@ describe("UI Panels and Canvas Controls (07 — UI Shell)", () => {
       });
 
       // Click "Save as new slot" button
-      const newSaveBtn = el.querySelector('button[aria-label="Save as new slot"]') as HTMLButtonElement;
+      const newSaveBtn = el.querySelector(
+        'button[aria-label="Save as new slot"]',
+      ) as HTMLButtonElement;
       expect(newSaveBtn).not.toBeNull();
       newSaveBtn.click();
       await el.updateComplete;
