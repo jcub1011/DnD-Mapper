@@ -35,6 +35,7 @@ import { ImageLayer, type ImageTransformEvent } from "./imageLayer";
 import { RulerOverlay } from "./rulerOverlay";
 import { FocusOverlay } from "./focusOverlay";
 import { TouchNavigation } from "./touchNavigation";
+import { MarkupLayer } from "./markupLayer";
 
 export type ToolMode = "none" | "markup" | "focus" | "fog" | "ruler";
 
@@ -43,6 +44,7 @@ export class MapScene extends Phaser.Scene {
   private gridGfx!: Phaser.GameObjects.Graphics;
 
   private imageLayer!: ImageLayer;
+  private markupLayer!: MarkupLayer;
   private fogLayer!: FogLayer;
   private tokenLayer!: TokenLayer;
   private rulerOverlay!: RulerOverlay;
@@ -109,7 +111,10 @@ export class MapScene extends Phaser.Scene {
     this.gridGfx = this.add.graphics();
     this.gridGfx.setDepth(DEPTH.GRID);
 
-    // 4. Fog layer (DEPTH.FOG = 3000)
+    // 4. Markup layer (DEPTH.MARKUP = 2000)
+    this.markupLayer = new MarkupLayer(this);
+
+    // 5. Fog layer (DEPTH.FOG = 3000)
     this.fogLayer = new FogLayer(this);
 
     // 5. Token layer (DEPTH.TOKENS = 4000)
@@ -172,6 +177,8 @@ export class MapScene extends Phaser.Scene {
     if (assetSource) this.imageLayer.setAssetSource(assetSource);
     this.imageLayer.setImages(map.images);
 
+    this.markupLayer.setMarkup(map.markupSvg ?? null);
+
     this.fogLayer.setDm(this.isDm);
     this.fogLayer.setupGrid(map.grid);
     if (map.fogMask) {
@@ -184,6 +191,39 @@ export class MapScene extends Phaser.Scene {
 
     this.focusOverlay.setFocusRect(null);
     this.rulerOverlay.clear();
+  }
+
+  updateMarkup(markupSvg: string | null): void {
+    this.markupLayer.setMarkup(markupSvg);
+  }
+
+  setProjectorMode(isProjector: boolean): void {
+    this.fogLayer.setPitchBlack(isProjector);
+    this.tokenLayer.setTweenMoves(isProjector);
+  }
+
+  frameBox(box: { x: number; y: number; width: number; height: number }, duration = 400): void {
+    const cam = this.cameras.main;
+    const centerX = (box.x + box.width / 2) * CELL;
+    const centerY = (box.y + box.height / 2) * CELL;
+    const worldW = Math.max(box.width * CELL, 1);
+    const worldH = Math.max(box.height * CELL, 1);
+    const targetZoom = Math.max(
+      0.01,
+      Math.min(10.0, Math.min(cam.width / worldW, cam.height / worldH) * 0.95),
+    );
+
+    if (duration > 0) {
+      cam.pan(centerX, centerY, duration, "Power2");
+      cam.zoomTo(targetZoom, duration, "Power2");
+    } else {
+      cam.centerOn(centerX, centerY);
+      cam.setZoom(targetZoom);
+    }
+    this.redrawGrid();
+    this.rulerOverlay.redraw();
+    this.focusOverlay.redraw();
+    this.onViewportChanged?.(readViewport(cam, CELL));
   }
 
   updateGrid(grid: GridConfig): void {
@@ -520,6 +560,7 @@ export class MapScene extends Phaser.Scene {
   onContextRestored(): void {
     this.drawBackground();
     this.redrawGrid();
+    this.markupLayer?.onContextRestored();
     this.fogLayer.onContextRestored();
     if (this.activeMap) {
       this.imageLayer.setImages(this.activeMap.images);
@@ -531,6 +572,7 @@ export class MapScene extends Phaser.Scene {
   }
 
   cleanUp(): void {
+    this.markupLayer?.destroy();
     this.imageLayer?.destroy();
     this.fogLayer?.destroy();
     this.tokenLayer?.destroy();

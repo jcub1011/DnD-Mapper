@@ -231,6 +231,97 @@ function isFocusRect(obj: unknown): obj is FocusRect {
 }
 
 /**
+ * Deterministic, sandbox-safe SVG validator for freehand markup.
+ * Strictly enforces an allowlist of harmless vector tags and attributes.
+ * Rejects any scripts, event handlers, hrefs, or external references.
+ */
+export function validateMarkupSvg(svg: string): boolean {
+  if (svg.length > 200_000) return false;
+  const trimmed = svg.trim();
+  if (trimmed.length === 0) return true;
+
+  const openCount = (trimmed.match(/</g) || []).length;
+  const closeCount = (trimmed.match(/>/g) || []).length;
+  if (openCount !== closeCount) return false;
+
+  // 1. Blacklist check: reject script, on*, href, xlink, javascript:, data:, external url
+  if (/<\s*script/i.test(trimmed)) return false;
+  if (/\bon\w+\s*=/i.test(trimmed)) return false;
+  if (/\b(?:href|xlink:href|src|action)\s*=/i.test(trimmed)) return false;
+  if (/javascript\s*:/i.test(trimmed)) return false;
+  if (/data\s*:/i.test(trimmed)) return false;
+  if (/url\s*\(\s*['"]?\s*https?:/i.test(trimmed)) return false;
+
+  // 2. Reject dangerous tags
+  const forbiddenTags =
+    /<\s*\/?\s*(?:iframe|object|embed|foreignobject|style|link|meta|use|animate|set|audio|video|picture|input|form|button)/i;
+  if (forbiddenTags.test(trimmed)) return false;
+
+  // 3. Allowlist tags: only svg, g, path, circle, rect, line, polyline
+  const allowedTags = new Set(["svg", "g", "path", "circle", "rect", "line", "polyline"]);
+
+  const tagRegex = /<\s*(\/?)\s*([a-zA-Z0-9:-]+)([^>]*)>/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = tagRegex.exec(trimmed)) !== null) {
+    const tagName = match[2].toLowerCase();
+    if (!allowedTags.has(tagName)) {
+      return false;
+    }
+
+    const attrs = match[3];
+    if (attrs && attrs.trim().length > 0) {
+      const attrRegex = /([a-zA-Z0-9:-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=]+)))?/g;
+      let attrMatch: RegExpExecArray | null;
+      while ((attrMatch = attrRegex.exec(attrs)) !== null) {
+        const attrName = attrMatch[1].toLowerCase();
+        const attrVal = attrMatch[2] ?? attrMatch[3] ?? attrMatch[4] ?? "";
+
+        const allowedAttrs = new Set([
+          "stroke",
+          "stroke-width",
+          "stroke-linecap",
+          "stroke-linejoin",
+          "stroke-opacity",
+          "stroke-dasharray",
+          "fill",
+          "fill-opacity",
+          "fill-rule",
+          "d",
+          "r",
+          "cx",
+          "cy",
+          "x",
+          "y",
+          "width",
+          "height",
+          "opacity",
+          "transform",
+          "viewbox",
+          "xmlns",
+          "class",
+          "id",
+        ]);
+
+        if (!allowedAttrs.has(attrName)) {
+          return false;
+        }
+
+        if (
+          /javascript\s*:/i.test(attrVal) ||
+          /data\s*:/i.test(attrVal) ||
+          /url\s*\(\s*['"]?\s*https?:/i.test(attrVal)
+        ) {
+          return false;
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
+/**
  * Validates untrusted client action, applies mutation if legal, and returns
  * the updated state and the narrowed absolute patch to broadcast.
  * Returning null means REJECTED (anti-cheat: nothing is broadcast).
@@ -697,6 +788,55 @@ export function applyIntent(
           kind: "fog",
           mapId: targetMap.id,
           mask: maskB64,
+        },
+      };
+    }
+
+    // ── Markup (Phase 10) ───────────────────────────────────────────────────
+    case "updateMarkup": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.mapId !== "string") return null;
+      if (intent.markupSvg !== null && typeof intent.markupSvg !== "string") return null;
+      if (typeof intent.markupSvg === "string") {
+        if (intent.markupSvg.length > 200_000) return null;
+        if (!validateMarkupSvg(intent.markupSvg)) return null;
+      }
+      const fullMaps = state.maps.filter(isFullMap);
+      const targetMap = fullMaps.find((m) => m.id === intent.mapId);
+      if (!targetMap) return null;
+
+      const nextMarkup = intent.markupSvg;
+      const nextMaps = state.maps.map((m) =>
+        m.id === targetMap.id && isFullMap(m) ? { ...m, markupSvg: nextMarkup } : m,
+      );
+      const nextState: DndMapperState = { ...state, maps: nextMaps };
+      return {
+        state: nextState,
+        patch: {
+          kind: "markup",
+          mapId: targetMap.id,
+          markupSvg: nextMarkup,
+        },
+      };
+    }
+
+    case "clearMarkup": {
+      if (!isDm(state, fromId)) return null;
+      if (typeof intent.mapId !== "string") return null;
+      const fullMaps = state.maps.filter(isFullMap);
+      const targetMap = fullMaps.find((m) => m.id === intent.mapId);
+      if (!targetMap) return null;
+
+      const nextMaps = state.maps.map((m) =>
+        m.id === targetMap.id && isFullMap(m) ? { ...m, markupSvg: null } : m,
+      );
+      const nextState: DndMapperState = { ...state, maps: nextMaps };
+      return {
+        state: nextState,
+        patch: {
+          kind: "markup",
+          mapId: targetMap.id,
+          markupSvg: null,
         },
       };
     }

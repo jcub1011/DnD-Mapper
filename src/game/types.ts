@@ -101,6 +101,9 @@ export type Intent =
     }
   | { readonly kind: "fillFog"; readonly mapId: string }
   | { readonly kind: "clearFog"; readonly mapId: string }
+  // markup (Phase 10)
+  | { readonly kind: "updateMarkup"; readonly mapId: string; readonly markupSvg: string | null }
+  | { readonly kind: "clearMarkup"; readonly mapId: string }
   // viewport
   | { readonly kind: "setFocusRect"; readonly rect: FocusRect | null }
   | {
@@ -266,7 +269,8 @@ export type Patch =
   | { readonly kind: "globalRollTemplates"; readonly templates: readonly RollTemplate[] }
   | { readonly kind: "loadedDiceRules"; readonly rules: readonly LoadedDiceRule[] }
   | { readonly kind: "hostKeys"; readonly keys: readonly string[] }
-  | { readonly kind: "combat"; readonly combat: CombatState | null };
+  | { readonly kind: "combat"; readonly combat: CombatState | null }
+  | { readonly kind: "markup"; readonly mapId: string; readonly markupSvg: string | null };
 
 /** Import chunk budget for campaign streaming (~39% of 512 KiB cap). */
 export const CHUNK_BUDGET = 200_000;

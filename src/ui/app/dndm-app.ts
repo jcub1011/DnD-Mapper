@@ -56,6 +56,12 @@ import "../panels/dndm-saves-panel";
 import "../panels/dndm-token-panel";
 import "../toast/dndm-toast";
 import "../upload/dndm-image-upload";
+import "../markup/dndm-markup-overlay";
+import "../display/dndm-display-roll-ticker";
+import {
+  filterDisplayImages,
+  filterDisplayTokens,
+} from "../display/displayProjection";
 import { resolveActiveTurnTokenId } from "../../game/combat";
 import {
   getReadableTextColor,
@@ -156,8 +162,11 @@ export class DndmApp extends GameElement {
   @state() private rollHistoryOpen = false;
   @state() private diceSoundEnabled = false;
   @state() private diceScale: number = loadDiceScale(DEFAULT_DICE_SCALE);
+  @state() private projectorMode =
+    typeof window !== "undefined" && window.location?.search?.includes("view=display");
 
   private seenRollIds = new Set<string>();
+  private displaySyncChannel?: BroadcastChannel;
 
   // Drag resizing tracking
   private activeResizeSide: "left" | "right" | null = null;
@@ -175,18 +184,36 @@ export class DndmApp extends GameElement {
     }
   };
 
+  private readonly onEscapeKey = (e: KeyboardEvent): void => {
+    if (e.key === "Escape" && this.projectorMode) {
+      this.toggleProjectorMode();
+    }
+  };
+
   override connectedCallback(): void {
     super.connectedCallback();
     document.addEventListener("click", this.onGlobalPanelCollapseClick);
     window.addEventListener("dndm-open-sheet", this.onOpenSheet);
+    window.addEventListener("keydown", this.onEscapeKey);
     diceOverlay.setDiceScale(this.diceScale);
     void this.libraryService.attach();
+
+    if (typeof BroadcastChannel !== "undefined") {
+      this.displaySyncChannel = new BroadcastChannel("dndm-display-sync");
+      this.displaySyncChannel.onmessage = (event: MessageEvent) => {
+        if (event.data?.type === "state-sync" && this.projectorMode) {
+          this.onStateChanged(event.data.state);
+        }
+      };
+    }
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     document.removeEventListener("click", this.onGlobalPanelCollapseClick);
     window.removeEventListener("dndm-open-sheet", this.onOpenSheet);
+    window.removeEventListener("keydown", this.onEscapeKey);
+    this.displaySyncChannel?.close();
     cancelAnimationFrame(this.rafId);
     this.controller?.destroy();
     this.hostInputTracker?.destroy();
@@ -488,25 +515,81 @@ export class DndmApp extends GameElement {
     this.updateRailCssVars();
   }
 
+  private toggleProjectorMode(): void {
+    this.projectorMode = !this.projectorMode;
+    this.onStateChanged(this.match);
+  }
+
   private onStateChanged(state: Readonly<MatchState>): void {
     const prevRollLog = this.match?.rollLog ?? [];
     const prevMapId = this.match.activeMapId;
     this.match = state;
 
+    if (this.displaySyncChannel && !this.projectorMode) {
+      try {
+        this.displaySyncChannel.postMessage({ type: "state-sync", state });
+      } catch {
+        // channel could be closed
+      }
+    }
+
     const map = fx.map();
     if (map) {
       const activeMap = this.activeMap;
       if (activeMap) {
-        if (prevMapId !== activeMap.id) {
-          map.setMap(activeMap, this.isDm, this.assetSource);
-          map.updateSheets(state.sheets);
+        if (this.projectorMode) {
+          map.setProjectorMode(true);
+          const displayTokens = filterDisplayTokens(
+            activeMap.tokens,
+            activeMap.fogMask,
+            activeMap.grid,
+          );
+          const displayImages = filterDisplayImages(
+            activeMap.images,
+            activeMap.fogMask,
+            activeMap.grid,
+          );
+          if (prevMapId !== activeMap.id) {
+            map.setMap(
+              { ...activeMap, tokens: displayTokens, images: displayImages },
+              false,
+              this.assetSource,
+            );
+            map.updateSheets(state.sheets);
+          } else {
+            map.updateGrid(activeMap.grid);
+            map.updateTokens(displayTokens);
+            map.updateImages(displayImages);
+            map.updateSheets(state.sheets);
+            if (activeMap.fogMask) {
+              map.updateFog(activeMap.fogMask);
+            }
+            map.updateMarkup(activeMap.markupSvg ?? null);
+          }
+          if (state.focusRect) {
+            map.frameBox(state.focusRect);
+          } else {
+            map.frameBox({
+              x: 0,
+              y: 0,
+              width: activeMap.grid.widthCells,
+              height: activeMap.grid.heightCells,
+            });
+          }
         } else {
-          map.updateGrid(activeMap.grid);
-          map.updateTokens(activeMap.tokens);
-          map.updateImages(activeMap.images);
-          map.updateSheets(state.sheets);
-          if (activeMap.fogMask) {
-            map.updateFog(activeMap.fogMask);
+          map.setProjectorMode(false);
+          if (prevMapId !== activeMap.id) {
+            map.setMap(activeMap, this.isDm, this.assetSource);
+            map.updateSheets(state.sheets);
+          } else {
+            map.updateGrid(activeMap.grid);
+            map.updateTokens(activeMap.tokens);
+            map.updateImages(activeMap.images);
+            map.updateSheets(state.sheets);
+            if (activeMap.fogMask) {
+              map.updateFog(activeMap.fogMask);
+            }
+            map.updateMarkup(activeMap.markupSvg ?? null);
           }
         }
       }
@@ -514,6 +597,7 @@ export class DndmApp extends GameElement {
       map.setFocusRect(state.focusRect);
 
       if (
+        !this.projectorMode &&
         state.pendingCenterRequest &&
         state.pendingCenterRequest.nonce !== this.lastCenterNonce
       ) {
@@ -614,6 +698,29 @@ export class DndmApp extends GameElement {
     const active = this.activeMap;
     const myToken: Token | null =
       active?.tokens.find((t) => t.ownerUserId === me || t.representsUserId === me) ?? null;
+
+    if (this.projectorMode) {
+      return html`
+        <div class="dndm-display-view">
+          <button
+            class="dndm-display-exit-btn"
+            type="button"
+            title="Exit Theater Mode (Esc)"
+            @click=${() => this.toggleProjectorMode()}
+          >
+            ⛶ Exit Theater (Esc)
+          </button>
+          <div class="dndm-dice-canvas-overlay" id="dndm-dice-overlay"></div>
+          <dndm-display-roll-ticker
+            .rolls=${this.match.rollLog ?? []}
+            .tokens=${active?.tokens ?? []}
+            .isDm=${this.isDm}
+            .currentUserId=${me}
+            .rollsVisibleToPlayers=${settings.rollsVisibleToPlayers}
+          ></dndm-display-roll-ticker>
+        </div>
+      `;
+    }
 
     return html`
       <div
@@ -770,6 +877,22 @@ export class DndmApp extends GameElement {
                       >
                         ${this.lobbyOpen ? "Close Lobby" : "Open Lobby"}
                       </button>
+                      <button
+                        class="dndm-btn dndm-btn--ghost dndm-btn--small"
+                        type="button"
+                        title="Enter Projector Theater Mode"
+                        @click=${() => this.toggleProjectorMode()}
+                      >
+                        📽️ Theater
+                      </button>
+                      <button
+                        class="dndm-btn dndm-btn--ghost dndm-btn--small"
+                        type="button"
+                        title="Open Projector in a new window"
+                        @click=${() => window.open("?view=display", "_blank")}
+                      >
+                        ↗ Popout
+                      </button>
                     </div>
                   </section>
                 </div>
@@ -808,6 +931,21 @@ export class DndmApp extends GameElement {
               }
             }}
           ></dndm-initiative-banner>
+
+          ${this.isDm && this.toolMode === "markup" && active
+            ? html`
+                <dndm-markup-overlay
+                  .activeMap=${active}
+                  .onCommitMarkup=${(svg: string | null) => {
+                    this.send({ kind: "updateMarkup", mapId: active.id, markupSvg: svg });
+                  }}
+                  .onClose=${() => {
+                    this.toolMode = "none";
+                    fx.map()?.setToolMode("none");
+                  }}
+                ></dndm-markup-overlay>
+              `
+            : nothing}
           ${!active
             ? html`
                 <div class="dndm-empty">

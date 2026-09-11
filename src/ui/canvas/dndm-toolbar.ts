@@ -64,6 +64,11 @@ export class DndmToolbar extends GameElement {
     this.onSetToolMode?.(next);
   }
 
+  private toggleMarkup(): void {
+    const next: ToolMode = this.toolMode === "markup" ? "none" : "markup";
+    this.onSetToolMode?.(next);
+  }
+
   private toggleRuler(): void {
     const next: ToolMode = this.toolMode === "ruler" ? "none" : "ruler";
     this.onSetToolMode?.(next);
@@ -131,6 +136,15 @@ export class DndmToolbar extends GameElement {
         ${this.isDm
           ? html`
               <span class="dndm-toolbar-sep" aria-hidden="true"></span>
+
+              <button
+                class="dndm-zoom-btn ${this.toolMode === "markup" ? "active" : ""}"
+                type="button"
+                title="Markup — draw freehand vector lines and notes on the map"
+                @click=${() => this.toggleMarkup()}
+              >
+                ✎
+              </button>
 
               <button
                 class="dndm-zoom-btn ${this.toolMode === "focus" ? "active" : ""}"

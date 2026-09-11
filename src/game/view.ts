@@ -91,6 +91,15 @@ export class MatchView {
         break;
       }
 
+      case "markup": {
+        const nextMaps = this._state.maps.map((m) => {
+          if (!isFullMap(m) || m.id !== patch.mapId) return m;
+          return { ...m, markupSvg: patch.markupSvg };
+        });
+        this._state = { ...this._state, maps: nextMaps };
+        break;
+      }
+
       case "image": {
         const image = patch.image;
         let found = false;

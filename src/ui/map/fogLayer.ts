@@ -22,6 +22,7 @@ export class FogLayer {
   private widthCells = 0;
   private heightCells = 0;
   private isDm = false;
+  private isPitchBlack = false;
 
   // Optimistic painting state
   public readonly strokeCells = new Set<number>();
@@ -32,10 +33,17 @@ export class FogLayer {
     this.previewGfx.setDepth(DEPTH.FOG + 1);
   }
 
+  setPitchBlack(pitchBlack: boolean): void {
+    this.isPitchBlack = pitchBlack;
+    if (this.fogImage) {
+      this.fogImage.setAlpha(this.isPitchBlack ? 1.0 : this.isDm ? 0.45 : 1.0);
+    }
+  }
+
   setDm(isDm: boolean): void {
     this.isDm = isDm;
     if (this.fogImage) {
-      this.fogImage.setAlpha(this.isDm ? 0.45 : 1.0);
+      this.fogImage.setAlpha(this.isPitchBlack ? 1.0 : this.isDm ? 0.45 : 1.0);
     }
   }
 
@@ -91,7 +99,7 @@ export class FogLayer {
     this.fogImage.setOrigin(0, 0);
     this.fogImage.setDisplaySize(widthCells * CELL, heightCells * CELL);
     this.fogImage.setDepth(DEPTH.FOG);
-    this.fogImage.setAlpha(this.isDm ? 0.45 : 1.0);
+    this.fogImage.setAlpha(this.isPitchBlack ? 1.0 : this.isDm ? 0.45 : 1.0);
 
     // Reapply mask if present
     if (this.currentRawMask) {

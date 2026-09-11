@@ -40,6 +40,7 @@ export class TokenLayer {
     lineColor: "#222",
   };
   private isDm = false;
+  private tweenMoves = false;
   private expandedStackCell: string | null = null;
   private activeTurnTokenId: string | null = null;
 
@@ -64,6 +65,10 @@ export class TokenLayer {
   setDm(isDm: boolean): void {
     this.isDm = isDm;
     this.updateVisibility();
+  }
+
+  setTweenMoves(enabled: boolean): void {
+    this.tweenMoves = enabled;
   }
 
   setGrid(grid: GridConfig): void {
@@ -130,14 +135,31 @@ export class TokenLayer {
     for (const token of this.tokens) {
       let container = this.tokenContainers.get(token.id);
       const isNew = !container;
+      const targetX = token.x * CELL;
+      const targetY = token.y * CELL;
 
       if (isNew) {
-        container = this.scene.add.container(token.x * CELL, token.y * CELL);
+        container = this.scene.add.container(targetX, targetY);
         container.setDepth(DEPTH.TOKENS);
         this.tokenContainers.set(token.id, container);
       } else {
         container!.removeAll(true);
-        container!.setPosition(token.x * CELL, token.y * CELL);
+        if (
+          this.tweenMoves &&
+          this.scene.tweens &&
+          (Math.abs(container!.x - targetX) > 1 || Math.abs(container!.y - targetY) > 1)
+        ) {
+          this.scene.tweens.killTweensOf(container!);
+          this.scene.tweens.add({
+            targets: container!,
+            x: targetX,
+            y: targetY,
+            duration: 250,
+            ease: "Quad.easeOut",
+          });
+        } else {
+          container!.setPosition(targetX, targetY);
+        }
       }
 
       this.populateTokenContainer(container!, token);
