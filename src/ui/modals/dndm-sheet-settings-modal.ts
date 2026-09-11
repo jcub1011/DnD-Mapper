@@ -3,12 +3,13 @@ import { customElement, property, state } from "lit/decorators.js";
 import type { CharacterSheet, GameMap, MapSummary } from "../../game/domain";
 import { GameElement } from "../app/GameElement";
 import "./dndm-confirm";
+import "./dndm-modal";
 
 export interface SheetSettingsPatch {
   characterName: string;
+  color: string;
   ownerUserId: string | null;
   representsUserId: string | null;
-  color: string;
   scopedMapId: string | null;
 }
 
@@ -38,32 +39,37 @@ export class DndmSheetSettingsModal extends GameElement {
   @property({ attribute: false })
   onCancel?: () => void;
 
+  @property({ attribute: false })
+  onClose?: () => void;
+
   @state() private characterName = "";
+  @state() private color = "#4a90e2";
   @state() private ownerUserId: string | null = null;
   @state() private representsUserId: string | null = null;
-  @state() private color = "#4a90e2";
   @state() private scopedMapId: string | null = null;
   @state() private confirmDelete = false;
 
   override willUpdate(changedProperties: Map<string, unknown>): void {
     if (changedProperties.has("sheet") && this.sheet) {
       this.characterName = this.sheet.characterName;
+      this.color = this.sheet.color || "#4a90e2";
       this.ownerUserId = this.sheet.ownerUserId;
       this.representsUserId = this.sheet.representsUserId;
-      this.color = this.sheet.color || "#4a90e2";
       this.scopedMapId = this.sheet.scopedMapId;
       this.confirmDelete = false;
     }
   }
 
-  private handleSave(): void {
+  private handleSave = (): void => {
     const patch: SheetSettingsPatch = {
       characterName: this.characterName.trim() || "Unnamed Character",
+      color: this.color,
       ownerUserId: this.ownerUserId,
       representsUserId: this.representsUserId,
-      color: this.color,
       scopedMapId: this.scopedMapId,
     };
+
+    this.isOpen = false;
     this.dispatchEvent(
       new CustomEvent<SheetSettingsPatch>("save", {
         bubbles: true,
@@ -72,12 +78,13 @@ export class DndmSheetSettingsModal extends GameElement {
       }),
     );
     this.onSave?.(patch);
-  }
+  };
 
-  private handleDelete(): void {
+  private handleDelete = (): void => {
     if (!this.sheet) return;
     const sheetId = this.sheet.id;
     this.confirmDelete = false;
+    this.isOpen = false;
     this.dispatchEvent(
       new CustomEvent<{ sheetId: string }>("delete", {
         bubbles: true,
@@ -86,29 +93,27 @@ export class DndmSheetSettingsModal extends GameElement {
       }),
     );
     this.onDelete?.(sheetId);
-  }
+  };
 
-  private handleCancel(): void {
+  private handleCancel = (): void => {
     this.confirmDelete = false;
+    if (!this.isOpen) return;
+    this.isOpen = false;
     this.dispatchEvent(new CustomEvent("cancel", { bubbles: true, composed: true }));
+    this.dispatchEvent(new CustomEvent("close", { bubbles: true, composed: true }));
     this.onCancel?.();
-  }
+    this.onClose?.();
+  };
 
-  override render(): TemplateResult | typeof nothing {
-    if (!this.isOpen || !this.sheet) return nothing;
-
+  override render(): TemplateResult {
     return html`
-      <div class="dndm-modal-overlay" @click=${this.handleCancel}>
-        <div
-          class="dndm-modal-card"
-          role="dialog"
-          aria-modal="true"
-          style="max-width: 480px; width: 90%;"
-          @click=${(e: Event) => e.stopPropagation()}
-        >
-          <h3 class="dndm-modal-title">Sheet Settings — ${this.sheet.characterName}</h3>
-
-          <div class="dndm-modal-body" style="display: flex; flex-direction: column; gap: 10px;">
+      <dndm-modal
+        .isOpen=${this.isOpen && !!this.sheet}
+        .modalTitle=${this.sheet ? `Sheet Settings — ${this.sheet.characterName}` : "Sheet Settings"}
+        cardStyle="max-width: 640px; width: 100%;"
+        @close=${this.handleCancel}
+        .body=${html`
+          <div style="display: flex; flex-direction: column; gap: 10px;">
             <label class="dndm-label">
               Character Name
               <input
@@ -133,109 +138,123 @@ export class DndmSheetSettingsModal extends GameElement {
                     this.color = (e.target as HTMLInputElement).value;
                   }}
                 />
-                <span style="font-family: var(--font-mono); font-size: 0.85rem;">${this.color}</span>
+                <span style="font-family: var(--font-mono); font-size: 0.85rem;"
+                  >${this.color}</span
+                >
               </div>
             </label>
 
-            ${this.isDm
-              ? html`
-                  <label class="dndm-label">
-                    Assigned Owner
-                    <select
-                      class="dndm-select"
-                      style="width: 100%; margin-top: 4px;"
-                      .value=${this.ownerUserId ?? ""}
-                      @change=${(e: Event) => {
+            ${
+              this.isDm
+                ? html`
+                    <label class="dndm-label">
+                      Assigned Owner
+                      <select
+                        class="dndm-select"
+                        style="width: 100%; margin-top: 4px;"
+                        .value=${this.ownerUserId ?? ""}
+                        @change=${(e: Event) => {
                         const val = (e.target as HTMLSelectElement).value;
                         this.ownerUserId = val ? val : null;
                       }}
-                    >
-                      <option value="">Unassigned (NPC / DM Controlled)</option>
-                      ${this.roster.map(
-                        (p) => html`<option value=${p.id}>${p.name}</option>`,
-                      )}
-                    </select>
-                  </label>
+                      >
+                        <option value="">Unassigned (NPC / DM Controlled)</option>
+                        ${this.roster.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
+                      </select>
+                    </label>
 
-                  <label class="dndm-label">
-                    Represents Player
-                    <select
-                      class="dndm-select"
-                      style="width: 100%; margin-top: 4px;"
-                      .value=${this.representsUserId ?? ""}
-                      @change=${(e: Event) => {
+                    <label class="dndm-label">
+                      Represents Player
+                      <select
+                        class="dndm-select"
+                        style="width: 100%; margin-top: 4px;"
+                        .value=${this.representsUserId ?? ""}
+                        @change=${(e: Event) => {
                         const val = (e.target as HTMLSelectElement).value;
                         this.representsUserId = val ? val : null;
                       }}
-                    >
-                      <option value="">None</option>
-                      ${this.roster.map(
-                        (p) => html`<option value=${p.id}>${p.name}</option>`,
-                      )}
-                    </select>
-                  </label>
+                      >
+                        <option value="">None</option>
+                        ${this.roster.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
+                      </select>
+                    </label>
 
-                  <label class="dndm-label">
-                    Map Scope
-                    <select
-                      class="dndm-select"
-                      style="width: 100%; margin-top: 4px;"
-                      .value=${this.scopedMapId ?? ""}
-                      @change=${(e: Event) => {
+                    <label class="dndm-label">
+                      Map Scope
+                      <select
+                        class="dndm-select"
+                        style="width: 100%; margin-top: 4px;"
+                        .value=${this.scopedMapId ?? ""}
+                        @change=${(e: Event) => {
                         const val = (e.target as HTMLSelectElement).value;
                         this.scopedMapId = val ? val : null;
                       }}
-                    >
-                      <option value="">Global (All Maps)</option>
-                      ${this.maps.map(
-                        (m) => html`<option value=${m.id}>${m.name}</option>`,
-                      )}
-                    </select>
-                  </label>
-                `
-              : nothing}
+                      >
+                        <option value="">Global (All Maps)</option>
+                        ${this.maps.map((m) => html`<option value=${m.id}>${m.name}</option>`)}
+                      </select>
+                    </label>
+                  `
+                : nothing
+            }
           </div>
-
-          <div class="dndm-modal-actions" style="display: flex; justify-content: space-between;">
+        `}
+        .footer=${html`
+          <div style="display: flex; justify-content: space-between; width: 100%;">
             <div>
-              ${this.isDm
-                ? html`
-                    <button
-                      class="dndm-btn dndm-btn--danger"
-                      @click=${() => {
+              ${
+                this.isDm
+                  ? html`
+                      <button
+                        class="dndm-btn dndm-btn--danger"
+                        type="button"
+                        @click=${() => {
                         this.confirmDelete = true;
                       }}
-                    >
-                      Delete Sheet
-                    </button>
-                  `
-                : nothing}
+                      >
+                        Delete Sheet
+                      </button>
+                    `
+                  : nothing
+              }
             </div>
             <div style="display: flex; gap: 8px;">
-              <button class="dndm-btn" @click=${this.handleCancel}>
+              <button class="dndm-btn dndm-btn--ghost" type="button" @click=${this.handleCancel}>
                 Cancel
               </button>
-              <button
-                class="dndm-btn dndm-btn--primary"
-                @click=${this.handleSave}
-              >
+              <button class="dndm-btn dndm-btn--primary" type="button" @click=${this.handleSave}>
                 Save
               </button>
             </div>
           </div>
-        </div>
-      </div>
+        `}
+      ></dndm-modal>
 
       <dndm-confirm
         .isOpen=${this.confirmDelete}
         modalTitle="Delete Character Sheet"
-        message="Are you sure you want to delete '${this.sheet.characterName}'? Any tokens linked to this sheet will become unlinked."
+        message="Are you sure you want to delete '${this.sheet?.characterName}'? Any tokens linked to this sheet will become unlinked."
         confirmText="Delete"
         @confirm=${this.handleDelete}
         @cancel=${() => {
           this.confirmDelete = false;
         }}
+        @close=${() => {
+          this.confirmDelete = false;
+        }}
+        .onCancel=${() => {
+          this.confirmDelete = false;
+        }}
+        .onClose=${() => {
+          this.confirmDelete = false;
+        }}
       ></dndm-confirm>
     `;
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "dndm-sheet-settings-modal": DndmSheetSettingsModal;
   }
 }

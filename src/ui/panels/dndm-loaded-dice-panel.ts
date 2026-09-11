@@ -164,6 +164,9 @@ export class DndmLoadedDicePanel extends GameElement {
           .maps=${this.maps}
           .onSave=${(data: Omit<LoadedDiceRule, "id">, id?: string) => this.handleSaveRule(data, id)}
           .onClose=${() => this.closeModal()}
+          .onCancel=${() => this.closeModal()}
+          @close=${() => this.closeModal()}
+          @cancel=${() => this.closeModal()}
         ></dndm-loaded-dice-modal>
       </section>
     `;

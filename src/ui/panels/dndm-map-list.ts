@@ -266,6 +266,15 @@ export class DndmMapList extends GameElement {
         .onCancel=${() => {
           this.pendingDeleteMap = null;
         }}
+        .onClose=${() => {
+          this.pendingDeleteMap = null;
+        }}
+        @cancel=${() => {
+          this.pendingDeleteMap = null;
+        }}
+        @close=${() => {
+          this.pendingDeleteMap = null;
+        }}
       ></dndm-confirm>
 
       <dndm-map-settings
@@ -278,6 +287,15 @@ export class DndmMapList extends GameElement {
           this.settingsTargetMap = null;
         }}
         .onCancel=${() => {
+          this.settingsTargetMap = null;
+        }}
+        .onClose=${() => {
+          this.settingsTargetMap = null;
+        }}
+        @cancel=${() => {
+          this.settingsTargetMap = null;
+        }}
+        @close=${() => {
           this.settingsTargetMap = null;
         }}
       ></dndm-map-settings>

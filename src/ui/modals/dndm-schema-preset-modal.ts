@@ -1,7 +1,8 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { AttributePreset } from "../../game/domain";
 import { GameElement } from "../app/GameElement";
+import "./dndm-modal";
 
 interface PresetOption {
   preset: AttributePreset;
@@ -18,7 +19,8 @@ const PRESET_OPTIONS: readonly PresetOption[] = [
   {
     preset: "DnD5ePlusCommonSkills",
     title: "D&D 5e + Common Skills",
-    description: "Core 6 ability scores plus standard 5e skills (Athletics, Stealth, Perception, etc.).",
+    description:
+      "Core 6 ability scores plus standard 5e skills (Athletics, Stealth, Perception, etc.).",
   },
   {
     preset: "SimpleD20",
@@ -46,6 +48,9 @@ export class DndmSchemaPresetModal extends GameElement {
   @property({ attribute: false })
   onCancel?: () => void;
 
+  @property({ attribute: false })
+  onClose?: () => void;
+
   @state() private selectedPreset: AttributePreset = "DnD5eCore";
 
   override willUpdate(changedProperties: Map<string, unknown>): void {
@@ -58,7 +63,8 @@ export class DndmSchemaPresetModal extends GameElement {
     this.selectedPreset = preset;
   }
 
-  private handleApply(): void {
+  private handleApply = (): void => {
+    this.isOpen = false;
     this.dispatchEvent(
       new CustomEvent<{ preset: AttributePreset }>("select-preset", {
         bubbles: true,
@@ -67,27 +73,25 @@ export class DndmSchemaPresetModal extends GameElement {
       }),
     );
     this.onSelectPreset?.(this.selectedPreset);
-  }
+  };
 
-  private handleCancel(): void {
+  private handleCancel = (): void => {
+    if (!this.isOpen) return;
+    this.isOpen = false;
     this.dispatchEvent(new CustomEvent("cancel", { bubbles: true, composed: true }));
+    this.dispatchEvent(new CustomEvent("close", { bubbles: true, composed: true }));
     this.onCancel?.();
-  }
+    this.onClose?.();
+  };
 
-  override render(): TemplateResult | typeof nothing {
-    if (!this.isOpen) return nothing;
-
+  override render(): TemplateResult {
     return html`
-      <div class="dndm-modal-overlay" @click=${this.handleCancel}>
-        <div
-          class="dndm-modal-card"
-          role="dialog"
-          aria-modal="true"
-          @click=${(e: Event) => e.stopPropagation()}
-        >
-          <h3 class="dndm-modal-title">Attribute Schema Preset</h3>
-
-          <div class="dndm-modal-body" style="display: flex; flex-direction: column; gap: 8px;">
+      <dndm-modal
+        .isOpen=${this.isOpen}
+        .modalTitle=${"Attribute Schema Preset"}
+        @close=${this.handleCancel}
+        .body=${html`
+          <div style="display: flex; flex-direction: column; gap: 8px;">
             ${PRESET_OPTIONS.map((opt) => {
               const isCurrent = this.selectedPreset === opt.preset;
               return html`
@@ -102,7 +106,9 @@ export class DndmSchemaPresetModal extends GameElement {
                   "
                   @click=${() => this.handleSelect(opt.preset)}
                 >
-                  <div style="font-weight: bold; color: var(--dndm-color-text); margin-bottom: 2px;">
+                  <div
+                    style="font-weight: bold; color: var(--dndm-color-text); margin-bottom: 2px;"
+                  >
                     ${opt.title}
                   </div>
                   <div style="font-size: 0.8rem; color: var(--dndm-text-dim);">
@@ -112,20 +118,22 @@ export class DndmSchemaPresetModal extends GameElement {
               `;
             })}
           </div>
-
-          <div class="dndm-modal-actions">
-            <button class="dndm-btn" @click=${this.handleCancel}>
-              Cancel
-            </button>
-            <button
-              class="dndm-btn dndm-btn--primary"
-              @click=${this.handleApply}
-            >
-              Apply Preset
-            </button>
-          </div>
-        </div>
-      </div>
+        `}
+        .footer=${html`
+          <button class="dndm-btn dndm-btn--ghost" type="button" @click=${this.handleCancel}>
+            Cancel
+          </button>
+          <button class="dndm-btn dndm-btn--primary" type="button" @click=${this.handleApply}>
+            Apply Preset
+          </button>
+        `}
+      ></dndm-modal>
     `;
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "dndm-schema-preset-modal": DndmSchemaPresetModal;
   }
 }

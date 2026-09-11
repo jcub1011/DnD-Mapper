@@ -1,6 +1,7 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { GameElement } from "../app/GameElement";
+import "./dndm-modal";
 
 @customElement("dndm-confirm")
 export class DndmConfirm extends GameElement {
@@ -25,39 +26,40 @@ export class DndmConfirm extends GameElement {
   @property({ attribute: false })
   onCancel?: () => void;
 
-  private handleConfirm(): void {
+  @property({ attribute: false })
+  onClose?: () => void;
+
+  private handleConfirm = (): void => {
+    this.isOpen = false;
     this.dispatchEvent(new CustomEvent("confirm", { bubbles: true, composed: true }));
     this.onConfirm?.();
-  }
+  };
 
-  private handleCancel(): void {
+  private handleCancel = (): void => {
+    if (!this.isOpen) return;
+    this.isOpen = false;
     this.dispatchEvent(new CustomEvent("cancel", { bubbles: true, composed: true }));
+    this.dispatchEvent(new CustomEvent("close", { bubbles: true, composed: true }));
     this.onCancel?.();
-  }
+    this.onClose?.();
+  };
 
-  override render(): TemplateResult | typeof nothing {
-    if (!this.isOpen) return nothing;
-
+  override render(): TemplateResult {
     return html`
-      <div class="dndm-modal-overlay" @click=${this.handleCancel}>
-        <div
-          class="dndm-modal-card"
-          role="dialog"
-          aria-modal="true"
-          @click=${(e: Event) => e.stopPropagation()}
-        >
-          <h3 class="dndm-modal-title">${this.modalTitle}</h3>
-          <p class="dndm-modal-message">${this.message}</p>
-          <div class="dndm-modal-actions">
-            <button class="dndm-btn dndm-btn--ghost" type="button" @click=${this.handleCancel}>
-              ${this.cancelText}
-            </button>
-            <button class="dndm-btn dndm-btn--danger" type="button" @click=${this.handleConfirm}>
-              ${this.confirmText}
-            </button>
-          </div>
-        </div>
-      </div>
+      <dndm-modal
+        .isOpen=${this.isOpen}
+        .modalTitle=${this.modalTitle}
+        @close=${this.handleCancel}
+        .body=${html`<p class="dndm-modal-message">${this.message}</p>`}
+        .footer=${html`
+          <button class="dndm-btn dndm-btn--ghost" type="button" @click=${this.handleCancel}>
+            ${this.cancelText}
+          </button>
+          <button class="dndm-btn dndm-btn--danger" type="button" @click=${this.handleConfirm}>
+            ${this.confirmText}
+          </button>
+        `}
+      ></dndm-modal>
     `;
   }
 }

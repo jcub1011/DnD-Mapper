@@ -128,6 +128,15 @@ export class DndmStatusEffects extends GameElement {
         @cancel=${() => {
           this.libraryOpen = false;
         }}
+        @close=${() => {
+          this.libraryOpen = false;
+        }}
+        .onCancel=${() => {
+          this.libraryOpen = false;
+        }}
+        .onClose=${() => {
+          this.libraryOpen = false;
+        }}
       ></dndm-status-effect-library-modal>
     `;
   }

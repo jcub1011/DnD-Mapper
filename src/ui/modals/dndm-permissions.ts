@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { DEFAULT_SETTINGS, type DndMapperSettings } from "../../game/domain";
 import { GameElement } from "../app/GameElement";
+import "./dndm-modal";
 
 @customElement("dndm-permissions")
 export class DndmPermissions extends GameElement {
@@ -23,6 +24,9 @@ export class DndmPermissions extends GameElement {
   @property({ attribute: false })
   onClose?: () => void;
 
+  @property({ attribute: false })
+  onCancel?: () => void;
+
   @state()
   private resetArmed = false;
 
@@ -37,7 +41,7 @@ export class DndmPermissions extends GameElement {
     this.onUpdateSettings?.(patch);
   }
 
-  private handleReset(): void {
+  private handleReset = (): void => {
     if (!this.resetArmed) {
       this.resetArmed = true;
       setTimeout(() => {
@@ -47,12 +51,16 @@ export class DndmPermissions extends GameElement {
     }
     this.resetArmed = false;
     this.emitPatch(DEFAULT_SETTINGS);
-  }
+  };
 
-  private handleClose(): void {
+  private handleClose = (): void => {
+    if (!this.isOpen) return;
+    this.isOpen = false;
     this.dispatchEvent(new CustomEvent("close", { bubbles: true, composed: true }));
+    this.dispatchEvent(new CustomEvent("cancel", { bubbles: true, composed: true }));
     this.onClose?.();
-  }
+    this.onCancel?.();
+  };
 
   private renderContent(): TemplateResult {
     const s = this.settings;
@@ -299,27 +307,18 @@ export class DndmPermissions extends GameElement {
     if (!this.isOpen) return nothing;
 
     return html`
-      <div class="dndm-modal-overlay" @click=${this.handleClose}>
-        <div
-          class="dndm-modal-card dndm-permp"
-          role="dialog"
-          aria-modal="true"
-          @click=${(e: Event) => e.stopPropagation()}
-        >
-          <div class="dndm-panel-header">
-            <span>Settings</span>
-            <button
-              class="dndm-btn dndm-btn--icon dndm-btn--small"
-              type="button"
-              title="Close"
-              @click=${this.handleClose}
-            >
-              ×
-            </button>
-          </div>
-          <div class="dndm-modal-body">${this.renderContent()}</div>
-        </div>
-      </div>
+      <dndm-modal
+        .isOpen=${this.isOpen}
+        .modalTitle=${"Settings"}
+        cardClass="dndm-permp"
+        @close=${this.handleClose}
+        .body=${this.renderContent()}
+        .footer=${html`
+          <button class="dndm-btn dndm-btn--primary" type="button" @click=${this.handleClose}>
+            Close
+          </button>
+        `}
+      ></dndm-modal>
     `;
   }
 }

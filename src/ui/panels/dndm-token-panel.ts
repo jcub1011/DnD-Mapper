@@ -208,6 +208,15 @@ export class DndmTokenPanel extends GameElement {
         .onCancel=${() => {
           this.pendingDeleteToken = null;
         }}
+        .onClose=${() => {
+          this.pendingDeleteToken = null;
+        }}
+        @cancel=${() => {
+          this.pendingDeleteToken = null;
+        }}
+        @close=${() => {
+          this.pendingDeleteToken = null;
+        }}
       ></dndm-confirm>
     `;
   }

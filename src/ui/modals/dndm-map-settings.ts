@@ -3,6 +3,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import type { GameMap, GridConfig, MapSummary } from "../../game/domain";
 import { isFullMap } from "../../game/domain";
 import { GameElement } from "../app/GameElement";
+import "./dndm-modal";
 
 @customElement("dndm-map-settings")
 export class DndmMapSettings extends GameElement {
@@ -17,6 +18,9 @@ export class DndmMapSettings extends GameElement {
 
   @property({ attribute: false })
   onCancel?: () => void;
+
+  @property({ attribute: false })
+  onClose?: () => void;
 
   @state() private width = 30;
   @state() private height = 20;
@@ -47,7 +51,7 @@ export class DndmMapSettings extends GameElement {
     }
   }
 
-  private handleSave(): void {
+  private handleSave = (): void => {
     if (this.width < 1 || this.height < 1) {
       this.error = "Width and height must be at least 1 cell.";
       return;
@@ -66,6 +70,7 @@ export class DndmMapSettings extends GameElement {
       lineColor: this.lineColor,
     };
 
+    this.isOpen = false;
     this.dispatchEvent(
       new CustomEvent<GridConfig>("save", {
         bubbles: true,
@@ -74,27 +79,25 @@ export class DndmMapSettings extends GameElement {
       }),
     );
     this.onSave?.(grid);
-  }
+  };
 
-  private handleCancel(): void {
+  private handleCancel = (): void => {
+    if (!this.isOpen) return;
+    this.isOpen = false;
     this.dispatchEvent(new CustomEvent("cancel", { bubbles: true, composed: true }));
+    this.dispatchEvent(new CustomEvent("close", { bubbles: true, composed: true }));
     this.onCancel?.();
-  }
+    this.onClose?.();
+  };
 
-  override render(): TemplateResult | typeof nothing {
-    if (!this.isOpen || !this.map) return nothing;
-
+  override render(): TemplateResult {
     return html`
-      <div class="dndm-modal-overlay" @click=${this.handleCancel}>
-        <div
-          class="dndm-modal-card"
-          role="dialog"
-          aria-modal="true"
-          @click=${(e: Event) => e.stopPropagation()}
-        >
-          <h3 class="dndm-modal-title">Map settings — ${this.map.name}</h3>
-
-          <div class="dndm-modal-body dndm-mapsettings">
+      <dndm-modal
+        .isOpen=${this.isOpen && !!this.map}
+        .modalTitle=${this.map ? `Map settings — ${this.map.name}` : "Map settings"}
+        @close=${this.handleCancel}
+        .body=${html`
+          <div class="dndm-mapsettings">
             <label class="dndm-label">
               Width (cells)
               <input
@@ -166,17 +169,16 @@ export class DndmMapSettings extends GameElement {
               them to the nearest in-bounds cell. Images are not moved.
             </div>
           </div>
-
-          <div class="dndm-modal-actions">
-            <button class="dndm-btn dndm-btn--ghost" type="button" @click=${this.handleCancel}>
-              Cancel
-            </button>
-            <button class="dndm-btn dndm-btn--primary" type="button" @click=${this.handleSave}>
-              Save
-            </button>
-          </div>
-        </div>
-      </div>
+        `}
+        .footer=${html`
+          <button class="dndm-btn dndm-btn--ghost" type="button" @click=${this.handleCancel}>
+            Cancel
+          </button>
+          <button class="dndm-btn dndm-btn--primary" type="button" @click=${this.handleSave}>
+            Save
+          </button>
+        `}
+      ></dndm-modal>
     `;
   }
 }

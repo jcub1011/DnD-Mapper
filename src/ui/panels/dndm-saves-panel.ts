@@ -366,6 +366,15 @@ export class DndmSavesPanel extends GameElement {
         .onCancel=${() => {
           this.pendingLoadSlot = null;
         }}
+        .onClose=${() => {
+          this.pendingLoadSlot = null;
+        }}
+        @cancel=${() => {
+          this.pendingLoadSlot = null;
+        }}
+        @close=${() => {
+          this.pendingLoadSlot = null;
+        }}
       ></dndm-confirm>
 
       <dndm-confirm
@@ -377,6 +386,15 @@ export class DndmSavesPanel extends GameElement {
         .onCancel=${() => {
           this.pendingOverwriteSlot = null;
         }}
+        .onClose=${() => {
+          this.pendingOverwriteSlot = null;
+        }}
+        @cancel=${() => {
+          this.pendingOverwriteSlot = null;
+        }}
+        @close=${() => {
+          this.pendingOverwriteSlot = null;
+        }}
       ></dndm-confirm>
 
       <dndm-confirm
@@ -386,6 +404,15 @@ export class DndmSavesPanel extends GameElement {
         confirmText="Delete"
         .onConfirm=${() => void this.confirmDelete()}
         .onCancel=${() => {
+          this.pendingDeleteSlot = null;
+        }}
+        .onClose=${() => {
+          this.pendingDeleteSlot = null;
+        }}
+        @cancel=${() => {
+          this.pendingDeleteSlot = null;
+        }}
+        @close=${() => {
           this.pendingDeleteSlot = null;
         }}
       ></dndm-confirm>

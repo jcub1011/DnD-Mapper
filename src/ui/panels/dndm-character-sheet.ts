@@ -518,6 +518,15 @@ export class DndmCharacterSheet extends GameElement {
         @cancel=${() => {
           this.settingsModalOpen = false;
         }}
+        @close=${() => {
+          this.settingsModalOpen = false;
+        }}
+        .onCancel=${() => {
+          this.settingsModalOpen = false;
+        }}
+        .onClose=${() => {
+          this.settingsModalOpen = false;
+        }}
       ></dndm-sheet-settings-modal>
 
       <dndm-schema-preset-modal
@@ -527,6 +536,15 @@ export class DndmCharacterSheet extends GameElement {
           this.handleSelectPreset(e.detail.preset);
         }}
         @cancel=${() => {
+          this.schemaModalOpen = false;
+        }}
+        @close=${() => {
+          this.schemaModalOpen = false;
+        }}
+        .onCancel=${() => {
+          this.schemaModalOpen = false;
+        }}
+        .onClose=${() => {
           this.schemaModalOpen = false;
         }}
       ></dndm-schema-preset-modal>
@@ -541,6 +559,18 @@ export class DndmCharacterSheet extends GameElement {
           }
         }}
         @cancel=${() => {
+          this.cascadeWarningOpen = false;
+          this.pendingPreset = null;
+        }}
+        @close=${() => {
+          this.cascadeWarningOpen = false;
+          this.pendingPreset = null;
+        }}
+        .onCancel=${() => {
+          this.cascadeWarningOpen = false;
+          this.pendingPreset = null;
+        }}
+        .onClose=${() => {
           this.cascadeWarningOpen = false;
           this.pendingPreset = null;
         }}

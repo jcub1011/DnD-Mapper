@@ -10,6 +10,7 @@ import type {
   RollTemplateScope,
 } from "../../game/domain.js";
 import { GameElement } from "../app/GameElement.js";
+import "./dndm-modal.js";
 
 const DIE_SIZES = [4, 6, 8, 10, 12, 20, 100] as const;
 
@@ -43,10 +44,7 @@ export class DndmRollTemplateLibrary extends GameElement {
   onDeleteGlobalTemplate?: (templateId: string) => void;
 
   @property({ attribute: false })
-  onCreateSheetTemplate?: (
-    sheetId: string,
-    template: Omit<RollTemplate, "id" | "scope">,
-  ) => void;
+  onCreateSheetTemplate?: (sheetId: string, template: Omit<RollTemplate, "id" | "scope">) => void;
 
   @property({ attribute: false })
   onUpdateSheetTemplate?: (
@@ -60,6 +58,9 @@ export class DndmRollTemplateLibrary extends GameElement {
 
   @property({ attribute: false })
   onClose?: () => void;
+
+  @property({ attribute: false })
+  onCancel?: () => void;
 
   @state() private editingId: string | null = null;
   @state() private editName = "";
@@ -94,9 +95,19 @@ export class DndmRollTemplateLibrary extends GameElement {
     this.editLabel = t.label;
   }
 
-  private cancelEdit(): void {
+  private cancelEdit = (): void => {
     this.editingId = null;
-  }
+  };
+
+  private handleClose = (): void => {
+    if (!this.isOpen) return;
+    this.isOpen = false;
+    this.editingId = null;
+    this.dispatchEvent(new CustomEvent("close", { bubbles: true, composed: true }));
+    this.dispatchEvent(new CustomEvent("cancel", { bubbles: true, composed: true }));
+    this.onClose?.();
+    this.onCancel?.();
+  };
 
   private saveEdit(scope: RollTemplateScope, templateId: string): void {
     const patch: Partial<Omit<RollTemplate, "id" | "scope">> = {
@@ -153,55 +164,42 @@ export class DndmRollTemplateLibrary extends GameElement {
   }
 
   override render(): TemplateResult {
-    if (!this.isOpen) return html`${nothing}`;
-
     const sheet = this.currentSheet;
     const globalTemplates = this.state.globalRollTemplates ?? [];
     const sheetTemplates = sheet?.rollTemplates ?? [];
 
     return html`
-      <div class="dndm-modal-overlay" @click=${() => this.onClose?.()}>
-        <div
-          class="dndm-modal-card dndm-roll-library-modal"
-          role="dialog"
-          aria-modal="true"
-          @click=${(e: Event) => e.stopPropagation()}
-        >
-          <header class="dndm-modal-header">
-            <h3 class="dndm-modal-title">Roll Template Library</h3>
-            <button
-              class="dndm-btn dndm-btn--icon dndm-btn--small"
-              type="button"
-              title="Close"
-              @click=${() => this.onClose?.()}
-            >
-              ×
-            </button>
-          </header>
+      <dndm-modal
+        class="dndm-roll-library-modal"
+        cardClass="dndm-roll-library-modal"
+        .isOpen=${this.isOpen}
+        .modalTitle=${"Roll Template Library"}
+        @close=${this.handleClose}
+        .body=${html`
+          <!-- Built-in section -->
+          <section class="dndm-roll-library-section">
+            <h4 class="dndm-roll-library-section-title">Built-in Templates</h4>
+            <div class="dndm-dice-quick-row">
+              ${BUILTIN_ROLL_TEMPLATES.map(
+                (t) => html`
+                  <span class="dndm-btn dndm-btn--small" title=${this.summarize(t)}>
+                    ${t.name}
+                  </span>
+                `,
+              )}
+            </div>
+          </section>
 
-          <div class="dndm-modal-body">
-            <!-- Built-in section -->
-            <section class="dndm-roll-library-section">
-              <h4 class="dndm-roll-library-section-title">Built-in Templates</h4>
-              <div class="dndm-dice-quick-row">
-                ${BUILTIN_ROLL_TEMPLATES.map(
-                  (t) => html`
-                    <span class="dndm-btn dndm-btn--small" title=${this.summarize(t)}>
-                      ${t.name}
-                    </span>
-                  `,
-                )}
-              </div>
-            </section>
-
-            <!-- Global templates section -->
-            <section class="dndm-roll-library-section">
-              <h4 class="dndm-roll-library-section-title">Global Templates (Campaign)</h4>
-              ${globalTemplates.length === 0
+          <!-- Global templates section -->
+          <section class="dndm-roll-library-section">
+            <h4 class="dndm-roll-library-section-title">Global Templates (Campaign)</h4>
+            ${
+              globalTemplates.length === 0
                 ? html`<div class="dndm-panel-empty">No global templates yet.</div>`
-                : globalTemplates.map((t) => this.renderTemplateRow(t, "Global", this.isDm))}
-
-              ${this.isDm
+                : globalTemplates.map((t) => this.renderTemplateRow(t, "Global", this.isDm))
+            }
+            ${
+              this.isDm
                 ? html`
                     <div style="display:flex;gap:0.4rem;margin-top:0.4rem;">
                       <input
@@ -209,10 +207,10 @@ export class DndmRollTemplateLibrary extends GameElement {
                         placeholder="Template name (e.g. Fireball)"
                         .value=${this.newGlobalName}
                         @input=${(e: Event) =>
-                          (this.newGlobalName = (e.target as HTMLInputElement).value)}
+                        (this.newGlobalName = (e.target as HTMLInputElement).value)}
                         @keydown=${(e: KeyboardEvent) => {
-                          if (e.key === "Enter") this.handleCreateGlobal();
-                        }}
+                        if (e.key === "Enter") this.handleCreateGlobal();
+                      }}
                       />
                       <button
                         class="dndm-btn dndm-btn--small dndm-btn--primary"
@@ -224,21 +222,24 @@ export class DndmRollTemplateLibrary extends GameElement {
                       </button>
                     </div>
                   `
-                : nothing}
-            </section>
+                : nothing
+            }
+          </section>
 
-            <!-- Sheet-specific templates section -->
-            <section class="dndm-roll-library-section">
-              <h4 class="dndm-roll-library-section-title">
-                ${sheet ? `Templates for ${sheet.characterName || "Sheet"}` : "Sheet Templates"}
-              </h4>
-              ${!sheet
+          <!-- Sheet-specific templates section -->
+          <section class="dndm-roll-library-section">
+            <h4 class="dndm-roll-library-section-title">
+              ${sheet ? `Templates for ${sheet.characterName || "Sheet"}` : "Sheet Templates"}
+            </h4>
+            ${
+              !sheet
                 ? html`<div class="dndm-panel-empty">No character sheet assigned.</div>`
                 : sheetTemplates.length === 0
                   ? html`<div class="dndm-panel-empty">No templates for this sheet yet.</div>`
-                  : sheetTemplates.map((t) => this.renderTemplateRow(t, "Sheet", this.canEditSheet))}
-
-              ${this.canEditSheet
+                  : sheetTemplates.map((t) => this.renderTemplateRow(t, "Sheet", this.canEditSheet))
+            }
+            ${
+              this.canEditSheet
                 ? html`
                     <div style="display:flex;gap:0.4rem;margin-top:0.4rem;">
                       <input
@@ -246,10 +247,10 @@ export class DndmRollTemplateLibrary extends GameElement {
                         placeholder="Template name (e.g. Greatsword Attack)"
                         .value=${this.newSheetName}
                         @input=${(e: Event) =>
-                          (this.newSheetName = (e.target as HTMLInputElement).value)}
+                        (this.newSheetName = (e.target as HTMLInputElement).value)}
                         @keydown=${(e: KeyboardEvent) => {
-                          if (e.key === "Enter") this.handleCreateSheet();
-                        }}
+                        if (e.key === "Enter") this.handleCreateSheet();
+                      }}
                       />
                       <button
                         class="dndm-btn dndm-btn--small dndm-btn--primary"
@@ -261,17 +262,16 @@ export class DndmRollTemplateLibrary extends GameElement {
                       </button>
                     </div>
                   `
-                : nothing}
-            </section>
-          </div>
-
-          <footer class="dndm-modal-actions">
-            <button class="dndm-btn" type="button" @click=${() => this.onClose?.()}>
-              Done
-            </button>
-          </footer>
-        </div>
-      </div>
+                : nothing
+            }
+          </section>
+        `}
+        .footer=${html`
+          <button class="dndm-btn dndm-btn--primary" type="button" @click=${this.handleClose}>
+            Done
+          </button>
+        `}
+      ></dndm-modal>
     `;
   }
 
@@ -284,7 +284,10 @@ export class DndmRollTemplateLibrary extends GameElement {
 
     if (isEditing) {
       return html`
-        <div class="dndm-roll-template-row" style="flex-direction:column;align-items:stretch;gap:0.4rem;">
+        <div
+          class="dndm-roll-template-row"
+          style="flex-direction:column;align-items:stretch;gap:0.4rem;"
+        >
           <div style="display:flex;gap:0.4rem;">
             <input
               class="dndm-input"
@@ -340,20 +343,22 @@ export class DndmRollTemplateLibrary extends GameElement {
                       (s) => html`<option value=${s} ?selected=${d.sides === s}>${s}</option>`,
                     )}
                   </select>
-                  ${this.editDice.length > 1
-                    ? html`
-                        <button
-                          class="dndm-btn dndm-btn--small dndm-btn--icon"
-                          type="button"
-                          @click=${() => {
+                  ${
+                    this.editDice.length > 1
+                      ? html`
+                          <button
+                            class="dndm-btn dndm-btn--small dndm-btn--icon"
+                            type="button"
+                            @click=${() => {
                             this.editDice.splice(idx, 1);
                             this.requestUpdate();
                           }}
-                        >
-                          ×
-                        </button>
-                      `
-                    : nothing}
+                          >
+                            ×
+                          </button>
+                        `
+                      : nothing
+                  }
                 </div>
               `,
             )}
@@ -410,7 +415,10 @@ export class DndmRollTemplateLibrary extends GameElement {
               >
                 <option value="">(None)</option>
                 ${this.state.attributeSchema.rows.map(
-                  (r) => html`<option value=${r.name} ?selected=${this.editAttr === r.name}>${r.name}</option>`,
+                  (r) =>
+                    html`<option value=${r.name} ?selected=${this.editAttr === r.name}>
+                      ${r.name}
+                    </option>`,
                 )}
               </select>
             </label>
@@ -425,32 +433,34 @@ export class DndmRollTemplateLibrary extends GameElement {
           <span class="dndm-roll-template-name">${t.name}</span>
           <span class="dndm-roll-template-summary">${this.summarize(t)}</span>
         </div>
-        ${canEdit
-          ? html`
-              <div style="display:flex;gap:0.3rem;">
-                <button
-                  class="dndm-btn dndm-btn--small dndm-btn--ghost"
-                  type="button"
-                  @click=${() => this.startEdit(t)}
-                >
-                  Edit
-                </button>
-                <button
-                  class="dndm-btn dndm-btn--small dndm-btn--danger"
-                  type="button"
-                  @click=${() => {
+        ${
+          canEdit
+            ? html`
+                <div style="display:flex;gap:0.3rem;">
+                  <button
+                    class="dndm-btn dndm-btn--small dndm-btn--ghost"
+                    type="button"
+                    @click=${() => this.startEdit(t)}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    class="dndm-btn dndm-btn--small dndm-btn--danger"
+                    type="button"
+                    @click=${() => {
                     if (scope === "Global") {
                       this.onDeleteGlobalTemplate?.(t.id);
                     } else if (scope === "Sheet" && this.sheetId) {
                       this.onDeleteSheetTemplate?.(this.sheetId, t.id);
                     }
                   }}
-                >
-                  Delete
-                </button>
-              </div>
-            `
-          : nothing}
+                  >
+                    Delete
+                  </button>
+                </div>
+              `
+            : nothing
+        }
       </div>
     `;
   }

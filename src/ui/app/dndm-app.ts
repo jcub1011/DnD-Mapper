@@ -1357,6 +1357,15 @@ export class DndmApp extends GameElement {
           .onClose=${() => {
             this.settingsModalOpen = false;
           }}
+          .onCancel=${() => {
+            this.settingsModalOpen = false;
+          }}
+          @close=${() => {
+            this.settingsModalOpen = false;
+          }}
+          @cancel=${() => {
+            this.settingsModalOpen = false;
+          }}
         ></dndm-permissions>
 
         <dndm-roll-template-library
@@ -1387,6 +1396,15 @@ export class DndmApp extends GameElement {
           .onClose=${() => {
             this.rollTemplateLibraryOpen = false;
           }}
+          .onCancel=${() => {
+            this.rollTemplateLibraryOpen = false;
+          }}
+          @close=${() => {
+            this.rollTemplateLibraryOpen = false;
+          }}
+          @cancel=${() => {
+            this.rollTemplateLibraryOpen = false;
+          }}
         ></dndm-roll-template-library>
 
         <dndm-roll-history
@@ -1406,6 +1424,15 @@ export class DndmApp extends GameElement {
             });
           }}
           .onClose=${() => {
+            this.rollHistoryOpen = false;
+          }}
+          .onCancel=${() => {
+            this.rollHistoryOpen = false;
+          }}
+          @close=${() => {
+            this.rollHistoryOpen = false;
+          }}
+          @cancel=${() => {
             this.rollHistoryOpen = false;
           }}
         ></dndm-roll-history>

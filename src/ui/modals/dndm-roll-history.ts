@@ -3,6 +3,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import { isNatural1, isNatural20 } from "../../game/dice.js";
 import type { DndMapperState, RollMode, RollResult } from "../../game/domain.js";
 import { GameElement } from "../app/GameElement.js";
+import "./dndm-modal.js";
 
 @customElement("dndm-roll-history")
 export class DndmRollHistory extends GameElement {
@@ -24,6 +25,9 @@ export class DndmRollHistory extends GameElement {
   @property({ attribute: false })
   onClose?: () => void;
 
+  @property({ attribute: false })
+  onCancel?: () => void;
+
   @state() private searchQuery = "";
   @state() private filterMode: "all" | "mine" = "all";
 
@@ -44,16 +48,21 @@ export class DndmRollHistory extends GameElement {
     window.removeEventListener("keydown", this.handleKeyDown);
   }
 
-  private handleClose(): void {
+  private handleClose = (): void => {
+    if (!this.isOpen) return;
+    this.isOpen = false;
     this.dispatchEvent(new CustomEvent("close", { bubbles: true, composed: true }));
+    this.dispatchEvent(new CustomEvent("cancel", { bubbles: true, composed: true }));
     this.onClose?.();
-  }
+    this.onCancel?.();
+  };
 
   private get visibleRolls(): readonly RollResult[] {
     const log = this.state?.rollLog ?? [];
-    const visible = this.isDm || this.state?.settings?.rollsVisibleToPlayers
-      ? log
-      : log.filter((r) => r.rollerUserId === this.currentUserId);
+    const visible =
+      this.isDm || this.state?.settings?.rollsVisibleToPlayers
+        ? log
+        : log.filter((r) => r.rollerUserId === this.currentUserId);
 
     let filtered = visible;
     if (this.filterMode === "mine") {
@@ -66,11 +75,7 @@ export class DndmRollHistory extends GameElement {
         const rollerName = this.getRollerName(r).toLowerCase();
         const formula = r.formula.toLowerCase();
         const label = (r.label || "").toLowerCase();
-        return (
-          rollerName.includes(query) ||
-          formula.includes(query) ||
-          label.includes(query)
-        );
+        return rollerName.includes(query) || formula.includes(query) || label.includes(query);
       });
     }
 
@@ -116,34 +121,22 @@ export class DndmRollHistory extends GameElement {
   }
 
   override render(): TemplateResult | typeof nothing {
-    if (!this.isOpen) return nothing;
-
     const rolls = this.visibleRolls;
     const totalCount = (this.state?.rollLog ?? []).length;
 
     return html`
-      <div class="dndm-modal-overlay" @click=${this.handleClose}>
-        <div
-          class="dndm-modal-card dndm-roll-history-modal"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Roll History"
-          @click=${(e: Event) => e.stopPropagation()}
-        >
-          <header class="dndm-modal-header">
-            <h3 class="dndm-modal-title">Roll History</h3>
-            <button
-              class="dndm-btn dndm-btn--ghost dndm-btn--small"
-              type="button"
-              aria-label="Close"
-              @click=${this.handleClose}
+      <dndm-modal
+        class="dndm-roll-history-modal"
+        cardClass="dndm-roll-history-modal"
+        .isOpen=${this.isOpen}
+        .modalTitle=${"Roll History"}
+        @close=${this.handleClose}
+        .body=${html`
+          <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+            <div
+              class="dndm-roll-history-search"
+              style="display: flex; gap: 0.5rem; align-items: center;"
             >
-              ✕
-            </button>
-          </header>
-
-          <div class="dndm-modal-body" style="display: flex; flex-direction: column; gap: 0.75rem;">
-            <div class="dndm-roll-history-search" style="display: flex; gap: 0.5rem; align-items: center;">
               <input
                 type="text"
                 class="dndm-input"
@@ -181,25 +174,22 @@ export class DndmRollHistory extends GameElement {
             </div>
 
             <div class="dndm-roll-history-list">
-              ${rolls.length === 0
-                ? html`<div class="dndm-panel-empty" style="text-align: center; padding: 2rem 0;">No rolls found matching your criteria.</div>`
-                : html`
-                    ${[...rolls].reverse().map((r) => this.renderEntry(r))}
-                  `}
+              ${
+                rolls.length === 0
+                  ? html`<div class="dndm-panel-empty" style="text-align: center; padding: 2rem 0;">
+                      No rolls found matching your criteria.
+                    </div>`
+                  : html` ${[...rolls].reverse().map((r) => this.renderEntry(r))} `
+              }
             </div>
           </div>
-
-          <footer class="dndm-modal-footer" style="display: flex; justify-content: flex-end;">
-            <button
-              class="dndm-btn dndm-btn--ghost"
-              type="button"
-              @click=${this.handleClose}
-            >
-              Close
-            </button>
-          </footer>
-        </div>
-      </div>
+        `}
+        .footer=${html`
+          <button class="dndm-btn dndm-btn--ghost" type="button" @click=${this.handleClose}>
+            Close
+          </button>
+        `}
+      ></dndm-modal>
     `;
   }
 
@@ -217,24 +207,30 @@ export class DndmRollHistory extends GameElement {
           <span class="dndm-rolllog-roller">${rollerName}</span>
           <span class="dndm-rolllog-formula">${r.formula}</span>
           <span class="dndm-rolllog-label">${r.label}</span>
-          ${r.mode !== "Normal"
-            ? html`<span class="dndm-rolllog-mode">${r.mode === "Advantage" ? "ADV" : "DIS"}</span>`
-            : nothing}
+          ${
+            r.mode !== "Normal"
+              ? html`<span class="dndm-rolllog-mode"
+                  >${r.mode === "Advantage" ? "ADV" : "DIS"}</span
+                >`
+              : nothing
+          }
           <time class="dndm-rolllog-time" title=${r.timestampUtc}>
             ${r.timestampUtc.slice(11, 19)}
           </time>
-          ${canReRoll
-            ? html`
-                <button
-                  class="dndm-rolllog-reroll"
-                  type="button"
-                  title="Re-roll (Shift: Adv, Ctrl: Dis)"
-                  @click=${(e: MouseEvent) => this.handleReRoll(r, e)}
-                >
-                  ↻
-                </button>
-              `
-            : nothing}
+          ${
+            canReRoll
+              ? html`
+                  <button
+                    class="dndm-rolllog-reroll"
+                    type="button"
+                    title="Re-roll (Shift: Adv, Ctrl: Dis)"
+                    @click=${(e: MouseEvent) => this.handleReRoll(r, e)}
+                  >
+                    ↻
+                  </button>
+                `
+              : nothing
+          }
         </header>
 
         <div class="dndm-rolllog-dice">
@@ -250,19 +246,23 @@ export class DndmRollHistory extends GameElement {
                 </span>
               `,
             )}
-            ${r.flatModifier !== 0 || r.attributeModifier !== 0
-              ? html`
-                  <span class="dndm-rolllog-mod">
-                    ${this.formatMod(r.flatModifier + r.attributeModifier)}
-                  </span>
-                `
-              : nothing}
+            ${
+              r.flatModifier !== 0 || r.attributeModifier !== 0
+                ? html`
+                    <span class="dndm-rolllog-mod">
+                      ${this.formatMod(r.flatModifier + r.attributeModifier)}
+                    </span>
+                  `
+                : nothing
+            }
           </div>
         </div>
 
-        ${r.modifierBreakdown
-          ? html`<div class="dndm-rolllog-breakdown">${r.modifierBreakdown}</div>`
-          : nothing}
+        ${
+          r.modifierBreakdown
+            ? html`<div class="dndm-rolllog-breakdown">${r.modifierBreakdown}</div>`
+            : nothing
+        }
       </article>
     `;
   }

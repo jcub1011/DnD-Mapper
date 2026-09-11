@@ -271,6 +271,15 @@ export class DndmImageInspector extends GameElement {
         .onCancel=${() => {
           this.pendingDelete = false;
         }}
+        .onClose=${() => {
+          this.pendingDelete = false;
+        }}
+        @cancel=${() => {
+          this.pendingDelete = false;
+        }}
+        @close=${() => {
+          this.pendingDelete = false;
+        }}
       ></dndm-confirm>
     `;
   }

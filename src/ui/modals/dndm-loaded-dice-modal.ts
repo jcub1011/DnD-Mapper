@@ -11,6 +11,7 @@ import {
   type RollMode,
 } from "../../game/domain.js";
 import { GameElement } from "../app/GameElement.js";
+import "./dndm-modal.js";
 
 @customElement("dndm-loaded-dice-modal")
 export class DndmLoadedDiceModal extends GameElement {
@@ -31,6 +32,9 @@ export class DndmLoadedDiceModal extends GameElement {
 
   @property({ attribute: false })
   onClose?: () => void;
+
+  @property({ attribute: false })
+  onCancel?: () => void;
 
   @state() private name = "";
   @state() private enabled = true;
@@ -67,11 +71,16 @@ export class DndmLoadedDiceModal extends GameElement {
     }
   }
 
-  private handleClose(): void {
+  private handleClose = (): void => {
+    if (!this.isOpen) return;
+    this.isOpen = false;
+    this.dispatchEvent(new CustomEvent("close", { bubbles: true, composed: true }));
+    this.dispatchEvent(new CustomEvent("cancel", { bubbles: true, composed: true }));
     this.onClose?.();
-  }
+    this.onCancel?.();
+  };
 
-  private handleSave(): void {
+  private handleSave = (): void => {
     const trimmedName = this.name.trim() || "Untitled Rule";
     let targetSheetIds: string[] = [];
     if (this.targetScope === "gm") {
@@ -90,7 +99,7 @@ export class DndmLoadedDiceModal extends GameElement {
 
     this.onSave?.(payload, this.rule?.id);
     this.handleClose();
-  }
+  };
 
   // ── Condition Management ───────────────────────────────────────────────────
 
@@ -182,27 +191,16 @@ export class DndmLoadedDiceModal extends GameElement {
     this.modifications = next;
   }
 
-  override render(): TemplateResult | typeof nothing {
-    if (!this.isOpen) return nothing;
-
+  override render(): TemplateResult {
     const sheetEntries = Object.values(this.sheets);
 
     return html`
-      <div class="dndm-modal-overlay" @click=${this.handleClose}>
-        <div
-          class="dndm-modal-card"
-          style="max-width: 620px; max-height: 85vh; overflow-y: auto;"
-          role="dialog"
-          aria-modal="true"
-          @click=${(e: Event) => e.stopPropagation()}
-        >
-          <header class="dndm-modal-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-            <h3 class="dndm-modal-title" style="margin: 0;">
-              ${this.rule ? "Edit Loaded Dice Rule" : "Create Loaded Dice Rule"}
-            </h3>
-            <button class="dndm-btn dndm-btn--ghost dndm-btn--small" type="button" @click=${this.handleClose}>✕</button>
-          </header>
-
+      <dndm-modal
+        .isOpen=${this.isOpen}
+        .modalTitle=${this.rule ? "Edit Loaded Dice Rule" : "Create Loaded Dice Rule"}
+        cardStyle="max-width: 680px; width: 100%; max-height: calc(100vh - 1.5rem);"
+        @close=${this.handleClose}
+        .body=${html`
           <div class="dndm-panel-section">
             <label class="dndm-label" style="display: block; margin-bottom: 4px;">Rule Name</label>
             <input
@@ -211,7 +209,9 @@ export class DndmLoadedDiceModal extends GameElement {
               style="width: 100%; box-sizing: border-box;"
               placeholder="e.g. Spacebar forces d20 to 20"
               .value=${this.name}
-              @input=${(e: Event) => { this.name = (e.target as HTMLInputElement).value; }}
+              @input=${(e: Event) => {
+                this.name = (e.target as HTMLInputElement).value;
+              }}
             />
           </div>
 
@@ -220,7 +220,9 @@ export class DndmLoadedDiceModal extends GameElement {
               <input
                 type="checkbox"
                 ?checked=${this.enabled}
-                @change=${(e: Event) => { this.enabled = (e.target as HTMLInputElement).checked; }}
+                @change=${(e: Event) => {
+                  this.enabled = (e.target as HTMLInputElement).checked;
+                }}
               />
               <span class="dndm-toggle-track"></span>
               <span>Enabled</span>
@@ -228,7 +230,9 @@ export class DndmLoadedDiceModal extends GameElement {
           </div>
 
           <div class="dndm-panel-section" style="margin-top: 0.75rem;">
-            <label class="dndm-label" style="display: block; margin-bottom: 4px;">Target Scope</label>
+            <label class="dndm-label" style="display: block; margin-bottom: 4px;"
+              >Target Scope</label
+            >
             <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
               <label style="display: inline-flex; align-items: center; gap: 4px;">
                 <input
@@ -236,7 +240,9 @@ export class DndmLoadedDiceModal extends GameElement {
                   name="targetScope"
                   value="all"
                   ?checked=${this.targetScope === "all"}
-                  @change=${() => { this.targetScope = "all"; }}
+                  @change=${() => {
+                    this.targetScope = "all";
+                  }}
                 />
                 All Rolls
               </label>
@@ -246,7 +252,9 @@ export class DndmLoadedDiceModal extends GameElement {
                   name="targetScope"
                   value="gm"
                   ?checked=${this.targetScope === "gm"}
-                  @change=${() => { this.targetScope = "gm"; }}
+                  @change=${() => {
+                    this.targetScope = "gm";
+                  }}
                 />
                 GM Unlinked Only
               </label>
@@ -266,27 +274,31 @@ export class DndmLoadedDiceModal extends GameElement {
                 Specific Character
               </label>
 
-              ${this.targetScope === "sheet"
-                ? html`
-                    <select
-                      class="dndm-select"
-                      .value=${this.targetSheetId}
-                      @change=${(e: Event) => {
+              ${
+                this.targetScope === "sheet"
+                  ? html`
+                      <select
+                        class="dndm-select"
+                        .value=${this.targetSheetId}
+                        @change=${(e: Event) => {
                         this.targetSheetId = (e.target as HTMLSelectElement).value;
                       }}
-                    >
-                      ${sheetEntries.map(
+                      >
+                        ${sheetEntries.map(
                         (s) => html`<option value=${s.id}>${s.characterName || "Unnamed"}</option>`,
                       )}
-                    </select>
-                  `
-                : nothing}
+                      </select>
+                    `
+                  : nothing
+              }
             </div>
           </div>
 
           <!-- Conditions Section -->
           <div class="dndm-panel-section" style="margin-top: 1rem;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;"
+            >
               <strong class="dndm-label">Conditions (All must match)</strong>
               <select
                 class="dndm-select"
@@ -309,18 +321,26 @@ export class DndmLoadedDiceModal extends GameElement {
               </select>
             </div>
 
-            ${this.conditions.length === 0
-              ? html`<div style="font-size: 0.8rem; color: var(--dndm-color-text-muted); font-style: italic;">No conditions (always applies to target scope).</div>`
-              : html`
-                  <div class="dndm-rule-builder-group">
-                    ${this.conditions.map((c, i) => this.renderConditionRow(c, i))}
-                  </div>
-                `}
+            ${
+              this.conditions.length === 0
+                ? html`<div
+                    style="font-size: 0.8rem; color: var(--dndm-color-text-muted); font-style: italic;"
+                  >
+                    No conditions (always applies to target scope).
+                  </div>`
+                : html`
+                    <div class="dndm-rule-builder-group">
+                      ${this.conditions.map((c, i) => this.renderConditionRow(c, i))}
+                    </div>
+                  `
+            }
           </div>
 
           <!-- Modifications Section -->
           <div class="dndm-panel-section" style="margin-top: 1rem;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <div
+              style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;"
+            >
               <strong class="dndm-label">Modifications (Applied in sequence)</strong>
               <select
                 class="dndm-select"
@@ -343,25 +363,30 @@ export class DndmLoadedDiceModal extends GameElement {
               </select>
             </div>
 
-            ${this.modifications.length === 0
-              ? html`<div style="font-size: 0.8rem; color: var(--dndm-color-text-muted); font-style: italic;">No modifications defined.</div>`
-              : html`
-                  <div class="dndm-rule-builder-group">
-                    ${this.modifications.map((m, i) => this.renderModificationRow(m, i))}
-                  </div>
-                `}
+            ${
+              this.modifications.length === 0
+                ? html`<div
+                    style="font-size: 0.8rem; color: var(--dndm-color-text-muted); font-style: italic;"
+                  >
+                    No modifications defined.
+                  </div>`
+                : html`
+                    <div class="dndm-rule-builder-group">
+                      ${this.modifications.map((m, i) => this.renderModificationRow(m, i))}
+                    </div>
+                  `
+            }
           </div>
-
-          <div class="dndm-modal-actions" style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 1.5rem;">
-            <button class="dndm-btn dndm-btn--ghost" type="button" @click=${this.handleClose}>
-              Cancel
-            </button>
-            <button class="dndm-btn dndm-btn--primary" type="button" @click=${this.handleSave}>
-              Save Rule
-            </button>
-          </div>
-        </div>
-      </div>
+        `}
+        .footer=${html`
+          <button class="dndm-btn dndm-btn--ghost" type="button" @click=${this.handleClose}>
+            Cancel
+          </button>
+          <button class="dndm-btn dndm-btn--primary" type="button" @click=${this.handleSave}>
+            Save Rule
+          </button>
+        `}
+      ></dndm-modal>
     `;
   }
 
@@ -370,102 +395,107 @@ export class DndmLoadedDiceModal extends GameElement {
       <div class="dndm-rule-item-row">
         <span class="dndm-loaded-rule-badge dndm-loaded-rule-badge--condition">${c.$kind}</span>
 
-        ${c.$kind === "hostKeyHeld"
-          ? html`
-              <input
-                type="text"
-                class="dndm-input"
-                style="width: 100px;"
-                placeholder="Key (e.g. SPACE)"
-                .value=${c.key}
-                @input=${(e: Event) => {
+        ${
+          c.$kind === "hostKeyHeld"
+            ? html`
+                <input
+                  type="text"
+                  class="dndm-input"
+                  style="width: 100px;"
+                  placeholder="Key (e.g. SPACE)"
+                  .value=${c.key}
+                  @input=${(e: Event) => {
                   this.updateCondition(index, {
                     ...c,
                     key: (e.target as HTMLInputElement).value.toUpperCase(),
                   });
                 }}
-              />
-            `
-          : nothing}
-
-        ${c.$kind === "diceTypeRolled"
-          ? html`
-              <select
-                class="dndm-select"
-                .value=${String(c.sides)}
-                @change=${(e: Event) => {
+                />
+              `
+            : nothing
+        }
+        ${
+          c.$kind === "diceTypeRolled"
+            ? html`
+                <select
+                  class="dndm-select"
+                  .value=${String(c.sides)}
+                  @change=${(e: Event) => {
                   this.updateCondition(index, {
                     ...c,
                     sides: parseInt((e.target as HTMLSelectElement).value, 10),
                   });
                 }}
-              >
-                ${[4, 6, 8, 10, 12, 20, 100].map(
-                  (s) => html`<option value=${s}>d${s}</option>`,
-                )}
-              </select>
-            `
-          : nothing}
-
-        ${c.$kind === "currentMap"
-          ? html`
-              <select
-                class="dndm-select"
-                .value=${c.mapId}
-                @change=${(e: Event) => {
+                >
+                  ${[4, 6, 8, 10, 12, 20, 100].map((s) => html`<option value=${s}>d${s}</option>`)}
+                </select>
+              `
+            : nothing
+        }
+        ${
+          c.$kind === "currentMap"
+            ? html`
+                <select
+                  class="dndm-select"
+                  .value=${c.mapId}
+                  @change=${(e: Event) => {
                   this.updateCondition(index, {
                     ...c,
                     mapId: (e.target as HTMLSelectElement).value,
                   });
                 }}
-              >
-                ${this.maps.map(
-                  (m) => html`<option value=${m.id}>${m.name}</option>`,
-                )}
-              </select>
-            `
-          : nothing}
-
-        ${c.$kind === "rollModeIs"
-          ? html`
-              <select
-                class="dndm-select"
-                .value=${c.mode}
-                @change=${(e: Event) => {
+                >
+                  ${this.maps.map((m) => html`<option value=${m.id}>${m.name}</option>`)}
+                </select>
+              `
+            : nothing
+        }
+        ${
+          c.$kind === "rollModeIs"
+            ? html`
+                <select
+                  class="dndm-select"
+                  .value=${c.mode}
+                  @change=${(e: Event) => {
                   this.updateCondition(index, {
                     ...c,
                     mode: (e.target as HTMLSelectElement).value as RollMode,
                   });
                 }}
-              >
-                <option value="Normal">Normal</option>
-                <option value="Advantage">Advantage</option>
-                <option value="Disadvantage">Disadvantage</option>
-              </select>
-            `
-          : nothing}
-
-        ${c.$kind === "combatActive"
-          ? html`<span style="font-size: 0.8rem; color: var(--dndm-color-text-muted);">Combat must be active</span>`
-          : nothing}
-
-        ${c.$kind === "rollLabelContains"
-          ? html`
-              <input
-                type="text"
-                class="dndm-input"
-                style="flex: 1;"
-                placeholder="Substring"
-                .value=${c.substring}
-                @input=${(e: Event) => {
+                >
+                  <option value="Normal">Normal</option>
+                  <option value="Advantage">Advantage</option>
+                  <option value="Disadvantage">Disadvantage</option>
+                </select>
+              `
+            : nothing
+        }
+        ${
+          c.$kind === "combatActive"
+            ? html`<span style="font-size: 0.8rem; color: var(--dndm-color-text-muted);"
+                >Combat must be active</span
+              >`
+            : nothing
+        }
+        ${
+          c.$kind === "rollLabelContains"
+            ? html`
+                <input
+                  type="text"
+                  class="dndm-input"
+                  style="flex: 1;"
+                  placeholder="Substring"
+                  .value=${c.substring}
+                  @input=${(e: Event) => {
                   this.updateCondition(index, {
                     ...c,
                     substring: (e.target as HTMLInputElement).value,
                   });
                 }}
-              />
-            `
-          : nothing}
+                />
+              `
+            : nothing
+        }
 
         <button
           class="dndm-btn dndm-btn--ghost dndm-btn--small"
@@ -484,89 +514,97 @@ export class DndmLoadedDiceModal extends GameElement {
       <div class="dndm-rule-item-row">
         <span class="dndm-loaded-rule-badge dndm-loaded-rule-badge--mod">${m.$kind}</span>
 
-        ${m.$kind === "setResult"
-          ? html`
-              <label style="font-size: 0.75rem;">Value: </label>
-              <input
-                type="number"
-                class="dndm-input"
-                style="width: 70px;"
-                .value=${String(m.value)}
-                @change=${(e: Event) => {
+        ${
+          m.$kind === "setResult"
+            ? html`
+                <label style="font-size: 0.75rem;">Value: </label>
+                <input
+                  type="number"
+                  class="dndm-input"
+                  style="width: 70px;"
+                  .value=${String(m.value)}
+                  @change=${(e: Event) => {
                   this.updateModification(index, {
                     ...m,
                     value: parseInt((e.target as HTMLInputElement).value, 10) || 1,
                   });
                 }}
-              />
-            `
-          : nothing}
-
-        ${m.$kind === "clampMin"
-          ? html`
-              <label style="font-size: 0.75rem;">Min: </label>
-              <input
-                type="number"
-                class="dndm-input"
-                style="width: 70px;"
-                .value=${String(m.min)}
-                @change=${(e: Event) => {
+                />
+              `
+            : nothing
+        }
+        ${
+          m.$kind === "clampMin"
+            ? html`
+                <label style="font-size: 0.75rem;">Min: </label>
+                <input
+                  type="number"
+                  class="dndm-input"
+                  style="width: 70px;"
+                  .value=${String(m.min)}
+                  @change=${(e: Event) => {
                   this.updateModification(index, {
                     ...m,
                     min: parseInt((e.target as HTMLInputElement).value, 10) || 1,
                   });
                 }}
-              />
-            `
-          : nothing}
-
-        ${m.$kind === "clampMax"
-          ? html`
-              <label style="font-size: 0.75rem;">Max: </label>
-              <input
-                type="number"
-                class="dndm-input"
-                style="width: 70px;"
-                .value=${String(m.max)}
-                @change=${(e: Event) => {
+                />
+              `
+            : nothing
+        }
+        ${
+          m.$kind === "clampMax"
+            ? html`
+                <label style="font-size: 0.75rem;">Max: </label>
+                <input
+                  type="number"
+                  class="dndm-input"
+                  style="width: 70px;"
+                  .value=${String(m.max)}
+                  @change=${(e: Event) => {
                   this.updateModification(index, {
                     ...m,
                     max: parseInt((e.target as HTMLInputElement).value, 10) || 1,
                   });
                 }}
-              />
-            `
-          : nothing}
-
-        ${m.$kind === "biasLower" || m.$kind === "biasHigher"
-          ? html`
-              <label style="font-size: 0.75rem;">Reroll count: </label>
-              <input
-                type="number"
-                class="dndm-input"
-                style="width: 70px;"
-                min="1"
-                max="10"
-                .value=${String(m.rerollCount)}
-                @change=${(e: Event) => {
+                />
+              `
+            : nothing
+        }
+        ${
+          m.$kind === "biasLower" || m.$kind === "biasHigher"
+            ? html`
+                <label style="font-size: 0.75rem;">Reroll count: </label>
+                <input
+                  type="number"
+                  class="dndm-input"
+                  style="width: 70px;"
+                  min="1"
+                  max="10"
+                  .value=${String(m.rerollCount)}
+                  @change=${(e: Event) => {
                   this.updateModification(index, {
                     ...m,
-                    rerollCount: Math.max(1, parseInt((e.target as HTMLInputElement).value, 10) || 1),
+                    rerollCount: Math.max(
+                      1,
+                      parseInt((e.target as HTMLInputElement).value, 10) || 1,
+                    ),
                   });
                 }}
-              />
-            `
-          : nothing}
-
-        ${m.$kind === "rerollOn"
-          ? html`
-              <label style="font-size: 0.75rem;">Values (CSV): </label>
-              <input
-                type="text"
-                class="dndm-input"
-                style="width: 100px;"
-                .value=${m.values.join(", ")}
-                @change=${(e: Event) => {
+                />
+              `
+            : nothing
+        }
+        ${
+          m.$kind === "rerollOn"
+            ? html`
+                <label style="font-size: 0.75rem;">Values (CSV): </label>
+                <input
+                  type="text"
+                  class="dndm-input"
+                  style="width: 100px;"
+                  .value=${m.values.join(", ")}
+                  @change=${(e: Event) => {
                   const raw = (e.target as HTMLInputElement).value;
                   const vals = raw
                     .split(",")
@@ -577,9 +615,10 @@ export class DndmLoadedDiceModal extends GameElement {
                     values: vals.length > 0 ? vals : [1],
                   });
                 }}
-              />
-            `
-          : nothing}
+                />
+              `
+            : nothing
+        }
 
         <button
           class="dndm-btn dndm-btn--ghost dndm-btn--small"

@@ -493,8 +493,8 @@
 
 /* ─── Modals (Templates & History) ───────────────────────────────── */
 .dndm-roll-library-modal {
-  width: 32rem;
-  max-width: 95vw;
+  width: 42rem;
+  max-width: 100%;
 }
 
 .dndm-roll-library-section {
@@ -537,9 +537,10 @@
 }
 
 .dndm-roll-history-modal {
-  width: 42rem;
-  max-width: 95vw;
-  max-height: 85vh;
+  width: 44rem;
+  max-width: 100%;
+  max-height: calc(100vh - 1.5rem);
+  max-height: calc(100dvh - 1.5rem);
   display: flex;
   flex-direction: column;
 }
