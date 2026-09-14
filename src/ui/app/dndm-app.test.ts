@@ -401,5 +401,43 @@ describe("<dndm-app> Application Shell", () => {
       createButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       expect(panel.classList.contains("dndm-panel--collapsed")).toBe(false);
     });
+
+    it("renders settings button in session panel header and upload button in map layers panel header", async () => {
+      const map1 = makeMap("map-1", "Dungeon");
+      const controller = createMockController({
+        playerId: "dm-user",
+        isOwner: true,
+        state: {
+          phase: "Playing",
+          maps: [map1],
+          activeMapId: "map-1",
+        },
+      });
+      app.attach(controller);
+      await app.updateComplete;
+
+      // 1. Session panel header contains the Settings button
+      const sessionPanel = app.querySelector(".dndm-session-panel") as HTMLElement;
+      expect(sessionPanel).not.toBeNull();
+      const sessionHeader = sessionPanel.querySelector(".dndm-panel-header") as HTMLElement;
+      expect(sessionHeader).not.toBeNull();
+      const settingsBtn = sessionHeader.querySelector('button[title="Session Settings"]') as HTMLButtonElement;
+      expect(settingsBtn).not.toBeNull();
+
+      // Clicking settings button opens settings modal without collapsing session panel
+      settingsBtn.click();
+      await app.updateComplete;
+      expect(sessionPanel.classList.contains("dndm-panel--collapsed")).toBe(false);
+
+      // 2. Map layers panel header contains the upload button
+      const layerPanel = app.querySelector("dndm-layer-panel") as HTMLElement;
+      expect(layerPanel).not.toBeNull();
+      const layerHeader = layerPanel.querySelector(".dndm-panel-header") as HTMLElement;
+      expect(layerHeader).not.toBeNull();
+      const uploadComponent = layerHeader.querySelector("dndm-image-upload");
+      expect(uploadComponent).not.toBeNull();
+      const uploadBtn = uploadComponent?.querySelector('label[aria-label="Upload images"]');
+      expect(uploadBtn).not.toBeNull();
+    });
   });
 });

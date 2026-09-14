@@ -846,34 +846,8 @@ export class DndmApp extends GameElement {
                       .activeMap=${active}
                       .selectedImageId=${this.selectedImageId}
                       .assetSource=${this.assetSource}
-                      .onSelectImage=${(id: string | null) => {
-                      this.selectedImageId = id;
-                      fx.map()?.selectImage(id);
-                    }}
-                      .onToggleHidden=${(id: string, hidden: boolean) =>
-                      this.send({ kind: "setImageHidden", imageId: id, hidden })}
-                      .onToggleLocked=${(id: string, locked: boolean) =>
-                      this.send({ kind: "setImageLocked", imageId: id, locked })}
-                      .onRenameImage=${(id: string, _name: string) => {
-                      const img = active?.images.find((i) => i.id === id);
-                      if (img) {
-                        this.send({
-                          kind: "transformImage",
-                          imageId: id,
-                          x: img.x,
-                          y: img.y,
-                          width: img.width,
-                          height: img.height,
-                          rotation: img.rotation,
-                        });
-                      }
-                    }}
-                    >
-                      <dndm-image-upload
-                        slot="header-action"
-                        .compact=${true}
-                        .libraryService=${this.libraryService}
-                        .onImageUploaded=${async (
+                      .libraryService=${this.libraryService}
+                      .onImageUploaded=${async (
                         newImg: NewMapImage,
                         blob: Blob,
                         imageId: string,
@@ -884,8 +858,29 @@ export class DndmApp extends GameElement {
                           toastService.success(`Added image layer "${newImg.name}"`);
                         }
                       }}
-                      ></dndm-image-upload>
-                    </dndm-layer-panel>
+                      .onSelectImage=${(id: string | null) => {
+                        this.selectedImageId = id;
+                        fx.map()?.selectImage(id);
+                      }}
+                      .onToggleHidden=${(id: string, hidden: boolean) =>
+                        this.send({ kind: "setImageHidden", imageId: id, hidden })}
+                      .onToggleLocked=${(id: string, locked: boolean) =>
+                        this.send({ kind: "setImageLocked", imageId: id, locked })}
+                      .onRenameImage=${(id: string, _name: string) => {
+                        const img = active?.images.find((i) => i.id === id);
+                        if (img) {
+                          this.send({
+                            kind: "transformImage",
+                            imageId: id,
+                            x: img.x,
+                            y: img.y,
+                            width: img.width,
+                            height: img.height,
+                            rotation: img.rotation,
+                          });
+                        }
+                      }}
+                    ></dndm-layer-panel>
 
                     <dndm-saves-panel
                       .libraryService=${this.libraryService}
@@ -940,10 +935,8 @@ export class DndmApp extends GameElement {
                     <section class="dndm-panel dndm-session-panel">
                       <header class="dndm-panel-header">
                         <span>Session</span>
-                      </header>
-                      <div class="dndm-panel-body dndm-session-actions">
                         <button
-                          class="dndm-btn dndm-btn--icon"
+                          class="dndm-btn dndm-btn--icon dndm-btn--small"
                           type="button"
                           title="Session Settings"
                           @click=${() => {
@@ -952,6 +945,8 @@ export class DndmApp extends GameElement {
                         >
                           ${gearIcon()}
                         </button>
+                      </header>
+                      <div class="dndm-panel-body dndm-session-actions">
                         <button
                           class="dndm-btn dndm-btn--ghost dndm-btn--small"
                           type="button"

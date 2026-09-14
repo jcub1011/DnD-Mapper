@@ -115,6 +115,11 @@
   user-select: none;
 }
 
+.dndm-panel-header dndm-image-upload {
+  display: inline-flex;
+  align-items: center;
+}
+
 /* Collapsed: hide everything in the panel except the header itself. The
    .dndm-panel-header click handler (dndMapperPanelCollapse.js) toggles the
    --collapsed class on the panel. */

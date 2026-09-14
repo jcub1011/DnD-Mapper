@@ -14,6 +14,8 @@ import "../panels/dndm-my-token";
 import type { DndmMyToken } from "../panels/dndm-my-token";
 import "../panels/dndm-saves-panel";
 import type { DndmSavesPanel } from "../panels/dndm-saves-panel";
+import "../panels/dndm-layer-panel";
+import type { DndmLayerPanel } from "../panels/dndm-layer-panel";
 import "../lobby/dndm-lobby";
 import type { DndmLobby } from "../lobby/dndm-lobby";
 import { createDefaultDndMapperState } from "../../game/domain";
@@ -446,6 +448,44 @@ describe("UI Panels and Canvas Controls (07 — UI Shell)", () => {
       });
 
       await libraryService.detach();
+      el.remove();
+    });
+  });
+
+  describe("<dndm-layer-panel>", () => {
+    it("renders map layers header with upload image button", async () => {
+      const el = document.createElement("dndm-layer-panel") as DndmLayerPanel;
+      const map = makeMap("m1", "Dungeon");
+      el.activeMap = map;
+
+      document.body.appendChild(el);
+      await el.updateComplete;
+
+      const header = el.querySelector(".dndm-panel-header");
+      expect(header).not.toBeNull();
+      expect(header?.textContent).toContain("Map Layers");
+
+      const uploadComponent = header?.querySelector("dndm-image-upload");
+      expect(uploadComponent).not.toBeNull();
+
+      const uploadBtn = uploadComponent?.querySelector('label[aria-label="Upload images"]');
+      expect(uploadBtn).not.toBeNull();
+
+      el.remove();
+    });
+
+    it("disables upload button when there is no active map", async () => {
+      const el = document.createElement("dndm-layer-panel") as DndmLayerPanel;
+      el.activeMap = null;
+
+      document.body.appendChild(el);
+      await el.updateComplete;
+
+      const uploadComponent = el.querySelector(".dndm-panel-header dndm-image-upload");
+      expect(uploadComponent).not.toBeNull();
+      const input = uploadComponent?.querySelector('input[type="file"]') as HTMLInputElement;
+      expect(input?.disabled).toBe(true);
+
       el.remove();
     });
   });

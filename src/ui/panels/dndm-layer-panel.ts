@@ -1,9 +1,11 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { AssetSource } from "../../assets/assetSource";
-import type { GameMap, MapImage } from "../../game/domain";
+import type { GameMap, MapImage, NewMapImage } from "../../game/domain";
+import type { LibraryService } from "../../storage/libraryService";
 import { GameElement } from "../app/GameElement";
 import { eyeIcon, lockIcon } from "../icons";
+import "../upload/dndm-image-upload";
 
 @customElement("dndm-layer-panel")
 export class DndmLayerPanel extends GameElement {
@@ -15,6 +17,12 @@ export class DndmLayerPanel extends GameElement {
 
   @property({ attribute: false })
   assetSource?: AssetSource;
+
+  @property({ attribute: false })
+  libraryService?: LibraryService;
+
+  @property({ attribute: false })
+  onImageUploaded?: (image: NewMapImage, blob: Blob, imageId: string) => void;
 
   @property({ attribute: false })
   onSelectImage?: (imageId: string | null) => void;
@@ -127,7 +135,12 @@ export class DndmLayerPanel extends GameElement {
       <section class="dndm-panel">
         <header class="dndm-panel-header">
           <span>Map Layers</span>
-          <slot name="header-action"></slot>
+          <dndm-image-upload
+            .compact=${true}
+            .disabled=${!this.activeMap}
+            .libraryService=${this.libraryService}
+            .onImageUploaded=${this.onImageUploaded}
+          ></dndm-image-upload>
         </header>
         <div class="dndm-panel-body dndm-layers-body">
           ${!this.activeMap
