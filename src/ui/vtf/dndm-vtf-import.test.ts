@@ -82,7 +82,8 @@ describe("<dndm-vtf-import> component", () => {
 
     const btn = el.querySelector("button");
     expect(btn).not.toBeNull();
-    expect(btn?.textContent?.trim()).toContain("Import .vtf");
+    expect(btn?.getAttribute("title")).toBe("Import .vtf");
+    expect(btn?.querySelector("svg")).not.toBeNull();
 
     el.remove();
   });

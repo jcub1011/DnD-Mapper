@@ -16,6 +16,14 @@ import type {
 } from "../../game/domain.js";
 import { resolveAttributeContribution } from "../../game/domain.js";
 import { GameElement } from "../app/GameElement.js";
+import {
+  chevronIcon,
+  closeIcon,
+  dieIcon,
+  gearIcon,
+  rollLogIcon,
+  volumeIcon,
+} from "../icons.js";
 import { diceAnimationTracker } from "../dice/diceAnimationTracker.js";
 
 const POLYHEDRAL_DICE = [4, 6, 8, 10, 12, 20, 100] as const;
@@ -211,7 +219,7 @@ export class DndmQuickRollFooter extends GameElement {
             if (this.logOpen) this.presetsOpen = false;
           }}
         >
-          🗒
+          ${rollLogIcon()}
         </button>
 
         ${this.logOpen
@@ -235,7 +243,7 @@ export class DndmQuickRollFooter extends GameElement {
                       type="button"
                       @click=${() => (this.logOpen = false)}
                     >
-                      ×
+                      ${closeIcon()}
                     </button>
                   </div>
                 </div>
@@ -256,7 +264,7 @@ export class DndmQuickRollFooter extends GameElement {
             if (this.presetsOpen) this.logOpen = false;
           }}
         >
-          ⚙
+          ${gearIcon()}
         </button>
 
         ${this.presetsOpen
@@ -280,7 +288,7 @@ export class DndmQuickRollFooter extends GameElement {
                       type="button"
                       @click=${() => (this.presetsOpen = false)}
                     >
-                      ×
+                      ${closeIcon()}
                     </button>
                   </div>
                 </div>
@@ -336,7 +344,7 @@ export class DndmQuickRollFooter extends GameElement {
           title=${this.soundEnabled ? "Dice sounds: On (click to mute)" : "Dice sounds: Muted (click to enable)"}
           @click=${() => this.onToggleSound?.()}
         >
-          ${this.soundEnabled ? "🔊" : "🔇"}
+          ${volumeIcon(!this.soundEnabled)}
         </button>
 
         <!-- Polyhedral Dice Buttons -->
@@ -397,7 +405,7 @@ export class DndmQuickRollFooter extends GameElement {
           type="button"
           @click=${() => this.handleCustomRoll()}
         >
-          🎲 Roll
+          ${dieIcon()} Roll
         </button>
 
         <!-- Attribute quick rolls expander -->
@@ -409,7 +417,7 @@ export class DndmQuickRollFooter extends GameElement {
                 title=${this.attrsExpanded ? "Hide attributes" : "Quick attribute rolls"}
                 @click=${() => (this.attrsExpanded = !this.attrsExpanded)}
               >
-                ${this.attrsExpanded ? "▾ Attributes" : "▸ Attributes"}
+                ${chevronIcon(this.attrsExpanded ? "down" : "right")} Attributes
               </button>
             `
           : nothing}

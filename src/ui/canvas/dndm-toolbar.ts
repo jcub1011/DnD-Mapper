@@ -1,6 +1,20 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { GameElement } from "../app/GameElement";
+import {
+  centerTargetIcon,
+  closeIcon,
+  focusRectIcon,
+  fogClearIcon,
+  fogEraseIcon,
+  fogFillIcon,
+  fogPaintIcon,
+  penIcon,
+  resetViewIcon,
+  rulerIcon,
+  zoomInIcon,
+  zoomOutIcon,
+} from "../icons";
 import type { ToolMode } from "../map/MapScene";
 
 @customElement("dndm-toolbar")
@@ -113,7 +127,7 @@ export class DndmToolbar extends GameElement {
           title="Zoom out"
           @click=${() => this.onZoomOut?.()}
         >
-          −
+          ${zoomOutIcon()}
         </button>
         <span class="dndm-zoom-readout">${pct}%</span>
         <button
@@ -122,7 +136,7 @@ export class DndmToolbar extends GameElement {
           title="Zoom in"
           @click=${() => this.onZoomIn?.()}
         >
-          +
+          ${zoomInIcon()}
         </button>
         <button
           class="dndm-zoom-btn"
@@ -130,7 +144,7 @@ export class DndmToolbar extends GameElement {
           title="Reset view"
           @click=${() => this.onResetView?.()}
         >
-          ⟲
+          ${resetViewIcon()}
         </button>
 
         ${this.isDm
@@ -143,7 +157,7 @@ export class DndmToolbar extends GameElement {
                 title="Markup — draw freehand vector lines and notes on the map"
                 @click=${() => this.toggleMarkup()}
               >
-                ✎
+                ${penIcon()}
               </button>
 
               <button
@@ -152,7 +166,7 @@ export class DndmToolbar extends GameElement {
                 title="Focus box — drag on the map to define a focus region"
                 @click=${() => this.toggleFocus()}
               >
-                ▭
+                ${focusRectIcon()}
               </button>
               ${this.hasFocusRect
                 ? html`
@@ -162,7 +176,7 @@ export class DndmToolbar extends GameElement {
                       title="Clear focus box"
                       @click=${() => this.onClearFocusRect?.()}
                     >
-                      ✕
+                      ${closeIcon()}
                     </button>
                   `
                 : nothing}
@@ -173,7 +187,7 @@ export class DndmToolbar extends GameElement {
                 title="Ruler — click two points to measure distance; right-click clears"
                 @click=${() => this.toggleRuler()}
               >
-                📐
+                ${rulerIcon()}
               </button>
 
               <span class="dndm-toolbar-sep" aria-hidden="true"></span>
@@ -186,7 +200,7 @@ export class DndmToolbar extends GameElement {
                 title="Paint fog — drag on the map to hide cells"
                 @click=${() => this.selectFogPaint()}
               >
-                ▒
+                ${fogPaintIcon()}
               </button>
               <button
                 class="dndm-zoom-btn ${this.toolMode === "fog" && this.fogBrushMode === "erase"
@@ -196,7 +210,7 @@ export class DndmToolbar extends GameElement {
                 title="Erase fog — drag on the map to reveal cells"
                 @click=${() => this.selectFogErase()}
               >
-                ◌
+                ${fogEraseIcon()}
               </button>
               <button
                 class="dndm-zoom-btn"
@@ -212,7 +226,7 @@ export class DndmToolbar extends GameElement {
                 title="Fill the entire map with fog"
                 @click=${() => this.onFillFog?.()}
               >
-                ▣
+                ${fogFillIcon()}
               </button>
               <button
                 class="dndm-zoom-btn"
@@ -220,7 +234,7 @@ export class DndmToolbar extends GameElement {
                 title="Clear all fog"
                 @click=${() => this.onClearFog?.()}
               >
-                ◻
+                ${fogClearIcon()}
               </button>
 
               <span class="dndm-toolbar-sep" aria-hidden="true"></span>
@@ -231,7 +245,7 @@ export class DndmToolbar extends GameElement {
                 title="Center all players on current view"
                 @click=${() => this.onCenterEveryone?.()}
               >
-                ⌖
+                ${centerTargetIcon()}
               </button>
             `
           : nothing}

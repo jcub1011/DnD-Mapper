@@ -8,6 +8,7 @@ import {
   type MapSummary,
 } from "../../game/domain.js";
 import { GameElement } from "../app/GameElement.js";
+import { penIcon } from "../icons.js";
 import "../modals/dndm-loaded-dice-modal.js";
 import "./dndm-collapsible-panel.js";
 
@@ -248,7 +249,7 @@ export class DndmLoadedDicePanel extends GameElement {
             title="Edit rule"
             @click=${() => this.openEditModal(rule)}
           >
-            ✎
+            ${penIcon()}
           </button>
 
           <button

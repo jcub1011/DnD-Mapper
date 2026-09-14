@@ -15,6 +15,7 @@ import type { LibraryService } from "../../storage/libraryService.js";
 import { importVtf } from "../../vtf/import.js";
 import type { UnpackResult } from "../../vtf/types.js";
 import { GameElement } from "../app/GameElement.js";
+import { importIcon } from "../icons.js";
 
 export interface VtfImportedDetail {
   readonly result: UnpackResult;
@@ -146,11 +147,13 @@ export class DndmVtfImport extends GameElement {
 
         <button
           type="button"
-          class="dndm-btn dndm-btn--primary"
+          class="dndm-btn dndm-btn--small dndm-btn--icon"
+          title=${this.importing ? "Importing .vtf…" : "Import .vtf"}
+          aria-label=${this.importing ? "Importing .vtf…" : "Import .vtf"}
           ?disabled=${this.importing}
           @click=${this.triggerFileInput}
         >
-          ${this.importing ? "Importing .vtf…" : "Import .vtf"}
+          ${this.importing ? html`<span>…</span>` : importIcon()}
         </button>
 
         ${

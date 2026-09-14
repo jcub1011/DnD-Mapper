@@ -3,6 +3,7 @@ import { customElement, property } from "lit/decorators.js";
 import type { KBPlayer } from "../../../addons/knockbox/knockbox-phaser";
 import { DEFAULT_SETTINGS, type DndMapperSettings } from "../../game/domain";
 import { GameElement } from "../app/GameElement";
+import { lockIcon } from "../icons";
 import "../modals/dndm-permissions";
 
 @customElement("dndm-lobby")
@@ -118,11 +119,11 @@ export class DndmLobby extends GameElement {
             ${this.isOwner
               ? html`
                   <button
-                    class="dndm-btn dndm-btn--ghost"
+                    class="dndm-btn ${this.lobbyOpen ? "dndm-btn--danger" : "dndm-btn--ghost"}"
                     type="button"
                     @click=${() => this.onToggleLobbyOpen?.()}
                   >
-                    ${this.lobbyOpen ? "Close lobby" : "Open lobby"}
+                    ${this.lobbyOpen ? html`${lockIcon(true)} Close lobby` : html`${lockIcon(false)} Open lobby`}
                   </button>
                 `
               : nothing}

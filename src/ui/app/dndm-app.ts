@@ -30,7 +30,7 @@ import type { GameController } from "../../net/controller";
 import type { LaunchMode } from "../../net/launch";
 import { LibraryService } from "../../storage/libraryService";
 import { fx } from "../fx/fx";
-import { gearIcon } from "../icons";
+import { fullscreenExitIcon, fullscreenIcon, gearIcon, lockIcon } from "../icons";
 import type { ToolMode } from "../map/MapScene";
 import { toastService } from "../toast/toastService";
 import { GameElement } from "./GameElement";
@@ -786,7 +786,7 @@ export class DndmApp extends GameElement {
             title="Exit Theater Mode (Esc)"
             @click=${() => this.toggleProjectorMode()}
           >
-            ⛶ Exit Theater (Esc)
+            ${fullscreenExitIcon()} Exit Theater (Esc)
           </button>
           <div class="dndm-dice-canvas-overlay" id="dndm-dice-overlay"></div>
           <dndm-display-roll-ticker
@@ -954,22 +954,23 @@ export class DndmApp extends GameElement {
                       `}
                       .content=${html`
                         <button
-                          class="dndm-btn dndm-btn--ghost dndm-btn--small"
+                          class="dndm-btn ${this.lobbyOpen ? "dndm-btn--danger" : "dndm-btn--ghost"} dndm-btn--small"
                           type="button"
                           @click=${() => {
                             this.lobbyOpen = !this.lobbyOpen;
                             this.controller?.setLobbyOpen(this.lobbyOpen);
                           }}
                         >
-                          ${this.lobbyOpen ? "Close Lobby" : "Open Lobby"}
+                          ${this.lobbyOpen ? html`${lockIcon(true)} Close Lobby` : html`${lockIcon(false)} Open Lobby`}
                         </button>
                         <button
-                          class="dndm-btn dndm-btn--ghost dndm-btn--small"
+                          class="dndm-btn dndm-btn--ghost dndm-btn--small dndm-btn--icon"
                           type="button"
                           title="Enter Projector Theater Mode"
+                          aria-label="Enter Projector Theater Mode"
                           @click=${() => this.toggleProjectorMode()}
                         >
-                          📽️ Theater
+                          ${fullscreenIcon()}
                         </button>
                         <button
                           class="dndm-btn dndm-btn--ghost dndm-btn--small"

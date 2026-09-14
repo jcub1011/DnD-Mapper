@@ -4,7 +4,7 @@ import type { DndMapperState } from "../../game/domain";
 import type { LibraryService } from "../../storage/libraryService";
 import type { SlotInfo } from "../../storage/schema";
 import { GameElement } from "../app/GameElement";
-import { exportIcon, floppyIcon, floppyPlusIcon, trashIcon } from "../icons";
+import { exportIcon, floppyIcon, floppyPlusIcon, penIcon, trashIcon } from "../icons";
 import "../modals/dndm-confirm";
 import "../shared/dndm-rail-menu";
 import { toastService } from "../toast/toastService";
@@ -323,7 +323,7 @@ export class DndmSavesPanel extends GameElement {
                                               this.renameDraft = s.name;
                                             }}
                                           >
-                                            ✎
+                                            ${penIcon()}
                                           </button>
                                           <button
                                             class="dndm-btn dndm-btn--small dndm-btn--danger dndm-btn--icon"

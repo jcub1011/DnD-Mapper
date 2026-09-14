@@ -3,7 +3,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import type { GameMap, GridConfig, MapSummary } from "../../game/domain";
 import { isFullMap } from "../../game/domain";
 import { GameElement } from "../app/GameElement";
-import { trashIcon } from "../icons";
+import { gearIcon, penIcon, trashIcon } from "../icons";
 import "../modals/dndm-confirm";
 import "../modals/dndm-map-settings";
 import "../shared/dndm-rail-menu";
@@ -229,7 +229,7 @@ export class DndmMapList extends GameElement {
                                 };
                           }}
                         >
-                          ⚙️
+                          ${gearIcon()}
                         </button>
                         <button
                           class="dndm-btn dndm-btn--icon dndm-btn--small"
@@ -237,7 +237,7 @@ export class DndmMapList extends GameElement {
                           title="Rename"
                           @click=${(e: Event) => this.startRename(m, e)}
                         >
-                          ✎
+                          ${penIcon()}
                         </button>
                         <button
                           class="dndm-btn dndm-btn--icon dndm-btn--small"
