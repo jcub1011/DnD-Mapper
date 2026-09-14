@@ -9,6 +9,7 @@ import "../modals/dndm-confirm";
 import "../shared/dndm-rail-menu";
 import { toastService } from "../toast/toastService";
 import "../vtf/dndm-vtf-import";
+import "./dndm-collapsible-panel";
 import { exportCampaignSlot, triggerVtfDownload } from "../../vtf/export";
 
 function formatRelative(isoUtc: string): string {
@@ -176,9 +177,10 @@ export class DndmSavesPanel extends GameElement {
 
   override render(): TemplateResult {
     return html`
-      <section class="dndm-panel dndm-savesp">
-        <header class="dndm-panel-header">
-          <span>Saves</span>
+      <dndm-collapsible-panel
+        panelTitle="Saves"
+        panelClass="dndm-savesp"
+        .actions=${html`
           <div class="dndm-savesp-header-actions">
             <dndm-vtf-import
               .libraryService=${this.libraryService}
@@ -198,9 +200,8 @@ export class DndmSavesPanel extends GameElement {
               ${floppyPlusIcon()}
             </button>
           </div>
-        </header>
-
-        <div class="dndm-panel-body">
+        `}
+        .content=${html`
           ${this.creating
             ? html`
                 <div class="dndm-saves-create">
@@ -354,8 +355,8 @@ export class DndmSavesPanel extends GameElement {
             <span>${formatBytes(this.bytesUsed)} / 1 GB</span>
           </div>
           ${this.error ? html`<div class="dndm-saves-error">${this.error}</div>` : nothing}
-        </div>
-      </section>
+        `}
+      ></dndm-collapsible-panel>
 
       <dndm-confirm
         ?isOpen=${this.pendingLoadSlot !== null}

@@ -6,6 +6,7 @@ import type { LibraryService } from "../../storage/libraryService";
 import { GameElement } from "../app/GameElement";
 import { eyeIcon, lockIcon } from "../icons";
 import "../upload/dndm-image-upload";
+import "./dndm-collapsible-panel";
 
 @customElement("dndm-layer-panel")
 export class DndmLayerPanel extends GameElement {
@@ -132,98 +133,98 @@ export class DndmLayerPanel extends GameElement {
     const sortedImages = [...images].sort((a, b) => b.layerOrder - a.layerOrder);
 
     return html`
-      <section class="dndm-panel">
-        <header class="dndm-panel-header">
-          <span>Map Layers</span>
+      <dndm-collapsible-panel
+        panelTitle="Map Layers"
+        bodyClass="dndm-layers-body"
+        .actions=${html`
           <dndm-image-upload
             .compact=${true}
             .disabled=${!this.activeMap}
             .libraryService=${this.libraryService}
             .onImageUploaded=${this.onImageUploaded}
           ></dndm-image-upload>
-        </header>
-        <div class="dndm-panel-body dndm-layers-body">
-          ${!this.activeMap
-            ? html`<div class="dndm-panel-empty">No active map.</div>`
-            : sortedImages.length === 0
-              ? html`<div class="dndm-panel-empty">
-                  No image layers yet. Use the upload icon above to add one.
-                </div>`
-              : html`
-                  <ul class="dndm-layers-list">
-                    ${sortedImages.map((img) => {
-                      const isSelected = img.id === this.selectedImageId;
-                      const thumbUrl = this.thumbUrls.get(img.id);
+        `}
+        .content=${!this.activeMap
+          ? html`<div class="dndm-panel-empty">No active map.</div>`
+          : sortedImages.length === 0
+            ? html`<div class="dndm-panel-empty">
+                No image layers yet. Use the upload icon above to add one.
+              </div>`
+            : html`
+                <ul class="dndm-layers-list">
+                  ${sortedImages.map((img) => {
+                    const isSelected = img.id === this.selectedImageId;
+                    const thumbUrl = this.thumbUrls.get(img.id);
 
-                      return html`
-                        <li
-                          class="dndm-layer-row ${isSelected ? "dndm-layer-row--selected" : ""} ${img.hidden ? "dndm-layer-row--hidden" : ""}"
+                    return html`
+                      <li
+                        class="dndm-layer-row ${isSelected ? "dndm-layer-row--selected" : ""} ${img.hidden ? "dndm-layer-row--hidden" : ""}"
+                      >
+                        <div
+                          class="dndm-layer-clickarea"
+                          @click=${() => this.handleRowClick(img.id)}
                         >
-                          <div
-                            class="dndm-layer-clickarea"
-                            @click=${() => this.handleRowClick(img.id)}
-                          >
-                            ${thumbUrl
-                              ? html`<img class="dndm-layer-thumb" src=${thumbUrl} alt=${img.name} />`
-                              : html`<div
-                                  class="dndm-layer-thumb dndm-layer-thumb--placeholder"
-                                  title="Loading texture…"
-                                ></div>`}
-                            ${this.renamingId === img.id
-                              ? html`
-                                  <input
-                                    class="dndm-input dndm-layer-name-input"
-                                    .value=${this.renameDraft}
-                                    @input=${(e: Event) => {
-                                      this.renameDraft = (e.target as HTMLInputElement).value;
-                                    }}
-                                    @keydown=${(e: KeyboardEvent) => this.handleKeyDown(e, img.id)}
-                                    @blur=${() => this.commitRename(img.id)}
-                                    @click=${(e: Event) => e.stopPropagation()}
-                                  />
-                                `
-                              : html`
-                                  <span
-                                    class="dndm-layer-name"
-                                    title="Double-click to rename"
-                                    @dblclick=${(e: Event) => this.startRename(img, e)}
-                                  >
-                                    ${img.name}
-                                  </span>
-                                  ${img.wasDownscaled
-                                    ? html`<span
-                                        class="dndm-layer-downscale-badge"
-                                        title="Downscaled for performance"
-                                        aria-label="Downscaled"
-                                      >
-                                        ⤓
-                                      </span>`
-                                    : nothing}
-                                `}
-                          </div>
-                          <button
-                            class="dndm-btn dndm-btn--small dndm-btn--icon"
-                            type="button"
-                            title=${img.hidden ? "Hidden — click to show" : "Visible — click to hide"}
-                            @click=${(e: Event) => this.toggleHidden(img, e)}
-                          >
-                            ${eyeIcon(!img.hidden)}
-                          </button>
-                          <button
-                            class="dndm-btn dndm-btn--small dndm-btn--icon"
-                            type="button"
-                            title=${img.locked ? "Locked — click to unlock" : "Unlocked — click to lock"}
-                            @click=${(e: Event) => this.toggleLocked(img, e)}
-                          >
-                            ${lockIcon(img.locked)}
-                          </button>
-                        </li>
-                      `;
-                    })}
-                  </ul>
-                `}
-        </div>
-      </section>
+                          ${thumbUrl
+                            ? html`<img class="dndm-layer-thumb" src=${thumbUrl} alt=${img.name} />`
+                            : html`<div
+                                class="dndm-layer-thumb dndm-layer-thumb--placeholder"
+                                title="Loading texture…"
+                              ></div>`}
+                          ${this.renamingId === img.id
+                            ? html`
+                                <input
+                                  class="dndm-input dndm-layer-name-input"
+                                  .value=${this.renameDraft}
+                                  @input=${(e: Event) => {
+                                    this.renameDraft = (e.target as HTMLInputElement).value;
+                                  }}
+                                  @keydown=${(e: KeyboardEvent) => this.handleKeyDown(e, img.id)}
+                                  @blur=${() => this.commitRename(img.id)}
+                                  @click=${(e: Event) => e.stopPropagation()}
+                                  autofocus
+                                />
+                              `
+                            : html`
+                                <span
+                                  class="dndm-layer-name"
+                                  title="Double-click to rename"
+                                  @dblclick=${(e: Event) => this.startRename(img, e)}
+                                >
+                                  ${img.name}
+                                </span>
+                                ${img.wasDownscaled
+                                  ? html`<span
+                                      class="dndm-layer-downscale-badge"
+                                      title="Downscaled for performance"
+                                      aria-label="Downscaled"
+                                    >
+                                      ⤓
+                                    </span>`
+                                  : nothing}
+                              `}
+                        </div>
+                        <button
+                          class="dndm-btn dndm-btn--icon dndm-btn--small"
+                          type="button"
+                          title=${img.hidden ? "Hidden — click to show" : "Visible — click to hide"}
+                          @click=${(e: Event) => this.toggleHidden(img, e)}
+                        >
+                          ${eyeIcon(!img.hidden)}
+                        </button>
+                        <button
+                          class="dndm-btn dndm-btn--icon dndm-btn--small"
+                          type="button"
+                          title=${img.locked ? "Locked — click to unlock" : "Unlocked — click to lock"}
+                          @click=${(e: Event) => this.toggleLocked(img, e)}
+                        >
+                          ${lockIcon(img.locked)}
+                        </button>
+                      </li>
+                    `;
+                  })}
+                </ul>
+              `}
+      ></dndm-collapsible-panel>
     `;
   }
 }

@@ -3,7 +3,7 @@
  * Aesthetic: Forge & Ember — matching panels.css tokens
  */
 
-.dndm-initiative-panel {
+.dndm-initiative-panel > .dndm-panel-body {
   display: flex;
   flex-direction: column;
   gap: 8px;

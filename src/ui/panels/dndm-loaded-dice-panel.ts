@@ -9,6 +9,7 @@ import {
 } from "../../game/domain.js";
 import { GameElement } from "../app/GameElement.js";
 import "../modals/dndm-loaded-dice-modal.js";
+import "./dndm-collapsible-panel.js";
 
 @customElement("dndm-loaded-dice-panel")
 export class DndmLoadedDicePanel extends GameElement {
@@ -123,9 +124,11 @@ export class DndmLoadedDicePanel extends GameElement {
     const heldKeys = this.hostHeldKeys ?? [];
 
     return html`
-      <section class="dndm-panel dndm-loaded-dice">
-        <header class="dndm-panel-header">
-          <span>Loaded Dice (${rules.length})</span>
+      <dndm-collapsible-panel
+        panelTitle=${`Loaded Dice (${rules.length})`}
+        panelClass="dndm-loaded-dice"
+        bodyStyle="display: flex; flex-direction: column; gap: var(--dndm-spacing-xs);"
+        .actions=${html`
           <button
             class="dndm-btn dndm-btn--small dndm-btn--primary"
             type="button"
@@ -134,9 +137,8 @@ export class DndmLoadedDicePanel extends GameElement {
           >
             + Rule
           </button>
-        </header>
-
-        <div class="dndm-panel-body" style="display: flex; flex-direction: column; gap: var(--dndm-spacing-xs);">
+        `}
+        .content=${html`
           <!-- Held Keys Indicator Bar -->
           <div class="dndm-loaded-keys-bar" title="Keystrokes held by the host DM for trigger conditions">
             <span>Held keys:</span>
@@ -155,20 +157,20 @@ export class DndmLoadedDicePanel extends GameElement {
                   ${rules.map((rule, idx) => this.renderRuleCard(rule, idx))}
                 </div>
               `}
-        </div>
+        `}
+      ></dndm-collapsible-panel>
 
-        <dndm-loaded-dice-modal
-          .isOpen=${this.modalOpen}
-          .rule=${this.editingRule}
-          .sheets=${this.sheets}
-          .maps=${this.maps}
-          .onSave=${(data: Omit<LoadedDiceRule, "id">, id?: string) => this.handleSaveRule(data, id)}
-          .onClose=${() => this.closeModal()}
-          .onCancel=${() => this.closeModal()}
-          @close=${() => this.closeModal()}
-          @cancel=${() => this.closeModal()}
-        ></dndm-loaded-dice-modal>
-      </section>
+      <dndm-loaded-dice-modal
+        .isOpen=${this.modalOpen}
+        .rule=${this.editingRule}
+        .sheets=${this.sheets}
+        .maps=${this.maps}
+        .onSave=${(data: Omit<LoadedDiceRule, "id">, id?: string) => this.handleSaveRule(data, id)}
+        .onClose=${() => this.closeModal()}
+        .onCancel=${() => this.closeModal()}
+        @close=${() => this.closeModal()}
+        @cancel=${() => this.closeModal()}
+      ></dndm-loaded-dice-modal>
     `;
   }
 

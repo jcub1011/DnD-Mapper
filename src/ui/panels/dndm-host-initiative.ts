@@ -10,6 +10,7 @@ import type {
 } from "../../game/domain.js";
 import { isFullMap } from "../../game/domain.js";
 import { GameElement } from "../app/GameElement.js";
+import "./dndm-collapsible-panel.js";
 
 @customElement("dndm-host-initiative")
 export class DndmHostInitiative extends GameElement {
@@ -161,11 +162,11 @@ export class DndmHostInitiative extends GameElement {
   override render(): TemplateResult {
     if (!this.combat) {
       return html`
-        <section class="dndm-panel dndm-initiative-panel">
-          <header class="dndm-panel-header">
-            <span>Initiative & Combat</span>
-          </header>
-          <div class="dndm-panel-body dndm-initiative-empty">
+        <dndm-collapsible-panel
+          panelTitle="Initiative & Combat"
+          panelClass="dndm-initiative-panel"
+          bodyClass="dndm-initiative-empty"
+          .content=${html`
             <span>No encounter currently running.</span>
             ${this.isDm && this.activeMap
               ? html`
@@ -178,8 +179,8 @@ export class DndmHostInitiative extends GameElement {
                   </button>
                 `
               : nothing}
-          </div>
-        </section>
+          `}
+        ></dndm-collapsible-panel>
       `;
     }
 
@@ -187,9 +188,10 @@ export class DndmHostInitiative extends GameElement {
     const isWaiting = phase === "WaitingForRolls";
 
     return html`
-      <section class="dndm-panel dndm-initiative-panel">
-        <header class="dndm-panel-header">
-          <span>Combat Tracker</span>
+      <dndm-collapsible-panel
+        panelTitle="Combat Tracker"
+        panelClass="dndm-initiative-panel"
+        .actions=${html`
           <div class="dndm-panel-header-actions">
             ${this.confirmingEnd
               ? html`
@@ -226,9 +228,8 @@ export class DndmHostInitiative extends GameElement {
                   </button>
                 `}
           </div>
-        </header>
-
-        <div class="dndm-panel-body">
+        `}
+        .content=${html`
           <!-- Round & Turn Navigation Bar -->
           <div class="dndm-initiative-round-bar">
             <div class="dndm-initiative-round-title">
@@ -405,8 +406,8 @@ export class DndmHostInitiative extends GameElement {
 
           <!-- Add Combatant Dropdown -->
           ${this.renderAddCombatantSection()}
-        </div>
-      </section>
+        `}
+      ></dndm-collapsible-panel>
     `;
   }
 }

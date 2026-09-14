@@ -4,6 +4,7 @@ import { isNatural1, isNatural20 } from "../../game/dice.js";
 import type { DndMapperState, RollMode, RollResult } from "../../game/domain.js";
 import { GameElement } from "../app/GameElement.js";
 import { diceAnimationTracker } from "../dice/diceAnimationTracker.js";
+import "./dndm-collapsible-panel.js";
 
 @customElement("dndm-roll-log")
 export class DndmRollLog extends GameElement {
@@ -92,9 +93,11 @@ export class DndmRollLog extends GameElement {
     const rolls = this.visibleRolls;
 
     return html`
-      <section class="dndm-panel dndm-rolllog">
-        <header class="dndm-panel-header dndm-rolllog-header">
-          <span>Roll Log (${rolls.length})</span>
+      <dndm-collapsible-panel
+        panelTitle=${`Roll Log (${rolls.length})`}
+        panelClass="dndm-rolllog"
+        headerClass="dndm-rolllog-header"
+        .actions=${html`
           <div class="dndm-rolllog-actions">
             ${this.isDm
               ? html`
@@ -117,18 +120,15 @@ export class DndmRollLog extends GameElement {
               All
             </button>
           </div>
-        </header>
-
-        <div class="dndm-panel-body">
-          ${rolls.length === 0
-            ? html`<div class="dndm-panel-empty">No rolls recorded yet.</div>`
-            : html`
-                <div class="dndm-rolllog-entries">
-                  ${[...rolls].reverse().map((r) => this.renderEntry(r))}
-                </div>
-              `}
-        </div>
-      </section>
+        `}
+        .content=${rolls.length === 0
+          ? html`<div class="dndm-panel-empty">No rolls recorded yet.</div>`
+          : html`
+              <div class="dndm-rolllog-entries">
+                ${[...rolls].reverse().map((r) => this.renderEntry(r))}
+              </div>
+            `}
+      ></dndm-collapsible-panel>
     `;
   }
 

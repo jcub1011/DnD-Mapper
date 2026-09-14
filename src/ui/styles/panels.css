@@ -113,17 +113,57 @@
   text-transform: none;
   cursor: pointer;
   user-select: none;
+  gap: 0.5rem;
+  min-width: 0;
 }
 
+.dndm-panel-title {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  cursor: pointer;
+  user-select: none;
+}
+
+.dndm-panel-title:focus-visible {
+  outline: 1px solid var(--dndm-ember-hi);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.dndm-panel-title-text,
+.dndm-panel-title > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.dndm-panel-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.dndm-panel-actions dndm-image-upload,
 .dndm-panel-header dndm-image-upload {
   display: inline-flex;
   align-items: center;
 }
 
 /* Collapsed: hide everything in the panel except the header itself. The
-   .dndm-panel-header click handler (dndMapperPanelCollapse.js) toggles the
-   --collapsed class on the panel. */
+   .dndm-panel-header click handler toggles the --collapsed class on the panel. */
 .dndm-panel--collapsed > :not(.dndm-panel-header) {
+  display: none !important;
+}
+
+.dndm-panel--collapsed .dndm-panel-divider {
   display: none !important;
 }
 
@@ -146,7 +186,30 @@
   box-shadow: 0 0 6px rgba(232, 144, 85, 0.35);
 }
 
-/* Copper rule under the header. */
+/* Copper divider rule under the header. */
+.dndm-panel-divider {
+  display: block;
+  height: 1px;
+  min-height: 1px;
+  flex: 0 0 1px;
+  margin: 0 0.75rem;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--dndm-ember) 15%,
+    var(--dndm-ember) 85%,
+    transparent
+  );
+  opacity: 0.5;
+}
+
+/* When the explicit divider element is present, suppress the legacy ::after pseudo-element */
+.dndm-panel:has(.dndm-panel-divider) .dndm-panel-header::after,
+dndm-collapsible-panel .dndm-panel-header::after {
+  display: none;
+}
+
+/* Copper rule under the header (legacy fallback). */
 .dndm-panel-header::after {
   content: "";
   position: absolute;
@@ -157,11 +220,11 @@
   background: linear-gradient(
     90deg,
     transparent,
-    var(--dndm-gilt) 15%,
-    var(--dndm-gilt) 85%,
+    var(--dndm-ember) 15%,
+    var(--dndm-ember) 85%,
     transparent
   );
-  opacity: 0.35;
+  opacity: 0.5;
 }
 
 .dndm-panel-body {

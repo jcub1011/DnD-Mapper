@@ -44,6 +44,7 @@ import "../modals/dndm-roll-history";
 import "../modals/dndm-roll-template-library";
 import "../panels/dndm-character-sheet";
 import type { SheetPatch } from "../panels/dndm-character-sheet";
+import "../panels/dndm-collapsible-panel";
 import "../panels/dndm-layer-panel";
 import "../panels/dndm-map-list";
 import "../panels/dndm-my-token";
@@ -335,6 +336,9 @@ export class DndmApp extends GameElement {
 
     const header = target.closest(".dndm-panel-header");
     if (!header) return;
+
+    // If managed by dndm-collapsible-panel, it manages its own state
+    if (header.closest("dndm-collapsible-panel")) return;
 
     // Check if click was on or inside an interactive element
     let el: HTMLElement | null = target;
@@ -932,28 +936,30 @@ export class DndmApp extends GameElement {
                       : nothing
                   }
 
-                    <section class="dndm-panel dndm-session-panel">
-                      <header class="dndm-panel-header">
-                        <span>Session</span>
+                    <dndm-collapsible-panel
+                      panelTitle="Session"
+                      panelClass="dndm-session-panel"
+                      bodyClass="dndm-session-actions"
+                      .actions=${html`
                         <button
                           class="dndm-btn dndm-btn--icon dndm-btn--small"
                           type="button"
                           title="Session Settings"
                           @click=${() => {
-                          this.settingsModalOpen = true;
-                        }}
+                            this.settingsModalOpen = true;
+                          }}
                         >
                           ${gearIcon()}
                         </button>
-                      </header>
-                      <div class="dndm-panel-body dndm-session-actions">
+                      `}
+                      .content=${html`
                         <button
                           class="dndm-btn dndm-btn--ghost dndm-btn--small"
                           type="button"
                           @click=${() => {
-                          this.lobbyOpen = !this.lobbyOpen;
-                          this.controller?.setLobbyOpen(this.lobbyOpen);
-                        }}
+                            this.lobbyOpen = !this.lobbyOpen;
+                            this.controller?.setLobbyOpen(this.lobbyOpen);
+                          }}
                         >
                           ${this.lobbyOpen ? "Close Lobby" : "Open Lobby"}
                         </button>
@@ -973,8 +979,8 @@ export class DndmApp extends GameElement {
                         >
                           ↗ Popout
                         </button>
-                      </div>
-                    </section>
+                      `}
+                    ></dndm-collapsible-panel>
                   </div>
 
                   <div

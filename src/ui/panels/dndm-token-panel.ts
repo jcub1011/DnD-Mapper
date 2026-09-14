@@ -5,6 +5,7 @@ import { GameElement } from "../app/GameElement";
 import { eyeIcon, glyphIcon, trashIcon } from "../icons";
 import "../modals/dndm-confirm";
 import "../shared/dndm-rail-menu";
+import "./dndm-collapsible-panel";
 
 @customElement("dndm-token-panel")
 export class DndmTokenPanel extends GameElement {
@@ -105,99 +106,95 @@ export class DndmTokenPanel extends GameElement {
     const tokens = this.activeMap?.tokens ?? [];
 
     return html`
-      <section class="dndm-panel dndm-tokenp">
-        <header class="dndm-panel-header">
-          <span>Tokens</span>
-        </header>
-        <div class="dndm-panel-body">
-          ${!this.activeMap
-            ? html`<div class="dndm-panel-empty">No active map.</div>`
-            : tokens.length === 0
-              ? html`<div class="dndm-panel-empty">No tokens on this map.</div>`
-              : tokens.map((t) => {
-                  const isPlayer = t.type === "PlayerToken";
-                  const repPlayer = t.representsUserId ? this.roster.find((p) => p.id === t.representsUserId) : null;
-                  const repName = repPlayer ? repPlayer.name : t.representsUserId;
-                  return html`
-                    <div
-                      class="dndm-tokenp-row"
-                      title="Double-click to center the canvas on this token"
-                      @dblclick=${() => this.handleDoubleClick(t)}
-                    >
-                      <span
-                        class="dndm-tokenp-dot"
-                        style="background: ${t.color};"
-                        aria-hidden="true"
-                      ></span>
-                      <div style="flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column;">
-                        <span class="dndm-tokenp-name">${t.name}</span>
-                        ${t.representsUserId
-                          ? html`<span
-                              class="dndm-tokenp-subtitle"
-                              style="font-size: 0.72rem; color: var(--dndm-text-muted); font-style: italic;"
-                            >
-                              (originally played by ${repName})
-                            </span>`
-                          : nothing}
-                      </div>
-                      <span class="dndm-tokenp-tag">${isPlayer ? "Player" : "NPC"}</span>
-                      ${this.isDm && t.ownerUserId === null
-                        ? html`
-                            <select
-                              class="dndm-select dndm-select--small"
-                              style="font-size: 0.75rem; padding: 1px 4px; max-width: 90px;"
-                              title="Assign Owner"
-                              @click=${(e: Event) => e.stopPropagation()}
-                              @change=${(e: Event) => {
-                                e.stopPropagation();
-                                const val = (e.target as HTMLSelectElement).value;
-                                this.handleReassignOwner(t.id, val || null);
-                              }}
-                            >
-                              <option value="">Assign...</option>
-                              ${this.roster.map(
-                                (p) => html`<option value=${p.id}>${p.name}</option>`,
-                              )}
-                            </select>
-                          `
+      <dndm-collapsible-panel
+        panelTitle="Tokens"
+        panelClass="dndm-tokenp"
+        .content=${!this.activeMap
+          ? html`<div class="dndm-panel-empty">No active map.</div>`
+          : tokens.length === 0
+            ? html`<div class="dndm-panel-empty">No tokens on this map.</div>`
+            : tokens.map((t) => {
+                const isPlayer = t.type === "PlayerToken";
+                const repPlayer = t.representsUserId ? this.roster.find((p) => p.id === t.representsUserId) : null;
+                const repName = repPlayer ? repPlayer.name : t.representsUserId;
+                return html`
+                  <div
+                    class="dndm-tokenp-row"
+                    title="Double-click to center the canvas on this token"
+                    @dblclick=${() => this.handleDoubleClick(t)}
+                  >
+                    <span
+                      class="dndm-tokenp-dot"
+                      style="background: ${t.color};"
+                      aria-hidden="true"
+                    ></span>
+                    <div style="flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column;">
+                      <span class="dndm-tokenp-name">${t.name}</span>
+                      ${t.representsUserId
+                        ? html`<span
+                            class="dndm-tokenp-subtitle"
+                            style="font-size: 0.72rem; color: var(--dndm-text-muted); font-style: italic;"
+                          >
+                            (originally played by ${repName})
+                          </span>`
                         : nothing}
-                      <dndm-rail-menu
-                        menuTitle="Token actions"
-                        .actions=${() => html`
-                          <button
-                            class="dndm-btn dndm-btn--small dndm-btn--icon"
-                            type="button"
-                            title=${t.iconKind === "Initial"
-                              ? "Initial shown — click for solid circle"
-                              : "Solid circle — click to show initial"}
-                            @click=${(e: Event) => this.toggleIcon(t, e)}
-                          >
-                            ${glyphIcon(t.iconKind === "Initial")}
-                          </button>
-                          <button
-                            class="dndm-btn dndm-btn--small dndm-btn--icon"
-                            type="button"
-                            title=${t.hidden ? "Hidden — click to reveal" : "Visible — click to hide"}
-                            @click=${(e: Event) => this.toggleHidden(t, e)}
-                          >
-                            ${eyeIcon(!t.hidden)}
-                          </button>
-                          <button
-                            class="dndm-btn dndm-btn--small dndm-btn--icon dndm-btn--danger"
-                            type="button"
-                            title="Delete token"
-                            ?disabled=${isPlayer}
-                            @click=${(e: Event) => this.handleDeleteRequest(t, e)}
-                          >
-                            ${trashIcon()}
-                          </button>
-                        `}
-                      ></dndm-rail-menu>
                     </div>
-                  `;
-                })}
-        </div>
-      </section>
+                    <span class="dndm-tokenp-tag">${isPlayer ? "Player" : "NPC"}</span>
+                    ${this.isDm && t.ownerUserId === null
+                      ? html`
+                          <select
+                            class="dndm-select dndm-select--small"
+                            style="font-size: 0.75rem; padding: 1px 4px; max-width: 90px;"
+                            title="Assign Owner"
+                            @click=${(e: Event) => e.stopPropagation()}
+                            @change=${(e: Event) => {
+                              e.stopPropagation();
+                              const val = (e.target as HTMLSelectElement).value;
+                              this.handleReassignOwner(t.id, val || null);
+                            }}
+                          >
+                            <option value="">Assign...</option>
+                            ${this.roster.map(
+                              (p) => html`<option value=${p.id}>${p.name}</option>`,
+                            )}
+                          </select>
+                        `
+                      : nothing}
+                    <dndm-rail-menu
+                      menuTitle="Token actions"
+                      .actions=${() => html`
+                        <button
+                          class="dndm-btn dndm-btn--small dndm-btn--icon"
+                          type="button"
+                          title=${t.iconKind === "Initial"
+                            ? "Initial shown — click for solid circle"
+                            : "Solid circle — click to show initial"}
+                          @click=${(e: Event) => this.toggleIcon(t, e)}
+                        >
+                          ${glyphIcon(t.iconKind === "Initial")}
+                        </button>
+                        <button
+                          class="dndm-btn dndm-btn--small dndm-btn--icon"
+                          type="button"
+                          title=${t.hidden ? "Hidden — click to reveal" : "Visible — click to hide"}
+                          @click=${(e: Event) => this.toggleHidden(t, e)}
+                        >
+                          ${eyeIcon(!t.hidden)}
+                        </button>
+                        <button
+                          class="dndm-btn dndm-btn--icon dndm-btn--small dndm-btn--danger"
+                          type="button"
+                          title="Delete token from map"
+                          @click=${(e: Event) => this.handleDeleteRequest(t, e)}
+                        >
+                          ${trashIcon()}
+                        </button>
+                      `}
+                    ></dndm-rail-menu>
+                  </div>
+                `;
+              })}
+      ></dndm-collapsible-panel>
 
       <dndm-confirm
         ?isOpen=${this.pendingDeleteToken !== null}

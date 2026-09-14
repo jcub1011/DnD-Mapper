@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import type { Token } from "../../game/domain";
 import { GameElement } from "../app/GameElement";
+import "./dndm-collapsible-panel";
 
 @customElement("dndm-my-token")
 export class DndmMyToken extends GameElement {
@@ -11,7 +12,7 @@ export class DndmMyToken extends GameElement {
   @property({ attribute: false })
   onChangeColor?: (tokenId: string, color: string) => void;
 
-  private handleColorChange(e: Event): void {
+  private readonly handleColorChange = (e: Event): void => {
     if (!this.token) return;
     const color = (e.target as HTMLInputElement).value;
     this.dispatchEvent(
@@ -22,17 +23,16 @@ export class DndmMyToken extends GameElement {
       }),
     );
     this.onChangeColor?.(this.token.id, color);
-  }
+  };
 
   override render(): TemplateResult | typeof nothing {
     if (!this.token) return nothing;
 
     return html`
-      <section class="dndm-panel dndm-mytokenp">
-        <header class="dndm-panel-header">
-          <span>My Token</span>
-        </header>
-        <div class="dndm-panel-body">
+      <dndm-collapsible-panel
+        panelTitle="My Token"
+        panelClass="dndm-mytokenp"
+        .content=${html`
           <div class="dndm-mytokenp-row">
             <input
               type="color"
@@ -43,8 +43,8 @@ export class DndmMyToken extends GameElement {
             />
             <span class="dndm-mytokenp-name">${this.token.name}</span>
           </div>
-        </div>
-      </section>
+        `}
+      ></dndm-collapsible-panel>
     `;
   }
 }

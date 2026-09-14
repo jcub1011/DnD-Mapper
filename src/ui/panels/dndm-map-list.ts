@@ -7,6 +7,7 @@ import { trashIcon } from "../icons";
 import "../modals/dndm-confirm";
 import "../modals/dndm-map-settings";
 import "../shared/dndm-rail-menu";
+import "./dndm-collapsible-panel";
 
 @customElement("dndm-map-list")
 export class DndmMapList extends GameElement {
@@ -83,10 +84,10 @@ export class DndmMapList extends GameElement {
     }
   }
 
-  private handleNewMap(): void {
+  private readonly handleNewMap = (): void => {
     this.dispatchEvent(new CustomEvent("create-map", { bubbles: true, composed: true }));
     this.onCreateMap?.();
-  }
+  };
 
   private handleDuplicate(mapId: string, e?: Event): void {
     e?.stopPropagation();
@@ -150,9 +151,11 @@ export class DndmMapList extends GameElement {
 
   override render(): TemplateResult {
     return html`
-      <section class="dndm-panel dndm-mapsw">
-        <header class="dndm-panel-header">
-          <span>Maps</span>
+      <dndm-collapsible-panel
+        panelTitle="Maps"
+        panelClass="dndm-mapsw"
+        bodyClass="dndm-mapsw-list"
+        .actions=${html`
           <button
             class="dndm-btn dndm-btn--icon dndm-btn--small"
             type="button"
@@ -161,101 +164,104 @@ export class DndmMapList extends GameElement {
           >
             +
           </button>
-        </header>
-        <div class="dndm-panel-body dndm-mapsw-list">
-          ${this.maps.length === 0
-            ? html`<div class="dndm-panel-empty">
-                No maps yet — click <strong>+</strong> to create one.
-              </div>`
-            : this.maps.map((m, idx) => {
-                const isActive = this.activeMapId === m.id;
-                const imgCount = isFullMap(m) ? m.images.length : 0;
-                const width = isFullMap(m) ? m.grid.widthCells : m.widthCells;
-                const height = isFullMap(m) ? m.grid.heightCells : m.heightCells;
+        `}
+        .content=${this.maps.length === 0
+          ? html`<div class="dndm-panel-empty">
+              No maps yet — click <strong>+</strong> to create one.
+            </div>`
+          : this.maps.map((m, idx) => {
+              const isActive = this.activeMapId === m.id;
+              const imgCount = isFullMap(m) ? m.images.length : 0;
+              const width = isFullMap(m) ? m.grid.widthCells : m.widthCells;
+              const height = isFullMap(m) ? m.grid.heightCells : m.heightCells;
 
-                return html`
-                  <div
-                    class="dndm-mapsw-row ${isActive ? "dndm-mapsw-row--active" : ""}"
-                    draggable="true"
-                    @dragstart=${(e: DragEvent) => this.handleDragStart(idx, e)}
-                    @dragover=${(e: DragEvent) => e.preventDefault()}
-                    @drop=${(e: DragEvent) => this.handleDrop(idx, e)}
-                    @click=${() => this.handleRowClick(m.id)}
-                  >
-                    <div class="dndm-mapsw-thumb">
-                      ${imgCount > 0
-                        ? html`<span class="dndm-mapsw-thumb-tag">${imgCount}</span>`
-                        : html`<span class="dndm-mapsw-thumb-blank">◇</span>`}
-                    </div>
-                    <div class="dndm-mapsw-row-main">
-                      ${this.renamingId === m.id
-                        ? html`
-                            <input
-                              class="dndm-input dndm-mapsw-rename"
-                              .value=${this.renameDraft}
-                              @input=${(e: Event) => {
-                                this.renameDraft = (e.target as HTMLInputElement).value;
-                              }}
-                              @keydown=${(e: KeyboardEvent) => this.handleRenameKey(e, m.id)}
-                              @blur=${() => this.commitRename(m.id)}
-                              @click=${(e: Event) => e.stopPropagation()}
-                            />
-                          `
-                        : html`<span
-                            class="dndm-mapsw-name"
-                            @dblclick=${(e: Event) => this.startRename(m, e)}
-                          >
-                            ${m.name}
-                          </span>`}
-                      <span class="dndm-mapsw-meta">${width}×${height}</span>
-                    </div>
-                    <div class="dndm-mapsw-actions">
-                      <dndm-rail-menu
-                        menuTitle="Map actions"
-                        .actions=${() => html`
-                          <button
-                            class="dndm-btn dndm-btn--icon dndm-btn--small"
-                            type="button"
-                            title="Rename"
-                            @click=${(e: Event) => this.startRename(m, e)}
-                          >
-                            ✎
-                          </button>
-                          <button
-                            class="dndm-btn dndm-btn--icon dndm-btn--small"
-                            type="button"
-                            title="Map settings"
-                            @click=${(e: Event) => {
-                              e.stopPropagation();
-                              this.settingsTargetMap = m;
+              return html`
+                <div
+                  class="dndm-mapsw-row ${isActive ? "dndm-mapsw-row--active" : ""}"
+                  draggable="true"
+                  @dragstart=${(e: DragEvent) => this.handleDragStart(idx, e)}
+                  @dragover=${(e: DragEvent) => e.preventDefault()}
+                  @drop=${(e: DragEvent) => this.handleDrop(idx, e)}
+                  @click=${() => this.handleRowClick(m.id)}
+                >
+                  <div class="dndm-mapsw-thumb">${imgCount > 0 ? "🗺️" : "⌗"}</div>
+                  <div class="dndm-mapsw-row-main">
+                    ${this.renamingId === m.id
+                      ? html`
+                          <input
+                            class="dndm-input dndm-mapsw-rename"
+                            .value=${this.renameDraft}
+                            @input=${(e: Event) => {
+                              this.renameDraft = (e.target as HTMLInputElement).value;
                             }}
-                          >
-                            ⚙
-                          </button>
-                          <button
-                            class="dndm-btn dndm-btn--icon dndm-btn--small"
-                            type="button"
-                            title="Duplicate"
-                            @click=${(e: Event) => this.handleDuplicate(m.id, e)}
-                          >
-                            ⎘
-                          </button>
-                          <button
-                            class="dndm-btn dndm-btn--icon dndm-btn--small dndm-btn--danger"
-                            type="button"
-                            title="Delete"
-                            @click=${(e: Event) => this.handleDeleteRequest(m, e)}
-                          >
-                            ${trashIcon()}
-                          </button>
-                        `}
-                      ></dndm-rail-menu>
-                    </div>
+                            @click=${(e: Event) => e.stopPropagation()}
+                            @keydown=${(e: KeyboardEvent) => this.handleRenameKey(e, m.id)}
+                            @blur=${() => this.commitRename(m.id)}
+                            autofocus
+                          />
+                        `
+                      : html`<span class="dndm-mapsw-name">${m.name}</span>`}
+                    <span class="dndm-mapsw-meta">
+                      ${width}×${height} · ${imgCount} layer${imgCount === 1 ? "" : "s"}
+                    </span>
                   </div>
-                `;
-              })}
-        </div>
-      </section>
+                  <div class="dndm-mapsw-actions">
+                    <dndm-rail-menu
+                      menuTitle="Map actions"
+                      .actions=${() => html`
+                        <button
+                          class="dndm-btn dndm-btn--icon dndm-btn--small"
+                          type="button"
+                          title="Grid & settings"
+                          @click=${(e: Event) => {
+                            e.stopPropagation();
+                            this.settingsTargetMap = isFullMap(m)
+                              ? m
+                              : {
+                                  ...m,
+                                  images: [],
+                                  tokens: [],
+                                  createdUtc: new Date().toISOString(),
+                                  listOrder: 0,
+                                  defaultSpawnPosition: null,
+                                  markupSvg: null,
+                                  fogMask: "",
+                                };
+                          }}
+                        >
+                          ⚙️
+                        </button>
+                        <button
+                          class="dndm-btn dndm-btn--icon dndm-btn--small"
+                          type="button"
+                          title="Rename"
+                          @click=${(e: Event) => this.startRename(m, e)}
+                        >
+                          ✎
+                        </button>
+                        <button
+                          class="dndm-btn dndm-btn--icon dndm-btn--small"
+                          type="button"
+                          title="Duplicate"
+                          @click=${(e: Event) => this.handleDuplicate(m.id, e)}
+                        >
+                          ⎘
+                        </button>
+                        <button
+                          class="dndm-btn dndm-btn--icon dndm-btn--small dndm-btn--danger"
+                          type="button"
+                          title="Delete"
+                          @click=${(e: Event) => this.handleDeleteRequest(m, e)}
+                        >
+                          ${trashIcon()}
+                        </button>
+                      `}
+                    ></dndm-rail-menu>
+                  </div>
+                </div>
+              `;
+            })}
+      ></dndm-collapsible-panel>
 
       <dndm-confirm
         ?isOpen=${this.pendingDeleteMap !== null}
