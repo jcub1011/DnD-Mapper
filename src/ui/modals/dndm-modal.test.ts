@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { html } from "lit";
+import { createDefaultDndMapperState } from "../../game/domain.js";
 import "./dndm-modal.js";
 import type { DndmModal } from "./dndm-modal.js";
 import "./dndm-confirm.js";
@@ -285,7 +286,7 @@ describe("<dndm-modal>", () => {
         snapToGrid: true,
         lineColor: "#000000",
       },
-    } as any;
+    } as DndmMapSettings["map"];
     mapSettings.isOpen = true;
     const onCloseSpy = vi.fn();
     const onCancelSpy = vi.fn();
@@ -410,7 +411,7 @@ describe("<dndm-modal>", () => {
       ownerUserId: null,
       representsUserId: null,
       scopedMapId: null,
-    } as any;
+    } as DndmSheetSettingsModal["sheet"];
     sheetModal.isOpen = true;
     const onCloseSpy = vi.fn();
     const onCancelSpy = vi.fn();
@@ -470,10 +471,10 @@ describe("<dndm-modal>", () => {
   it("<dndm-roll-template-library> done button closes dialog, sets isOpen to false, and emits events", async () => {
     const libModal = document.createElement("dndm-roll-template-library") as DndmRollTemplateLibrary;
     libModal.state = {
+      ...createDefaultDndMapperState(),
       globalRollTemplates: [],
       sheets: {},
-      attributeSchema: { rows: [] },
-    } as any;
+    };
     libModal.isOpen = true;
     const onCloseSpy = vi.fn();
     const onCancelSpy = vi.fn();
@@ -516,10 +517,10 @@ describe("<dndm-modal>", () => {
   it("<dndm-roll-template-library> displays 'Roll Template Library' title in modal header", async () => {
     const libModal = document.createElement("dndm-roll-template-library") as DndmRollTemplateLibrary;
     libModal.state = {
+      ...createDefaultDndMapperState(),
       globalRollTemplates: [],
       sheets: {},
-      attributeSchema: { rows: [] },
-    } as any;
+    };
     libModal.isOpen = true;
     document.body.appendChild(libModal);
     await libModal.updateComplete;
