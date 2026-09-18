@@ -6,19 +6,22 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
-    <meta name="theme-color" content="#06080f" />
-    <title>KnockBox Game</title>
+    <meta name="theme-color" content="#07060a" />
+    <title>D&D Mapper</title>
   </head>
   <body>
-    <!-- Phaser FX canvas: full-window overlay ABOVE the UI, click-through. -->
-    <div id="fx" aria-hidden="true"></div>
+    <!-- Phaser map scene: primary interactive renderer BEHIND the UI. -->
+    <div id="map"></div>
 
-    <!-- The DOM UI (Lit, light DOM). -->
-    <game-app></game-app>
+    <!-- The DOM UI (Lit, light DOM): transparent to clicks except on actual panels. -->
+    <dndm-app></dndm-app>
+
+    <!-- Phaser FX particles overlay: click-through. -->
+    <div id="fx" aria-hidden="true"></div>
 
     <!-- First-paint loading screen; removed by main.ts once the app is ready. -->
     <div id="boot">
-      <div class="boot-mark">KNOCK<span>BOX</span></div>
+      <div class="boot-mark">D&D<span>MAPPER</span></div>
       <div class="boot-sub">loading…</div>
       <div class="boot-bar"><i></i></div>
     </div>

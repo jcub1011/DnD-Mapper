@@ -1,0 +1,255 @@
+/*
+ * Scoped styles for Initiative & Combat Tracker (Phase 9)
+ * Aesthetic: Forge & Ember — matching panels.css tokens
+ */
+
+.dndm-initiative-panel > .dndm-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dndm-initiative-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  text-align: center;
+  gap: 12px;
+  color: var(--dndm-text-dim, #b29a7e);
+  font-size: 13px;
+}
+
+.dndm-initiative-round-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--dndm-bg-panel-2, #221b16);
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-weight: bold;
+  border: 1px solid var(--dndm-border, #3a2d23);
+  margin-bottom: 4px;
+}
+
+.dndm-initiative-round-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--dndm-text, #ece0cc);
+}
+
+.dndm-initiative-round-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dndm-combatant-roster {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 380px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.dndm-combatant-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--dndm-bg-panel, #191512);
+  border: 1px solid var(--dndm-border, #3a2d23);
+  border-left: 3px solid transparent;
+  border-radius: 4px;
+  transition: all 150ms ease;
+  cursor: pointer;
+}
+
+.dndm-combatant-card:hover {
+  background: var(--dndm-bg-elev, #2a2018);
+}
+
+.dndm-combatant-card--active {
+  background: var(--dndm-bg-elev, #2a2018);
+  border-left-color: #ffd700;
+  box-shadow: inset 0 0 10px rgba(255, 215, 0, 0.15);
+}
+
+.dndm-combatant-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.5);
+  flex-shrink: 0;
+}
+
+.dndm-combatant-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dndm-combatant-name {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--dndm-text, #ece0cc);
+}
+
+.dndm-combatant-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--dndm-text-dim, #b29a7e);
+  flex-wrap: wrap;
+}
+
+.dndm-combatant-stats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dndm-combatant-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--dndm-bg-deep, #0c0a08);
+  border: 1px solid var(--dndm-border, #3a2d23);
+  color: var(--dndm-text, #ece0cc);
+}
+
+.dndm-combatant-badge--init {
+  color: #ffd700;
+  border-color: rgba(255, 215, 0, 0.4);
+}
+
+.dndm-combatant-badge--pending {
+  color: var(--dndm-ember-hi, #e89055);
+  border-color: rgba(232, 144, 85, 0.4);
+}
+
+.dndm-combatant-badge--ac {
+  color: #8bb7f0;
+  border-color: rgba(139, 183, 240, 0.3);
+}
+
+.dndm-combatant-badge--hp {
+  color: var(--dndm-text, #ece0cc);
+}
+
+.dndm-combatant-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dndm-hp-quick-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+}
+
+.dndm-hp-input {
+  width: 38px;
+  padding: 2px 4px;
+  font-size: 11px;
+  text-align: center;
+  background: var(--dndm-bg-deep, #0c0a08);
+  border: 1px solid var(--dndm-border, #3a2d23);
+  border-radius: 3px;
+  color: var(--dndm-text, #ece0cc);
+}
+
+.dndm-pending-init-input {
+  width: 44px;
+  padding: 2px 4px;
+  font-size: 11px;
+  text-align: center;
+  background: var(--dndm-bg-deep, #0c0a08);
+  border: 1px solid var(--dndm-border, #3a2d23);
+  border-radius: 3px;
+  color: var(--dndm-ember-hi, #e89055);
+}
+
+.dndm-initiative-add-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--dndm-bg-panel-2, #221b16);
+  border-radius: 4px;
+  border: 1px dashed var(--dndm-border, #3a2d23);
+  margin-top: 4px;
+}
+
+.dndm-initiative-add-select {
+  flex: 1;
+  font-size: 12px;
+  background: var(--dndm-bg-deep, #0c0a08);
+  border: 1px solid var(--dndm-border, #3a2d23);
+  color: var(--dndm-text, #ece0cc);
+  padding: 3px 6px;
+  border-radius: 3px;
+}
+
+/* Floating Banner Component */
+.dndm-initiative-banner {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(25, 21, 18, 0.92);
+  backdrop-filter: blur(8px);
+  padding: 6px 20px;
+  border-radius: 9999px;
+  border: 1px solid var(--dndm-border, #3a2d23);
+  z-index: 80;
+  text-align: center;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  pointer-events: auto;
+  font-size: 13px;
+  color: var(--dndm-text, #ece0cc);
+}
+
+.dndm-initiative-banner--my-turn {
+  border-color: #ffd700;
+  color: #ffd700;
+  animation: dndmPulseGlow 1.5s infinite alternate;
+}
+
+.dndm-initiative-banner-next {
+  font-size: 11px;
+  color: var(--dndm-text-dim, #b29a7e);
+}
+
+@keyframes dndmPulseGlow {
+  0% {
+    box-shadow: 0 0 8px rgba(255, 215, 0, 0.3), inset 0 0 8px rgba(255, 215, 0, 0.2);
+  }
+  100% {
+    box-shadow: 0 0 20px rgba(255, 215, 0, 0.7), inset 0 0 14px rgba(255, 215, 0, 0.4);
+  }
+}

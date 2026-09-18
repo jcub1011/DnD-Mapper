@@ -20,6 +20,7 @@ import type { KnockBoxPlugin } from "../../addons/knockbox/knockbox-phaser";
 import { createAuthority } from "../authority/authority";
 import type { MatchState, Patch } from "../game/types";
 import { MatchView } from "../game/view";
+import { isFullMap } from "../game/domain";
 import { AuthorityController } from "./authorityController";
 import type { KnockBoxTransport } from "./transport";
 
@@ -61,9 +62,9 @@ function attachView(peer: Peer): MatchView {
 }
 
 /** Start a peer and wait until its replica has settled to `expected` members. */
-async function startAndSettle(peer: Peer, view: MatchView, expected: number): Promise<void> {
+async function startAndSettle(peer: Peer, expected: number): Promise<void> {
   peer.start();
-  await vi.waitFor(() => expect(view.state.players).toHaveLength(expected));
+  await vi.waitFor(() => expect(peer.players).toHaveLength(expected));
 }
 
 /** Let any pending broadcasts drain, for assertions about something NOT happening. */
@@ -71,15 +72,11 @@ function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 20));
 }
 
-function scoreOf(view: { state: Readonly<MatchState> }, id: string): number {
-  return view.state.players.find((p) => p.id === id)?.score ?? -1;
-}
-
 describe("server-authority mode over the local transport", () => {
   it("tells every peer it is NOT the host", async () => {
     const a = makePeer("a");
     const viewA = attachView(a);
-    await startAndSettle(a, viewA, 1);
+    await startAndSettle(a, 1);
 
     // The single most important difference from host-authoritative mode: nobody
     // is host, not even the peer that created the lobby.
@@ -88,93 +85,100 @@ describe("server-authority mode over the local transport", () => {
     // Lobby powers still belong to someone — the creator, until the module moves it.
     expect(a.isOwner).toBe(true);
     expect(a.ownerId).toBe("a");
+    expect(viewA.state.dmPlayerId).toBe("a");
   });
 
-  it("converges both clients when a guest sends an intent", async () => {
+  it("converges both clients when DM and guest send intents", async () => {
     const a = makePeer("a");
     const viewA = attachView(a);
-    // Start A and let it settle BEFORE starting B: host election is "first to
-    // register", so sequencing the starts keeps the test order-independent.
-    await startAndSettle(a, viewA, 1);
+    await startAndSettle(a, 1);
 
     const b = makePeer("b");
     const viewB = attachView(b);
-    await startAndSettle(b, viewB, 2);
-    await vi.waitFor(() => expect(viewA.state.players).toHaveLength(2));
+    await startAndSettle(b, 2);
+    await vi.waitFor(() => expect(a.players).toHaveLength(2));
 
     expect(b.isHost).toBe(false);
     expect(b.isOwner).toBe(false);
 
-    // Any peer may drive the match; the authority decides, not the sender.
-    a.sendToHost({ _kb: "intent", action: { kind: "start" } });
-    await vi.waitFor(() => expect(viewB.state.phase).toBe("Playing"));
-
-    b.sendToHost({ _kb: "intent", action: { kind: "score", points: 2 } });
+    // DM creates a map
+    a.sendToHost({ _kb: "intent", action: { kind: "createMap", name: "The Crypt" } });
     await vi.waitFor(() => {
-      expect(scoreOf(viewB, "b")).toBe(2); // the sender
-      expect(scoreOf(viewA, "b")).toBe(2); // and everyone else
+      expect(viewA.state.maps).toHaveLength(1);
+      expect(viewB.state.maps).toHaveLength(1);
+    });
+
+    const mapId = viewB.state.maps[0].id;
+    // Guest spawns a player token
+    b.sendToHost({
+      _kb: "intent",
+      action: {
+        kind: "spawnToken",
+        mapId,
+        token: {
+          type: "PlayerToken",
+          name: "Ranger",
+          color: "#0f0",
+          iconKind: "Initial",
+          x: 4.5,
+          y: 4.5,
+          sheetId: null,
+          hidden: false,
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      const mapB = viewB.state.maps[0];
+      const mapA = viewA.state.maps[0];
+      expect(isFullMap(mapB) && mapB.tokens.length === 1).toBe(true);
+      expect(isFullMap(mapA) && mapA.tokens.length === 1).toBe(true);
     });
   });
 
   it("silently drops an illegal intent and leaves state untouched", async () => {
     const a = makePeer("a");
     const viewA = attachView(a);
-    await startAndSettle(a, viewA, 1);
+    await startAndSettle(a, 1);
 
-    // Scoring before the match starts is rejected: the authority returns null and
-    // broadcasts NOTHING, so there is no error to observe — only the absence of a
-    // change. That is the whole rejection contract.
-    a.sendToHost({ _kb: "intent", action: { kind: "score", points: 99 } });
+    const b = makePeer("b");
+    const viewB = attachView(b);
+    await startAndSettle(b, 2);
+
+    // Guest 'b' attempts to create a map (DM-only intent)
+    b.sendToHost({ _kb: "intent", action: { kind: "createMap", name: "Illegal Map" } });
     await settle();
 
-    expect(viewA.state.phase).toBe("Lobby");
-    expect(scoreOf(viewA, "a")).toBe(0);
+    expect(viewA.state.maps).toHaveLength(0);
+    expect(viewB.state.maps).toHaveLength(0);
   });
 
   it("keeps the match running when a non-owner leaves", async () => {
     const a = makePeer("a");
     const viewA = attachView(a);
-    await startAndSettle(a, viewA, 1);
+    await startAndSettle(a, 1);
     const b = makePeer("b");
-    const viewB = attachView(b);
-    await startAndSettle(b, viewB, 2);
+    attachView(b);
+    await startAndSettle(b, 2);
 
-    a.sendToHost({ _kb: "intent", action: { kind: "start" } });
-    await vi.waitFor(() => expect(viewB.state.phase).toBe("Playing"));
-    a.sendToHost({ _kb: "intent", action: { kind: "score", points: 1 } });
-    await vi.waitFor(() => expect(scoreOf(viewA, "a")).toBe(1));
+    a.sendToHost({ _kb: "intent", action: { kind: "createMap", name: "Dungeon" } });
+    await vi.waitFor(() => expect(viewA.state.maps).toHaveLength(1));
 
     b.destroy();
-    await vi.waitFor(() => expect(viewA.state.players).toHaveLength(1));
+    await vi.waitFor(() => expect(a.players).toHaveLength(1));
 
-    expect(viewA.state.phase).toBe("Playing");
-    expect(scoreOf(viewA, "a")).toBe(1); // the match carried on
-    a.sendToHost({ _kb: "intent", action: { kind: "score", points: 1 } });
-    await vi.waitFor(() => expect(scoreOf(viewA, "a")).toBe(2)); // still answering
+    // DM can still manipulate state after guest left
+    a.sendToHost({ _kb: "intent", action: { kind: "createMap", name: "Dungeon 2" } });
+    await vi.waitFor(() => expect(viewA.state.maps).toHaveLength(2));
   });
 
-  /*
-   * EMULATION LIMITATION, pinned deliberately.
-   *
-   * The single biggest win of server authority — the session surviving the lobby
-   * creator leaving — is the one thing the local harness CANNOT demonstrate,
-   * because locally the module's state lives inside the elected peer. When that
-   * peer goes, so does the actor, and the remaining peers get `closed` (the same
-   * shape as host-authoritative mode). On the real server the actor lives in the
-   * server process and the game genuinely continues.
-   *
-   * Owner succession itself is fully emulated and is covered where it belongs —
-   * as a pure module test in src/authority/authority.test.ts, which asserts
-   * kb.setOwner promotes the next member. To see end-to-end survival, run against
-   * a real KnockBox instance (Tier 3).
-   */
   it("ends the local session when the ACTOR peer leaves (real servers do not)", async () => {
     const a = makePeer("a");
-    const viewA = attachView(a);
-    await startAndSettle(a, viewA, 1);
+    attachView(a);
+    await startAndSettle(a, 1);
     const b = makePeer("b");
-    const viewB = attachView(b);
-    await startAndSettle(b, viewB, 2);
+    attachView(b);
+    await startAndSettle(b, 2);
 
     let closed = false;
     b.events.on("closed", () => {
@@ -191,39 +195,37 @@ describe("AuthorityController", () => {
     const peer = makePeer("a");
     const controller = new AuthorityController(asTransport(peer));
     peer.start();
-    await vi.waitFor(() => expect(controller.view.state.players).toHaveLength(1));
+    await vi.waitFor(() => expect(peer.players).toHaveLength(1));
 
     expect(controller.playerId).toBe("a");
     expect(controller.isOwner).toBe(true);
 
-    const seen: string[] = [];
-    controller.events.on("changed", ({ state }) => seen.push(state.phase));
+    const mapNames: string[] = [];
+    controller.events.on("changed", ({ state }) => {
+      if (state.maps.length > 0) {
+        mapNames.push(state.maps[0].name);
+      }
+    });
 
-    controller.sendIntent({ kind: "start" });
-    await vi.waitFor(() => expect(controller.view.state.phase).toBe("Playing"));
+    controller.sendIntent({ kind: "createMap", name: "Goblin Cave" });
+    await vi.waitFor(() => expect(controller.view.state.maps).toHaveLength(1));
 
-    controller.sendIntent({ kind: "score", points: 3 });
-    await vi.waitFor(() => expect(scoreOf(controller.view, "a")).toBe(3));
-
-    expect(seen).toContain("Playing");
+    expect(controller.view.state.maps[0].name).toBe("Goblin Cave");
+    expect(mapNames).toContain("Goblin Cave");
     controller.destroy();
   });
 
   it("recovers when the transport was ALREADY ready before it was constructed", async () => {
-    // This is what production does: Phaser starts the KnockBox global plugin
-    // inside fx.init(), before main.ts builds the controller. KBAuthority asks for
-    // its snapshot from `ready`, so a controller built afterwards missed it — the
-    // constructor's re-request guard is what saves the session.
     const peer = makePeer("a");
     peer.start();
     await vi.waitFor(() => expect(peer.playerId).toBeTruthy());
     await vi.waitFor(() => expect(peer.players).toHaveLength(1));
 
     const controller = new AuthorityController(asTransport(peer));
-    await vi.waitFor(() => expect(controller.view.state.players).toHaveLength(1));
+    await vi.waitFor(() => expect(controller.view.state.dmPlayerId).toBe("a"));
 
-    controller.sendIntent({ kind: "start" });
-    await vi.waitFor(() => expect(controller.view.state.phase).toBe("Playing"));
+    controller.sendIntent({ kind: "createMap", name: "Quick Map" });
+    await vi.waitFor(() => expect(controller.view.state.maps).toHaveLength(1));
     controller.destroy();
   });
 
@@ -231,13 +233,13 @@ describe("AuthorityController", () => {
     const peer = makePeer("a");
     const controller = new AuthorityController(asTransport(peer));
     peer.start();
-    await vi.waitFor(() => expect(controller.view.state.players).toHaveLength(1));
+    await vi.waitFor(() => expect(peer.players).toHaveLength(1));
 
     let changes = 0;
     controller.events.on("changed", () => changes++);
     controller.destroy();
 
-    peer.sendToHost({ _kb: "intent", action: { kind: "start" } });
+    peer.sendToHost({ _kb: "intent", action: { kind: "createMap", name: "Never Received" } });
     await settle();
     expect(changes).toBe(0);
   });

@@ -1,0 +1,144 @@
+/* Freehand vector markup canvas & palette */
+
+.dndm-markup-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 70;
+}
+
+.dndm-markup-canvas {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+  z-index: 70;
+  touch-action: none;
+  pointer-events: auto;
+  width: 100%;
+  height: 100%;
+}
+
+.dndm-markup-canvas--panning {
+  pointer-events: none !important;
+}
+
+.dndm-markup-palette {
+  position: absolute;
+  top: var(--dndm-spacing-md, 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--dndm-spacing-xs, 6px);
+  background: var(--dndm-color-surface-translucent, rgba(16, 14, 23, 0.85));
+  backdrop-filter: blur(8px);
+  padding: var(--dndm-spacing-xs, 6px) var(--dndm-spacing-sm, 10px);
+  border-radius: var(--dndm-radius-pill, 9999px);
+  border: 1px solid var(--dndm-color-border, rgba(232, 144, 85, 0.25));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+  z-index: 100;
+  pointer-events: auto;
+  user-select: none;
+}
+
+.dndm-markup-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--dndm-color-text-secondary, #b3a598);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.dndm-markup-btn:hover:not(:disabled) {
+  background: rgba(232, 144, 85, 0.15);
+  color: var(--dndm-color-text-primary, #f5efe6);
+  border-color: rgba(232, 144, 85, 0.3);
+}
+
+.dndm-markup-btn.active {
+  background: rgba(232, 144, 85, 0.25);
+  color: #ffd700;
+  border-color: #e89055;
+}
+
+.dndm-markup-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.dndm-markup-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--dndm-color-border, rgba(232, 144, 85, 0.25));
+  margin: 0 2px;
+}
+
+.dndm-markup-swatch-group,
+.dndm-markup-width-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dndm-markup-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.12s, border-color 0.12s;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+
+.dndm-markup-swatch:hover {
+  transform: scale(1.15);
+}
+
+.dndm-markup-swatch.active {
+  border-color: #ffd700;
+  transform: scale(1.2);
+}
+
+.dndm-markup-width-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
+.dndm-markup-width-btn:hover {
+  background: rgba(232, 144, 85, 0.15);
+}
+
+.dndm-markup-width-btn.active {
+  background: rgba(232, 144, 85, 0.25);
+  border-color: #e89055;
+}
+
+.dndm-markup-width-dot {
+  background: currentColor;
+  border-radius: 50%;
+}
+
+.dndm-markup-preview-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
