@@ -1,4 +1,4 @@
-import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
+import { html, nothing, type PropertyDeclaration, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { GameElement } from "../app/GameElement";
 
@@ -73,7 +73,7 @@ export class DndmCollapsiblePanel extends GameElement {
     this.performUpdate();
   }
 
-  override requestUpdate(name?: PropertyKey, oldValue?: unknown, options?: any): void {
+  override requestUpdate(name?: PropertyKey, oldValue?: unknown, options?: PropertyDeclaration): void {
     super.requestUpdate(name, oldValue, options);
     if (this.isConnected) {
       this.performUpdate();

@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { html } from "lit";
 import "./dndm-collapsible-panel";
 import type { DndmCollapsiblePanel } from "./dndm-collapsible-panel";
+import type { DndmHostInitiative } from "./dndm-host-initiative.js";
+import type { DndmSavesPanel } from "./dndm-saves-panel.js";
 
 describe("<dndm-collapsible-panel>", () => {
   let panel: DndmCollapsiblePanel;
@@ -203,9 +205,9 @@ describe("<dndm-collapsible-panel>", () => {
   it("renders divider lines in <dndm-saves-panel>", async () => {
     await import("./dndm-saves-panel.js");
 
-    const saves = document.createElement("dndm-saves-panel");
+    const saves = document.createElement("dndm-saves-panel") as DndmSavesPanel;
     document.body.appendChild(saves);
-    await (saves as any).updateComplete;
+    await saves.updateComplete;
 
     const divider = saves.querySelector(".dndm-panel-divider");
     expect(divider).not.toBeNull();
@@ -222,9 +224,9 @@ describe("<dndm-collapsible-panel>", () => {
   });
 
   it("renders divider lines in <dndm-host-initiative> for both empty and combat states", async () => {
-    const { DndmHostInitiative } = await import("./dndm-host-initiative.js");
+    await import("./dndm-host-initiative.js");
 
-    const init = document.createElement("dndm-host-initiative") as InstanceType<typeof DndmHostInitiative>;
+    const init = document.createElement("dndm-host-initiative") as DndmHostInitiative;
     document.body.appendChild(init);
     await init.updateComplete;
 
