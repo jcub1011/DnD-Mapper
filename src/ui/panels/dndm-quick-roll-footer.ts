@@ -74,6 +74,9 @@ export class DndmQuickRollFooter extends GameElement {
   onOpenHistory?: () => void;
 
   @property({ attribute: false })
+  onReRoll?: (roll: RollResult, modeOverride?: RollMode) => void;
+
+  @property({ attribute: false })
   onOpenTemplates?: () => void;
 
   @state() private logOpen = false;
@@ -187,6 +190,17 @@ export class DndmQuickRollFooter extends GameElement {
     this.onRollDice?.("1d20", mode, `${row.name} Check`, sheet.id, row.name);
   }
 
+  private handleReRoll(roll: RollResult, e: MouseEvent): void {
+    let mode: RollMode = roll.mode;
+    if (e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      mode = "Advantage";
+    } else if ((e.ctrlKey || e.metaKey) && !e.shiftKey) {
+      mode = "Disadvantage";
+    }
+
+    this.onReRoll?.(roll, mode);
+  }
+
   private formatMod(mod: number): string {
     return mod >= 0 ? `+${mod}` : `${mod}`;
   }
@@ -249,7 +263,9 @@ export class DndmQuickRollFooter extends GameElement {
                 </div>
                 ${this.visibleRecentRolls.length === 0
                   ? html`<div class="dndm-panel-empty">No rolls yet.</div>`
-                  : this.visibleRecentRolls.map((r) => this.renderRecentRollEntry(r))}
+                  : html`<div class="dndm-rollfooter__recent-list">
+                      ${this.visibleRecentRolls.map((r) => this.renderRecentRollEntry(r))}
+                    </div>`}
               </div>
             `
           : nothing}
@@ -452,6 +468,16 @@ export class DndmQuickRollFooter extends GameElement {
   private renderRecentRollEntry(r: RollResult): TemplateResult {
     const isNat20 = isNatural20(r);
     const isNat1 = isNatural1(r);
+    const canReRoll = r.rollerUserId === this.currentUserId;
+
+    const hasAppliedRules = Boolean(r.appliedRules && r.appliedRules.length > 0);
+    const visibility = this.state.settings.loadedDiceRuleVisibility ?? "Hidden";
+    const showRuleStamps =
+      this.isDm || visibility === "VisibleToAll" || visibility === "AllPlayers";
+    const indicator = this.state.settings.loadedDicePlayerIndicator ?? "None";
+    const showSubtleCue =
+      hasAppliedRules && (indicator === "Subtle" || indicator === "RedDotInLog");
+    const showObviousCue = hasAppliedRules && indicator === "Obvious";
 
     return html`
       <div
@@ -463,7 +489,22 @@ export class DndmQuickRollFooter extends GameElement {
           ${r.mode !== "Normal"
             ? html`<span class="dndm-rolllog-mode">${r.mode === "Advantage" ? "ADV" : "DIS"}</span>`
             : nothing}
+          ${hasAppliedRules && (showSubtleCue || (this.isDm && indicator === "None"))
+            ? html`<span class="dndm-rolllog-cue--subtle" title="Roll modified by Loaded Dice">●</span>`
+            : nothing}
           <span class="dndm-rolllog-time">${r.timestampUtc.slice(11, 19)}</span>
+          ${canReRoll
+            ? html`
+                <button
+                  class="dndm-rolllog-reroll"
+                  type="button"
+                  title="Re-roll (Shift: Adv, Ctrl: Dis)"
+                  @click=${(e: MouseEvent) => this.handleReRoll(r, e)}
+                >
+                  ↻
+                </button>
+              `
+            : nothing}
         </div>
         <div class="dndm-rolllog-dice">
           <span class="dndm-rolllog-total">${r.total}</span>
@@ -484,6 +525,27 @@ export class DndmQuickRollFooter extends GameElement {
               : nothing}
           </div>
         </div>
+        ${r.modifierBreakdown
+          ? html`<div class="dndm-rolllog-breakdown">${r.modifierBreakdown}</div>`
+          : nothing}
+        ${hasAppliedRules && showRuleStamps
+          ? html`
+              <div class="dndm-rolllog-stamps" style="display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px;">
+                ${r.appliedRules.map((stamp) => {
+                  const name = typeof stamp === "string" ? stamp : stamp.ruleName;
+                  const type = typeof stamp === "object" ? ` (${stamp.modificationType})` : "";
+                  return html`
+                    <span class="dndm-rolllog-tampered-badge" title="Loaded Dice: ${name}${type}">
+                      ⚡ ${name}
+                    </span>
+                  `;
+                })}
+              </div>
+            `
+          : nothing}
+        ${showObviousCue
+          ? html`<div class="dndm-rolllog-cue--obvious">⚡ Tampered by a divine hand</div>`
+          : nothing}
       </div>
     `;
   }

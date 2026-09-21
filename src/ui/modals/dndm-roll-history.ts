@@ -23,6 +23,9 @@ export class DndmRollHistory extends GameElement {
   onReRoll?: (roll: RollResult, modeOverride?: RollMode) => void;
 
   @property({ attribute: false })
+  onClearLog?: () => void;
+
+  @property({ attribute: false })
   onClose?: () => void;
 
   @property({ attribute: false })
@@ -185,6 +188,18 @@ export class DndmRollHistory extends GameElement {
           </div>
         `}
         .footer=${html`
+          ${this.isDm
+            ? html`
+                <button
+                  class="dndm-btn dndm-btn--small dndm-btn--danger"
+                  type="button"
+                  title="Clear roll log for all players"
+                  @click=${() => this.onClearLog?.()}
+                >
+                  Clear
+                </button>
+              `
+            : nothing}
           <button class="dndm-btn dndm-btn--ghost" type="button" @click=${this.handleClose}>
             Close
           </button>
@@ -198,6 +213,15 @@ export class DndmRollHistory extends GameElement {
     const isNat1 = isNatural1(r);
     const rollerName = this.getRollerName(r);
     const canReRoll = r.rollerUserId === this.currentUserId;
+
+    const hasAppliedRules = Boolean(r.appliedRules && r.appliedRules.length > 0);
+    const visibility = this.state?.settings?.loadedDiceRuleVisibility ?? "Hidden";
+    const showRuleStamps =
+      this.isDm || visibility === "VisibleToAll" || visibility === "AllPlayers";
+    const indicator = this.state?.settings?.loadedDicePlayerIndicator ?? "None";
+    const showSubtleCue =
+      hasAppliedRules && (indicator === "Subtle" || indicator === "RedDotInLog");
+    const showObviousCue = hasAppliedRules && indicator === "Obvious";
 
     return html`
       <article
@@ -214,6 +238,9 @@ export class DndmRollHistory extends GameElement {
                 >`
               : nothing
           }
+          ${hasAppliedRules && (showSubtleCue || (this.isDm && indicator === "None"))
+            ? html`<span class="dndm-rolllog-cue--subtle" title="Roll modified by Loaded Dice">●</span>`
+            : nothing}
           <time class="dndm-rolllog-time" title=${r.timestampUtc}>
             ${r.timestampUtc.slice(11, 19)}
           </time>
@@ -263,6 +290,26 @@ export class DndmRollHistory extends GameElement {
             ? html`<div class="dndm-rolllog-breakdown">${r.modifierBreakdown}</div>`
             : nothing
         }
+
+        ${hasAppliedRules && showRuleStamps
+          ? html`
+              <div class="dndm-rolllog-stamps" style="display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px;">
+                ${r.appliedRules.map((stamp) => {
+                  const name = typeof stamp === "string" ? stamp : stamp.ruleName;
+                  const type = typeof stamp === "object" ? ` (${stamp.modificationType})` : "";
+                  return html`
+                    <span class="dndm-rolllog-tampered-badge" title="Loaded Dice: ${name}${type}">
+                      ⚡ ${name}
+                    </span>
+                  `;
+                })}
+              </div>
+            `
+          : nothing}
+
+        ${showObviousCue
+          ? html`<div class="dndm-rolllog-cue--obvious">⚡ Tampered by a divine hand</div>`
+          : nothing}
       </article>
     `;
   }

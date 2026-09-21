@@ -114,8 +114,7 @@ dndm-app {
 /* Slim custom scrollbar for all scrollable containers inside rails */
 .dndm-rail [class*="scroll"],
 .dndm-rail .dndm-panel-body--scroll,
-.dndm-rail .dndm-character-sheet,
-.dndm-rail .dndm-roll-log {
+.dndm-rail .dndm-character-sheet {
   --dndm-scrollbar-thumb: rgba(196, 116, 56, 0.35);
   --dndm-scrollbar-track: rgba(12, 10, 8, 0.35);
   scrollbar-width: thin;
@@ -124,8 +123,7 @@ dndm-app {
 
 .dndm-rail [class*="scroll"]:hover,
 .dndm-rail .dndm-panel-body--scroll:hover,
-.dndm-rail .dndm-character-sheet:hover,
-.dndm-rail .dndm-roll-log:hover {
+.dndm-rail .dndm-character-sheet:hover {
   --dndm-scrollbar-thumb: rgba(196, 116, 56, 0.65);
 }
 

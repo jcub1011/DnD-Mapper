@@ -187,12 +187,38 @@
 }
 
 /* ─── Popovers (Recent Rolls & Presets) ──────────────────────────── */
-.dndm-rollfooter__recent,
-.dndm-rollfooter__presets {
+.dndm-rollfooter__recent {
   position: absolute;
   bottom: calc(100% + 0.5rem);
   left: 1rem;
   width: 22rem;
+  max-width: 90vw;
+  max-height: 24rem;
+  overflow: hidden;
+  background: var(--dndm-bg-panel);
+  border: 1px solid var(--dndm-border-accent);
+  border-radius: 4px;
+  padding: 0.6rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.75);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.dndm-rollfooter__recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 0.15rem;
+}
+
+.dndm-rollfooter__presets {
+  position: absolute;
+  bottom: calc(100% + 0.5rem);
+  left: 3rem;
+  width: 20rem;
   max-width: 90vw;
   max-height: 24rem;
   overflow-y: auto;
@@ -206,15 +232,11 @@
   gap: 0.5rem;
 }
 
-.dndm-rollfooter__presets {
-  left: 3rem;
-  width: 20rem;
-}
-
 .dndm-rollfooter__recent-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-shrink: 0;
   border-bottom: 1px solid var(--dndm-border);
   padding-bottom: 0.35rem;
 }

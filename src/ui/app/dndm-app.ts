@@ -52,7 +52,6 @@ import "../panels/dndm-loaded-dice-panel";
 import "../panels/dndm-host-initiative";
 import "../panels/dndm-initiative-banner";
 import "../panels/dndm-quick-roll-footer";
-import "../panels/dndm-roll-log";
 import "../panels/dndm-saves-panel";
 import "../panels/dndm-token-panel";
 import "../toast/dndm-toast";
@@ -1214,6 +1213,17 @@ export class DndmApp extends GameElement {
             .onOpenHistory=${() => {
               this.rollHistoryOpen = true;
             }}
+            .onReRoll=${(r: RollResult, modeOverride?: RollMode) => {
+              this.send({
+                kind: "rollDice",
+                formula: r.formula,
+                mode: modeOverride ?? r.mode,
+                label: r.label,
+                tokenId: r.tokenId,
+                sheetId: r.originalAttributeRef?.sheetId ?? this.selectedSheetId ?? null,
+                attributeName: r.originalAttributeRef?.attributeName ?? null,
+              });
+            }}
             .onOpenTemplates=${() => {
               this.rollTemplateLibraryOpen = true;
             }}
@@ -1326,26 +1336,6 @@ export class DndmApp extends GameElement {
               .onSetSchemaPreset=${(preset: AttributePreset) =>
                 this.send({ kind: "setSchemaPreset", preset })}
             ></dndm-character-sheet>
-            <dndm-roll-log
-              .state=${this.match}
-              .isDm=${this.isDm}
-              .currentUserId=${this.controller?.playerId ?? null}
-              .onClearLog=${() => this.send({ kind: "clearRollLog" })}
-              .onReRoll=${(r: RollResult, modeOverride?: RollMode) => {
-                this.send({
-                  kind: "rollDice",
-                  formula: r.formula,
-                  mode: modeOverride ?? r.mode,
-                  label: r.label,
-                  tokenId: r.tokenId,
-                  sheetId: r.originalAttributeRef?.sheetId ?? this.selectedSheetId ?? null,
-                  attributeName: r.originalAttributeRef?.attributeName ?? null,
-                });
-              }}
-              .onOpenHistory=${() => {
-                this.rollHistoryOpen = true;
-              }}
-            ></dndm-roll-log>
           </div>
         </aside>
 
@@ -1414,6 +1404,7 @@ export class DndmApp extends GameElement {
           .state=${this.match}
           .isDm=${this.isDm}
           .currentUserId=${this.controller?.playerId ?? null}
+          .onClearLog=${() => this.send({ kind: "clearRollLog" })}
           .onReRoll=${(r: RollResult, modeOverride?: RollMode) => {
             this.send({
               kind: "rollDice",

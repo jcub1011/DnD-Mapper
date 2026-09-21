@@ -4,8 +4,6 @@ import type { DndMapperState } from "../../game/domain.js";
 import { createDefaultDndMapperState } from "../../game/domain.js";
 import "../panels/dndm-quick-roll-footer.js";
 import type { DndmQuickRollFooter } from "../panels/dndm-quick-roll-footer.js";
-import "../panels/dndm-roll-log.js";
-import type { DndmRollLog } from "../panels/dndm-roll-log.js";
 import "../modals/dndm-roll-history.js";
 import type { DndmRollHistory } from "../modals/dndm-roll-history.js";
 import { diceAnimationTracker } from "./diceAnimationTracker.js";
@@ -142,39 +140,59 @@ describe("Dice UI Components", () => {
 
       footer.remove();
     });
+
+    it("shows re-roll buttons for own rolls in the recent rolls popover", async () => {
+      const footer = document.createElement("dndm-quick-roll-footer") as DndmQuickRollFooter;
+      footer.state = state;
+      footer.currentUserId = "player-1";
+      const onReRoll = vi.fn();
+      footer.onReRoll = onReRoll;
+      document.body.appendChild(footer);
+      await footer.updateComplete;
+
+      // Open the recent rolls popover
+      const logBtn = footer.querySelector<HTMLButtonElement>(".dndm-rollfooter__log");
+      expect(logBtn).not.toBeNull();
+      logBtn!.click();
+      await footer.updateComplete;
+
+      // Only player-1's own roll offers re-roll
+      const rerollBtns = footer.querySelectorAll<HTMLButtonElement>(".dndm-rolllog-reroll");
+      expect(rerollBtns).toHaveLength(1);
+
+      rerollBtns[0].click();
+      expect(onReRoll).toHaveBeenCalledTimes(1);
+      expect(onReRoll.mock.calls[0][0].id).toBe("r-nat20");
+      expect(onReRoll.mock.calls[0][1]).toBe("Normal");
+
+      // Shift-click -> Advantage
+      rerollBtns[0].dispatchEvent(
+        new MouseEvent("click", { shiftKey: true, bubbles: true, composed: true }),
+      );
+      expect(onReRoll.mock.calls[1][1]).toBe("Advantage");
+
+      footer.remove();
+    });
   });
 
-  describe("<dndm-roll-log>", () => {
-    it("renders Nat 20 and Nat 1 with distinct CSS classes and hides animating rolls", async () => {
-      const logPanel = document.createElement("dndm-roll-log") as DndmRollLog;
-      logPanel.state = state;
-      logPanel.isDm = true;
-      document.body.appendChild(logPanel);
-      await logPanel.updateComplete;
+  describe("<dndm-roll-history> entries", () => {
+    it("renders Nat 20 and Nat 1 with distinct CSS classes", async () => {
+      const historyPanel = document.createElement("dndm-roll-history") as DndmRollHistory;
+      historyPanel.state = state;
+      historyPanel.isDm = true;
+      historyPanel.isOpen = true;
+      document.body.appendChild(historyPanel);
+      await historyPanel.updateComplete;
 
-      let entries = logPanel.renderRoot.querySelectorAll(".dndm-rolllog-entry");
+      const entries = historyPanel.querySelectorAll(".dndm-rolllog-entry");
       expect(entries).toHaveLength(2);
 
-      const nat20Entry = logPanel.renderRoot.querySelector(".dndm-rolllog-entry--nat20");
-      const nat1Entry = logPanel.renderRoot.querySelector(".dndm-rolllog-entry--nat1");
+      const nat20Entry = historyPanel.querySelector(".dndm-rolllog-entry--nat20");
+      const nat1Entry = historyPanel.querySelector(".dndm-rolllog-entry--nat1");
       expect(nat20Entry).not.toBeNull();
       expect(nat1Entry).not.toBeNull();
 
-      // Start animating r-nat20 -> should be hidden from roll log until settled
-      diceAnimationTracker.start("r-nat20");
-      await logPanel.updateComplete;
-
-      entries = logPanel.renderRoot.querySelectorAll(".dndm-rolllog-entry");
-      expect(entries).toHaveLength(1);
-
-      // Settle r-nat20 -> should reappear
-      diceAnimationTracker.settle("r-nat20");
-      await logPanel.updateComplete;
-
-      entries = logPanel.renderRoot.querySelectorAll(".dndm-rolllog-entry");
-      expect(entries).toHaveLength(2);
-
-      logPanel.remove();
+      historyPanel.remove();
     });
   });
 

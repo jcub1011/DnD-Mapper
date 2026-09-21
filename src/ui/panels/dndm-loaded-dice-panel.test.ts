@@ -7,8 +7,8 @@ import {
 } from "../../game/domain.js";
 import "./dndm-loaded-dice-panel.js";
 import type { DndmLoadedDicePanel } from "./dndm-loaded-dice-panel.js";
-import "./dndm-roll-log.js";
-import type { DndmRollLog } from "./dndm-roll-log.js";
+import "../modals/dndm-roll-history.js";
+import type { DndmRollHistory } from "../modals/dndm-roll-history.js";
 
 describe("<dndm-loaded-dice-panel>", () => {
   const sampleRules: LoadedDiceRule[] = [
@@ -98,7 +98,7 @@ describe("<dndm-loaded-dice-panel>", () => {
   });
 });
 
-describe("<dndm-roll-log> Loaded Dice Visibility & Player Cues", () => {
+describe("<dndm-roll-history> Loaded Dice Visibility & Player Cues", () => {
   const tamperedRoll: RollResult = {
     id: "roll-tampered-1",
     rollerUserId: "player-1",
@@ -133,8 +133,9 @@ describe("<dndm-roll-log> Loaded Dice Visibility & Player Cues", () => {
       },
     };
 
-    const el = document.createElement("dndm-roll-log") as DndmRollLog;
+    const el = document.createElement("dndm-roll-history") as DndmRollHistory;
     el.state = state;
+    el.isOpen = true;
     el.isDm = false;
     el.currentUserId = "player-1";
     document.body.appendChild(el);
@@ -160,8 +161,9 @@ describe("<dndm-roll-log> Loaded Dice Visibility & Player Cues", () => {
       },
     };
 
-    const el = document.createElement("dndm-roll-log") as DndmRollLog;
+    const el = document.createElement("dndm-roll-history") as DndmRollHistory;
     el.state = state;
+    el.isOpen = true;
     el.isDm = true;
     el.currentUserId = "dm-1";
     document.body.appendChild(el);
@@ -185,8 +187,9 @@ describe("<dndm-roll-log> Loaded Dice Visibility & Player Cues", () => {
       },
     };
 
-    const el = document.createElement("dndm-roll-log") as DndmRollLog;
+    const el = document.createElement("dndm-roll-history") as DndmRollHistory;
     el.state = state;
+    el.isOpen = true;
     el.isDm = false;
     el.currentUserId = "player-1";
     document.body.appendChild(el);
@@ -209,8 +212,9 @@ describe("<dndm-roll-log> Loaded Dice Visibility & Player Cues", () => {
       },
     };
 
-    const el = document.createElement("dndm-roll-log") as DndmRollLog;
+    const el = document.createElement("dndm-roll-history") as DndmRollHistory;
     el.state = state;
+    el.isOpen = true;
     el.isDm = false;
     el.currentUserId = "player-1";
     document.body.appendChild(el);
@@ -234,8 +238,9 @@ describe("<dndm-roll-log> Loaded Dice Visibility & Player Cues", () => {
       },
     };
 
-    const el = document.createElement("dndm-roll-log") as DndmRollLog;
+    const el = document.createElement("dndm-roll-history") as DndmRollHistory;
     el.state = state;
+    el.isOpen = true;
     el.isDm = false;
     el.currentUserId = "player-1";
     document.body.appendChild(el);

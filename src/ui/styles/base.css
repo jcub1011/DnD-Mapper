@@ -185,3 +185,34 @@ dndm-app {
     transform: translateX(360%);
   }
 }
+
+/* Global Forge & Ember slim scrollbar — every scrollable element in the game.
+   Rails and modals refine the track color via higher-specificity rules in
+   shell.css / panels.css; everything else inherits this transparent-track base. */
+* {
+  --dndm-scrollbar-thumb: rgba(196, 116, 56, 0.35);
+  --dndm-scrollbar-track: transparent;
+  scrollbar-width: thin;
+  scrollbar-color: var(--dndm-scrollbar-thumb) var(--dndm-scrollbar-track);
+}
+
+*:hover {
+  --dndm-scrollbar-thumb: rgba(196, 116, 56, 0.65);
+}
+
+@supports not (scrollbar-color: auto) {
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: rgba(196, 116, 56, 0.35);
+    border-radius: 3px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(196, 116, 56, 0.65);
+  }
+}
