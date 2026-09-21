@@ -27,6 +27,11 @@ import {
 import { diceAnimationTracker } from "../dice/diceAnimationTracker.js";
 
 const POLYHEDRAL_DICE = [4, 6, 8, 10, 12, 20, 100] as const;
+const DEFAULT_QUICK_DICE: readonly number[] = [20, 6, 12];
+
+function modeShort(mode: RollMode): string {
+  return mode === "Advantage" ? "Adv" : mode === "Disadvantage" ? "Dis" : "Normal";
+}
 
 @customElement("dndm-quick-roll-footer")
 export class DndmQuickRollFooter extends GameElement {
@@ -81,27 +86,67 @@ export class DndmQuickRollFooter extends GameElement {
 
   @state() private logOpen = false;
   @state() private presetsOpen = false;
-  @state() private attrsExpanded = false;
+  @state() private modeOpen = false;
+  @state() private attrOpen = false;
+  @state() private diceExpanded = false;
+  @state() private showCustomInput = false;
+  @state() private customSelected = false;
 
+  @state() private selectedSides = 20;
   @state() private customCount = 1;
   @state() private customSides = 20;
   @state() private customModifier = 0;
   @state() private customFormulaInput = "";
   @state() private selectedMode: RollMode = "Normal";
+  @state() private previewMode: RollMode | null = null;
+  @state() private recentLocal: readonly number[] = [];
 
   private unsubscribeTracker: (() => void) | null = null;
+
+  private readonly handleWindowKey = (e: KeyboardEvent): void => {
+    if (e.key !== "Shift" && e.key !== "Control" && e.key !== "Meta") return;
+    this.updatePreview(e.shiftKey, e.ctrlKey || e.metaKey);
+  };
+
+  private readonly handleWindowKeyUp = (e: KeyboardEvent): void => {
+    this.updatePreview(e.shiftKey, e.ctrlKey || e.metaKey);
+  };
+
+  private readonly handleWindowBlur = (): void => {
+    if (this.previewMode !== null) this.previewMode = null;
+  };
+
+  private updatePreview(shift: boolean, ctrl: boolean): void {
+    const next: RollMode | null =
+      shift && !ctrl ? "Advantage" : ctrl && !shift ? "Disadvantage" : null;
+    if (next !== this.previewMode) this.previewMode = next;
+  }
 
   override connectedCallback(): void {
     super.connectedCallback();
     this.unsubscribeTracker = diceAnimationTracker.subscribe(() => {
       this.requestUpdate();
     });
+    window.addEventListener("keydown", this.handleWindowKey);
+    window.addEventListener("keyup", this.handleWindowKeyUp);
+    window.addEventListener("blur", this.handleWindowBlur);
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.unsubscribeTracker?.();
     this.unsubscribeTracker = null;
+    window.removeEventListener("keydown", this.handleWindowKey);
+    window.removeEventListener("keyup", this.handleWindowKeyUp);
+    window.removeEventListener("blur", this.handleWindowBlur);
+  }
+
+  private get effectiveMode(): RollMode {
+    return this.previewMode ?? this.selectedMode;
+  }
+
+  private get isPreviewing(): boolean {
+    return this.previewMode !== null && this.previewMode !== this.selectedMode;
   }
 
   private get assignedSheet(): CharacterSheet | null {
@@ -140,24 +185,89 @@ export class DndmQuickRollFooter extends GameElement {
     return list;
   }
 
-  private handleDieClick(sides: number, e: MouseEvent): void {
-    let mode: RollMode = this.selectedMode;
-    if (e.shiftKey && !e.ctrlKey && !e.metaKey) {
-      mode = "Advantage";
-    } else if ((e.ctrlKey || e.metaKey) && !e.shiftKey) {
-      mode = "Disadvantage";
+  /** Most-recently-used die sides: session picks first, then roll history, then defaults. */
+  private get mruDice(): readonly number[] {
+    const seen: number[] = [];
+    for (const s of this.recentLocal) {
+      if (!seen.includes(s)) seen.push(s);
+      if (seen.length >= 3) break;
     }
+    const log = this.state?.rollLog ?? [];
+    for (let i = log.length - 1; i >= 0 && seen.length < 3; i--) {
+      const r = log[i];
+      const rolls = r?.rolls;
+      if (!rolls || rolls.length === 0) continue;
+      const sides = rolls[0].sides;
+      if (typeof sides !== "number") continue;
+      if (!(POLYHEDRAL_DICE as readonly number[]).includes(sides)) continue;
+      if (!rolls.every((d) => d.sides === sides)) continue;
+      if (!seen.includes(sides)) seen.push(sides);
+    }
+    for (const s of DEFAULT_QUICK_DICE) {
+      if (seen.length >= 3) break;
+      if (!seen.includes(s)) seen.push(s);
+    }
+    return seen.slice(0, 3);
+  }
 
+  private get visibleDice(): readonly number[] {
+    return this.diceExpanded ? POLYHEDRAL_DICE : this.mruDice;
+  }
+
+  private touchRecent(sides: number): void {
+    this.recentLocal = [sides, ...this.recentLocal.filter((s) => s !== sides)].slice(0, 10);
+  }
+
+  private resolveClickMode(e: MouseEvent): RollMode {
+    if (e.shiftKey && !e.ctrlKey && !e.metaKey) return "Advantage";
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey) return "Disadvantage";
+    return this.effectiveMode;
+  }
+
+  private closeAllPopovers(): void {
+    this.logOpen = false;
+    this.presetsOpen = false;
+    this.modeOpen = false;
+    this.attrOpen = false;
+  }
+
+  private handleDieClick(sides: number, e: MouseEvent): void {
+    this.selectedSides = sides;
+    this.customSelected = false;
+    this.touchRecent(sides);
+    const mode = this.resolveClickMode(e);
     const formula = `1d${sides}`;
     const label = `d${sides} Roll`;
     this.onRollDice?.(formula, mode, label, this.assignedSheet?.id ?? null, null);
+  }
+
+  private handleCustomToggle(): void {
+    const next = !this.customSelected;
+    this.customSelected = next;
+    this.showCustomInput = next;
+  }
+
+  private handleRollButton(): void {
+    if (this.customSelected) {
+      this.handleCustomRoll();
+      return;
+    }
+    const sides = this.selectedSides;
+    this.touchRecent(sides);
+    this.onRollDice?.(
+      `1d${sides}`,
+      this.effectiveMode,
+      `d${sides} Roll`,
+      this.assignedSheet?.id ?? null,
+      null,
+    );
   }
 
   private handleCustomRoll(): void {
     if (this.customFormulaInput.trim().length > 0) {
       this.onRollDice?.(
         this.customFormulaInput.trim(),
-        this.selectedMode,
+        this.effectiveMode,
         "Custom Roll",
         this.assignedSheet?.id ?? null,
         null,
@@ -169,7 +279,7 @@ export class DndmQuickRollFooter extends GameElement {
     const formula = formatDiceFormula([{ count, sides: this.customSides }], this.customModifier);
     this.onRollDice?.(
       formula,
-      this.selectedMode,
+      this.effectiveMode,
       "Dice Roll",
       this.assignedSheet?.id ?? null,
       null,
@@ -180,14 +290,9 @@ export class DndmQuickRollFooter extends GameElement {
     const sheet = this.assignedSheet;
     if (!sheet) return;
 
-    let mode: RollMode = this.selectedMode;
-    if (e.shiftKey && !e.ctrlKey && !e.metaKey) {
-      mode = "Advantage";
-    } else if ((e.ctrlKey || e.metaKey) && !e.shiftKey) {
-      mode = "Disadvantage";
-    }
-
+    const mode = this.resolveClickMode(e);
     this.onRollDice?.("1d20", mode, `${row.name} Check`, sheet.id, row.name);
+    this.attrOpen = false;
   }
 
   private handleReRoll(roll: RollResult, e: MouseEvent): void {
@@ -220,64 +325,35 @@ export class DndmQuickRollFooter extends GameElement {
           (r) => r.type === "Score" || r.type === "Modifier",
         )
       : [];
+    const effective = this.effectiveMode;
+    const anyPopover = this.logOpen || this.presetsOpen || this.modeOpen || this.attrOpen;
 
     return html`
-      <div class="dndm-rollfooter ${this.logOpen || this.presetsOpen ? "dndm-rollfooter--popover" : ""}">
-        <!-- Recent rolls popover toggle -->
+      <div class="dndm-rollfooter ${anyPopover ? "dndm-rollfooter--popover" : ""}">
+        <!-- 1. Roll button -->
         <button
-          class="dndm-rollfooter__log"
+          class="dndm-rollfooter__rollbtn"
           type="button"
-          title=${this.logOpen ? "Hide recent rolls" : "Show recent rolls"}
-          @click=${() => {
-            this.logOpen = !this.logOpen;
-            if (this.logOpen) this.presetsOpen = false;
-          }}
+          title=${this.customSelected && this.customFormulaInput.trim()
+            ? `Roll ${this.customFormulaInput.trim()} (${effective})`
+            : this.customSelected
+              ? `Roll custom (${effective}) — Shift: Adv, Ctrl: Dis`
+              : `Roll d${this.selectedSides} (${effective}) — Shift: Adv, Ctrl: Dis`}
+          @click=${() => this.handleRollButton()}
         >
-          ${rollLogIcon()}
+          ${dieIcon()} Roll${this.customSelected ? "" : html` d${this.selectedSides}`}
         </button>
 
-        ${this.logOpen
-          ? html`
-              <div class="dndm-rollfooter__recent" role="dialog" aria-label="Recent rolls">
-                <div class="dndm-rollfooter__recent-head">
-                  <span class="dndm-label">Recent rolls</span>
-                  <div class="dndm-rollfooter__recent-actions">
-                    <button
-                      class="dndm-btn dndm-btn--small dndm-btn--ghost"
-                      type="button"
-                      @click=${() => {
-                        this.logOpen = false;
-                        this.onOpenHistory?.();
-                      }}
-                    >
-                      See all rolls
-                    </button>
-                    <button
-                      class="dndm-btn dndm-btn--icon dndm-btn--small"
-                      type="button"
-                      @click=${() => (this.logOpen = false)}
-                    >
-                      ${closeIcon()}
-                    </button>
-                  </div>
-                </div>
-                ${this.visibleRecentRolls.length === 0
-                  ? html`<div class="dndm-panel-empty">No rolls yet.</div>`
-                  : html`<div class="dndm-rollfooter__recent-list">
-                      ${this.visibleRecentRolls.map((r) => this.renderRecentRollEntry(r))}
-                    </div>`}
-              </div>
-            `
-          : nothing}
-
-        <!-- Dice options popover toggle -->
+        <!-- 2. Settings -->
         <button
           class="dndm-rollfooter__gear"
           type="button"
           title=${this.presetsOpen ? "Hide dice options" : "Dice options & presets"}
+          aria-expanded=${this.presetsOpen ? "true" : "false"}
           @click=${() => {
-            this.presetsOpen = !this.presetsOpen;
-            if (this.presetsOpen) this.logOpen = false;
+            const next = !this.presetsOpen;
+            this.closeAllPopovers();
+            this.presetsOpen = next;
           }}
         >
           ${gearIcon()}
@@ -339,7 +415,7 @@ export class DndmQuickRollFooter extends GameElement {
                           class="dndm-btn dndm-btn--small"
                           type="button"
                           @click=${() => {
-                            this.onRollTemplate?.(t.id, this.selectedMode, sheet?.id ?? null);
+                            this.onRollTemplate?.(t.id, this.effectiveMode, sheet?.id ?? null);
                             this.presetsOpen = false;
                           }}
                         >
@@ -353,7 +429,56 @@ export class DndmQuickRollFooter extends GameElement {
             `
           : nothing}
 
-        <!-- Sound toggle -->
+        <!-- 3. Roll Log -->
+        <button
+          class="dndm-rollfooter__log"
+          type="button"
+          title=${this.logOpen ? "Hide recent rolls" : "Show recent rolls"}
+          aria-expanded=${this.logOpen ? "true" : "false"}
+          @click=${() => {
+            const next = !this.logOpen;
+            this.closeAllPopovers();
+            this.logOpen = next;
+          }}
+        >
+          ${rollLogIcon()}
+        </button>
+
+        ${this.logOpen
+          ? html`
+              <div class="dndm-rollfooter__recent" role="dialog" aria-label="Recent rolls">
+                <div class="dndm-rollfooter__recent-head">
+                  <span class="dndm-label">Recent rolls</span>
+                  <div class="dndm-rollfooter__recent-actions">
+                    <button
+                      class="dndm-btn dndm-btn--small dndm-btn--ghost"
+                      type="button"
+                      @click=${() => {
+                        this.logOpen = false;
+                        this.onOpenHistory?.();
+                      }}
+                    >
+                      See all rolls
+                    </button>
+                    <button
+                      class="dndm-btn dndm-btn--icon dndm-btn--small"
+                      type="button"
+                      @click=${() => (this.logOpen = false)}
+                    >
+                      ${closeIcon()}
+                    </button>
+                  </div>
+                </div>
+                ${this.visibleRecentRolls.length === 0
+                  ? html`<div class="dndm-panel-empty">No rolls yet.</div>`
+                  : html`<div class="dndm-rollfooter__recent-list">
+                      ${this.visibleRecentRolls.map((r) => this.renderRecentRollEntry(r))}
+                    </div>`}
+              </div>
+            `
+          : nothing}
+
+        <!-- 4. Sound toggle -->
         <button
           class="dndm-rollfooter__sound ${this.soundEnabled ? "dndm-rollfooter__sound--active" : ""}"
           type="button"
@@ -363,102 +488,164 @@ export class DndmQuickRollFooter extends GameElement {
           ${volumeIcon(!this.soundEnabled)}
         </button>
 
-        <!-- Polyhedral Dice Buttons -->
-        <div class="dndm-rollfooter__polygroup">
-          ${POLYHEDRAL_DICE.map(
+        <!-- 5. Mode dropdown -->
+        <div class="dndm-rollfooter__select-wrap">
+          <button
+            class="dndm-rollfooter__select ${this.isPreviewing ? "dndm-rollfooter__select--preview" : ""}"
+            type="button"
+            title=${this.isPreviewing
+              ? `Previewing ${effective} while modifier held — releases back to ${this.selectedMode}`
+              : "Roll mode — hold Shift for Advantage, Ctrl for Disadvantage to preview"}
+            aria-haspopup="listbox"
+            aria-expanded=${this.modeOpen ? "true" : "false"}
+            @click=${() => {
+              const next = !this.modeOpen;
+              this.closeAllPopovers();
+              this.modeOpen = next;
+            }}
+          >
+            <span>${this.isPreviewing ? effective : this.selectedMode}</span>
+            ${this.isPreviewing
+              ? html`<span class="dndm-rollfooter__preview-dot" title="Modifier preview">●</span>`
+              : nothing}
+            ${chevronIcon(this.modeOpen ? "down" : "right")}
+          </button>
+          ${this.modeOpen
+            ? html`
+                <div
+                  class="dndm-rollfooter__menu"
+                  role="listbox"
+                  aria-label="Roll mode"
+                >
+                  ${( ["Normal", "Advantage", "Disadvantage"] as const ).map(
+                    (mode) => html`
+                      <button
+                        role="option"
+                        aria-selected=${this.selectedMode === mode ? "true" : "false"}
+                        class="dndm-rollfooter__menu-item ${this.selectedMode === mode ? "dndm-rollfooter__menu-item--active" : ""}"
+                        type="button"
+                        @click=${() => {
+                          this.selectedMode = mode;
+                          this.modeOpen = false;
+                        }}
+                      >
+                        ${modeShort(mode) === mode ? mode : html`${mode} (${modeShort(mode)})`}
+                      </button>
+                    `,
+                  )}
+                </div>
+              `
+            : nothing}
+        </div>
+
+        <!-- 6. Attribute dropdown -->
+        ${numericRows.length > 0
+          ? html`
+              <div class="dndm-rollfooter__select-wrap">
+                <button
+                  class="dndm-rollfooter__select"
+                  type="button"
+                  title="Quick attribute roll (d20 + modifier)"
+                  aria-haspopup="listbox"
+                  aria-expanded=${this.attrOpen ? "true" : "false"}
+                  @click=${() => {
+                    const next = !this.attrOpen;
+                    this.closeAllPopovers();
+                    this.attrOpen = next;
+                  }}
+                >
+                  <span>Attributes</span>
+                  ${chevronIcon(this.attrOpen ? "down" : "right")}
+                </button>
+                ${this.attrOpen
+                  ? html`
+                      <div class="dndm-rollfooter__menu" role="listbox" aria-label="Attributes">
+                        ${numericRows.map((row) => {
+                          const mod = this.getAttrModifier(row);
+                          return html`
+                            <button
+                              role="option"
+                              aria-selected="false"
+                              class="dndm-rollfooter__menu-item"
+                              type="button"
+                              title="Roll d20 ${this.formatMod(mod)} (${row.name}, ${effective})"
+                              @click=${(e: MouseEvent) => this.handleAttributeRoll(row, e)}
+                            >
+                              <span>${row.name}</span>
+                              <span class="dndm-rollfooter__attr-mod">${this.formatMod(mod)}</span>
+                            </button>
+                          `;
+                        })}
+                      </div>
+                    `
+                  : nothing}
+              </div>
+            `
+          : nothing}
+
+        <!-- 7. Quick Roll Type Select -->
+        <div class="dndm-rollfooter__polygroup" role="group" aria-label="Quick roll type">
+          ${this.visibleDice.map(
             (sides) => html`
               <button
-                class="dndm-rollfooter__diebtn"
+                class="dndm-rollfooter__diebtn ${!this.customSelected && this.selectedSides === sides ? "dndm-rollfooter__diebtn--active" : ""}"
                 type="button"
-                title="Roll d${sides} (Shift: Adv, Ctrl: Dis)"
+                title="Select d${sides} — click to roll (Shift: Adv, Ctrl: Dis)"
+                aria-pressed=${!this.customSelected && this.selectedSides === sides ? "true" : "false"}
                 @click=${(e: MouseEvent) => this.handleDieClick(sides, e)}
               >
                 d${sides}
               </button>
             `,
           )}
+          <button
+            class="dndm-rollfooter__expand"
+            type="button"
+            title=${this.diceExpanded ? "Show fewer dice" : "Show all dice"}
+            aria-expanded=${this.diceExpanded ? "true" : "false"}
+            @click=${() => {
+              this.diceExpanded = !this.diceExpanded;
+              if (!this.diceExpanded) {
+                this.showCustomInput = false;
+                this.customSelected = false;
+              }
+            }}
+          >
+            ${chevronIcon(this.diceExpanded ? "down" : "right")}
+          </button>
+          ${this.diceExpanded
+            ? html`
+                <button
+                  class="dndm-rollfooter__diebtn dndm-rollfooter__diebtn--custom ${this.customSelected ? "dndm-rollfooter__diebtn--active" : ""}"
+                  type="button"
+                  title="Type a custom roll (e.g. 4d6+5)"
+                  aria-pressed=${this.customSelected ? "true" : "false"}
+                  aria-expanded=${this.showCustomInput ? "true" : "false"}
+                  @click=${() => this.handleCustomToggle()}
+                >
+                  Custom
+                </button>
+              `
+            : nothing}
         </div>
 
-        <!-- Mode selector chips -->
-        <div class="dndm-rollfooter__mode-chips">
-          <button
-            class="dndm-rollfooter__mode-chip ${this.selectedMode === "Normal" ? "dndm-rollfooter__mode-chip--active" : ""}"
-            type="button"
-            @click=${() => (this.selectedMode = "Normal")}
-          >
-            Normal
-          </button>
-          <button
-            class="dndm-rollfooter__mode-chip ${this.selectedMode === "Advantage" ? "dndm-rollfooter__mode-chip--active" : ""}"
-            type="button"
-            @click=${() => (this.selectedMode = "Advantage")}
-          >
-            Adv
-          </button>
-          <button
-            class="dndm-rollfooter__mode-chip ${this.selectedMode === "Disadvantage" ? "dndm-rollfooter__mode-chip--active" : ""}"
-            type="button"
-            @click=${() => (this.selectedMode = "Disadvantage")}
-          >
-            Dis
-          </button>
-        </div>
-
-        <!-- Custom formula or dice input -->
-        <input
-          class="dndm-input dndm-rollfooter__custom-formula"
-          placeholder="e.g. 4d6+5"
-          .value=${this.customFormulaInput}
-          @input=${(e: Event) =>
-            (this.customFormulaInput = (e.target as HTMLInputElement).value)}
-          @keydown=${(e: KeyboardEvent) => {
-            if (e.key === "Enter") this.handleCustomRoll();
-          }}
-        />
-
-        <button
-          class="dndm-rollfooter__rollbtn"
-          type="button"
-          @click=${() => this.handleCustomRoll()}
-        >
-          ${dieIcon()} Roll
-        </button>
-
-        <!-- Attribute quick rolls expander -->
-        ${numericRows.length > 0
+        ${this.showCustomInput && this.diceExpanded
           ? html`
-              <button
-                class="dndm-rollfooter__arrow"
-                type="button"
-                title=${this.attrsExpanded ? "Hide attributes" : "Quick attribute rolls"}
-                @click=${() => (this.attrsExpanded = !this.attrsExpanded)}
-              >
-                ${chevronIcon(this.attrsExpanded ? "down" : "right")} Attributes
-              </button>
-            `
-          : nothing}
-
-        <span class="dndm-rollfooter__hint">Shift = Adv · Ctrl = Dis</span>
-
-        <!-- Attribute drawers if expanded -->
-        ${this.attrsExpanded && numericRows.length > 0
-          ? html`
-              <div class="dndm-rollfooter__attrs dndm-rollfooter__attrs--open">
-                ${numericRows.map((row) => {
-                  const mod = this.getAttrModifier(row);
-                  return html`
-                    <button
-                      class="dndm-rollfooter__attr"
-                      type="button"
-                      title="Roll d20 ${this.formatMod(mod)} (${row.name})"
-                      @click=${(e: MouseEvent) => this.handleAttributeRoll(row, e)}
-                    >
-                      <span class="dndm-rollfooter__attr-name">${row.name}</span>
-                      <span class="dndm-rollfooter__attr-mod">${this.formatMod(mod)}</span>
-                    </button>
-                  `;
-                })}
-              </div>
+              <input
+                class="dndm-input dndm-rollfooter__custom-formula"
+                placeholder="e.g. 4d6+5"
+                aria-label="Custom roll formula"
+                .value=${this.customFormulaInput}
+                @input=${(e: Event) =>
+                  (this.customFormulaInput = (e.target as HTMLInputElement).value)}
+                @keydown=${(e: KeyboardEvent) => {
+                  if (e.key === "Enter") this.handleCustomRoll();
+                  if (e.key === "Escape") {
+                    this.showCustomInput = false;
+                    this.customSelected = false;
+                  }
+                }}
+              />
             `
           : nothing}
       </div>

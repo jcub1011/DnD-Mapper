@@ -24,38 +24,47 @@
   pointer-events: none;
 }
 
-/* ─── Quick Roll Footer Dock ─────────────────────────────────────── */
+/* ─── Quick Roll Footer Floating Bar ───────────────────────────── */
 .dndm-rollfooter {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  left: calc(var(--dndm-rail-pad-left, 0px) + 12px);
+  right: calc(var(--dndm-rail-pad-right, 0px) + 12px);
+  bottom: 12px;
   z-index: 4;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.4rem calc(0.85rem + var(--dndm-rail-pad-right, 0px)) 0.4rem calc(0.85rem + var(--dndm-rail-pad-left, 0px));
+  padding: 0.45rem 0.6rem;
+  overflow: visible;
   background: var(--dndm-noise), linear-gradient(0deg, #1d1814 0%, #161210 100%);
   background-size: 240px 80px, 100% 100%;
   background-repeat: repeat, no-repeat;
-  border-top: 1px solid var(--dndm-border-accent);
+  border: 1px solid var(--dndm-border-accent);
+  border-radius: 8px;
   color: var(--dndm-text);
   font-size: 0.95rem;
   font-family: var(--font-primary, inherit);
   user-select: none;
   pointer-events: auto;
-  box-shadow: inset 0 1px 0 rgba(232, 144, 85, 0.06), 0 -2px 6px rgba(0, 0, 0, 0.55);
+  box-shadow: inset 0 1px 0 rgba(232, 144, 85, 0.06), 0 6px 20px rgba(0, 0, 0, 0.6);
 }
 
 .dndm-rollfooter--popover {
   z-index: 8;
 }
 
+.dndm-rollfooter > * {
+  flex: 0 0 auto;
+}
+
 .dndm-rollfooter__polygroup {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.25rem;
+  flex: 0 1 auto;
+  overflow: visible;
 }
 
 .dndm-rollfooter__diebtn {
@@ -79,6 +88,115 @@
 
 .dndm-rollfooter__diebtn:active {
   transform: scale(0.96);
+}
+
+.dndm-rollfooter__diebtn--active {
+  border-color: var(--dndm-ember);
+  color: var(--dndm-ember-hi);
+  box-shadow: inset 0 0 6px rgba(232, 144, 85, 0.25);
+}
+
+.dndm-rollfooter__expand {
+  background: transparent;
+  color: var(--dndm-text-dim);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 0.35rem 0.4rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dndm-rollfooter__expand:hover {
+  color: var(--dndm-text);
+  border-color: var(--dndm-border-accent);
+}
+
+.dndm-rollfooter__select-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.dndm-rollfooter__select {
+  background: var(--dndm-bg-elev);
+  color: var(--dndm-text);
+  border: 1px solid var(--dndm-border);
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0.35rem 0.55rem;
+  box-shadow: inset 0 1px 0 var(--dndm-highlight);
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
+.dndm-rollfooter__select:hover {
+  background: var(--dndm-bg-elev-hover);
+  border-color: var(--dndm-border-accent);
+}
+
+.dndm-rollfooter__select--preview {
+  border-color: var(--dndm-ember);
+  color: var(--dndm-ember-hi);
+}
+
+.dndm-rollfooter__preview-dot {
+  color: var(--dndm-ember);
+  font-size: 0.6rem;
+}
+
+.dndm-rollfooter__menu {
+  position: absolute;
+  bottom: calc(100% + 0.5rem);
+  left: 0;
+  min-width: 11rem;
+  max-width: min(18rem, 90vw);
+  max-height: 20rem;
+  overflow-y: auto;
+  background: var(--dndm-bg-panel);
+  border: 1px solid var(--dndm-border-accent);
+  border-radius: 4px;
+  padding: 0.3rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.75);
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  z-index: 9;
+}
+
+.dndm-rollfooter__menu-item {
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--dndm-text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  font-family: inherit;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.55rem;
+  text-align: left;
+  width: 100%;
+}
+
+.dndm-rollfooter__menu-item:hover {
+  background: var(--dndm-bg-elev-hover);
+}
+
+.dndm-rollfooter__menu-item--active {
+  background: rgba(232, 144, 85, 0.15);
+  color: var(--dndm-ember-hi);
+  font-weight: 600;
 }
 
 .dndm-rollfooter__rollbtn {
@@ -195,6 +313,7 @@
   max-width: 90vw;
   max-height: 24rem;
   overflow: hidden;
+  z-index: 9;
   background: var(--dndm-bg-panel);
   border: 1px solid var(--dndm-border-accent);
   border-radius: 4px;
@@ -222,6 +341,7 @@
   max-width: 90vw;
   max-height: 24rem;
   overflow-y: auto;
+  z-index: 9;
   background: var(--dndm-bg-panel);
   border: 1px solid var(--dndm-border-accent);
   border-radius: 4px;

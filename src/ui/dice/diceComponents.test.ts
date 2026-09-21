@@ -173,6 +173,190 @@ describe("Dice UI Components", () => {
 
       footer.remove();
     });
+
+    it("orders bar as roll, settings, log, sound, mode, dice select", async () => {
+      const footer = document.createElement("dndm-quick-roll-footer") as DndmQuickRollFooter;
+      footer.state = state;
+      document.body.appendChild(footer);
+      await footer.updateComplete;
+
+      const bar = footer.querySelector(".dndm-rollfooter")!;
+      const order = Array.from(bar.children)
+        .map((el) => el.className)
+        .filter((c) => c.includes("dndm-rollfooter__"));
+      const idx = (frag: string) => order.findIndex((c) => c.includes(frag));
+      expect(idx("__rollbtn")).toBeGreaterThanOrEqual(0);
+      expect(idx("__rollbtn")).toBeLessThan(idx("__gear"));
+      expect(idx("__gear")).toBeLessThan(idx("__log"));
+      expect(idx("__log")).toBeLessThan(idx("__sound"));
+      expect(idx("__sound")).toBeLessThan(idx("__select-wrap"));
+      expect(idx("__select-wrap")).toBeLessThan(idx("__polygroup"));
+
+      footer.remove();
+    });
+
+    it("collapses dice select to 3 and expands to full list with custom", async () => {
+      const footer = document.createElement("dndm-quick-roll-footer") as DndmQuickRollFooter;
+      footer.state = state;
+      document.body.appendChild(footer);
+      await footer.updateComplete;
+
+      let dice = Array.from(footer.querySelectorAll<HTMLButtonElement>(".dndm-rollfooter__diebtn"));
+      expect(dice.map((b) => b.textContent?.trim())).toEqual(["d20", "d6", "d12"]);
+
+      const expand = footer.querySelector<HTMLButtonElement>(".dndm-rollfooter__expand")!;
+      expand.click();
+      await footer.updateComplete;
+
+      dice = Array.from(footer.querySelectorAll<HTMLButtonElement>(".dndm-rollfooter__diebtn"));
+      expect(dice.map((b) => b.textContent?.trim())).toEqual([
+        "d4",
+        "d6",
+        "d8",
+        "d10",
+        "d12",
+        "d20",
+        "d100",
+        "Custom",
+      ]);
+
+      // Custom button reveals formula input
+      const customBtn = dice.find((b) => b.textContent?.trim() === "Custom")!;
+      customBtn.click();
+      await footer.updateComplete;
+      expect(footer.querySelector(".dndm-rollfooter__custom-formula")).not.toBeNull();
+
+      footer.remove();
+    });
+
+    it("deselects preset dice when custom is selected and vice versa", async () => {
+      const footer = document.createElement("dndm-quick-roll-footer") as DndmQuickRollFooter;
+      footer.state = state;
+      const onRollDice = vi.fn();
+      footer.onRollDice = onRollDice;
+      document.body.appendChild(footer);
+      await footer.updateComplete;
+
+      // d20 starts selected
+      expect(
+        footer
+          .querySelector(".dndm-rollfooter__polygroup")!
+          .querySelector(".dndm-rollfooter__diebtn--active")?.textContent?.trim(),
+      ).toBe("d20");
+
+      // Expand and select Custom -> preset dice deselected
+      footer.querySelector<HTMLButtonElement>(".dndm-rollfooter__expand")!.click();
+      await footer.updateComplete;
+      const customBtn = Array.from(
+        footer.querySelectorAll<HTMLButtonElement>(".dndm-rollfooter__diebtn"),
+      ).find((b) => b.textContent?.trim() === "Custom")!;
+      customBtn.click();
+      await footer.updateComplete;
+
+      expect(customBtn.classList.contains("dndm-rollfooter__diebtn--active")).toBe(true);
+      const activePresets = Array.from(
+        footer.querySelectorAll<HTMLButtonElement>(".dndm-rollfooter__diebtn:not(.dndm-rollfooter__diebtn--custom)"),
+      ).filter((b) => b.classList.contains("dndm-rollfooter__diebtn--active"));
+      expect(activePresets).toHaveLength(0);
+
+      // Roll button now rolls the custom formula instead of the preset die
+      const input = footer.querySelector<HTMLInputElement>(".dndm-rollfooter__custom-formula")!;
+      input.value = "4d6+5";
+      input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+      await footer.updateComplete;
+      footer.querySelector<HTMLButtonElement>(".dndm-rollfooter__rollbtn")!.click();
+      expect(onRollDice).toHaveBeenLastCalledWith("4d6+5", "Normal", "Custom Roll", null, null);
+
+      // Selecting a preset die deselects custom
+      const d6Btn = Array.from(
+        footer.querySelectorAll<HTMLButtonElement>(".dndm-rollfooter__diebtn"),
+      ).find((b) => b.textContent?.trim() === "d6")!;
+      d6Btn!.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+      await footer.updateComplete;
+      expect(customBtn.classList.contains("dndm-rollfooter__diebtn--active")).toBe(false);
+      expect(d6Btn.classList.contains("dndm-rollfooter__diebtn--active")).toBe(true);
+
+      footer.remove();
+    });
+
+    it("derives collapsed dice from most recent roll history", async () => {
+      const footer = document.createElement("dndm-quick-roll-footer") as DndmQuickRollFooter;
+      footer.state = {
+        ...state,
+        rollLog: [
+          {
+            id: "r-1",
+            rollerUserId: "p1",
+            forcedByUserId: null,
+            rolls: [{ sides: 8, value: 4 }],
+            total: 4,
+            mode: "Normal",
+            flatModifier: 0,
+            attributeModifier: 0,
+            label: "x",
+            timestampUtc: "2026-09-09T12:00:00.000Z",
+            formula: "1d8",
+            modifierBreakdown: "",
+            tokenId: null,
+            appliedRules: [],
+          },
+          {
+            id: "r-2",
+            rollerUserId: "p1",
+            forcedByUserId: null,
+            rolls: [{ sides: 12, value: 7 }],
+            total: 7,
+            mode: "Normal",
+            flatModifier: 0,
+            attributeModifier: 0,
+            label: "x",
+            timestampUtc: "2026-09-09T12:01:00.000Z",
+            formula: "1d12",
+            modifierBreakdown: "",
+            tokenId: null,
+            appliedRules: [],
+          },
+        ],
+      };
+      document.body.appendChild(footer);
+      await footer.updateComplete;
+
+      const dice = Array.from(footer.querySelectorAll<HTMLButtonElement>(".dndm-rollfooter__diebtn"));
+      // most recent first: d12, d8, then default fill d20
+      expect(dice.map((b) => b.textContent?.trim())).toEqual(["d12", "d8", "d20"]);
+
+      footer.remove();
+    });
+
+    it("roll button rolls the selected die and mode dropdown previews on Shift", async () => {
+      const footer = document.createElement("dndm-quick-roll-footer") as DndmQuickRollFooter;
+      footer.state = state;
+      const onRollDice = vi.fn();
+      footer.onRollDice = onRollDice;
+      document.body.appendChild(footer);
+      await footer.updateComplete;
+
+      const rollBtn = footer.querySelector<HTMLButtonElement>(".dndm-rollfooter__rollbtn")!;
+      rollBtn.click();
+      expect(onRollDice).toHaveBeenCalledWith("1d20", "Normal", "d20 Roll", null, null);
+
+      // Hold Shift -> preview Advantage in mode dropdown
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", shiftKey: true }));
+      await footer.updateComplete;
+      const modeBtn = footer.querySelector<HTMLButtonElement>(".dndm-rollfooter__select")!;
+      expect(modeBtn.textContent).toContain("Advantage");
+      expect(modeBtn.classList.contains("dndm-rollfooter__select--preview")).toBe(true);
+
+      // Roll button uses previewed mode
+      rollBtn.click();
+      expect(onRollDice).toHaveBeenLastCalledWith("1d20", "Advantage", "d20 Roll", null, null);
+
+      window.dispatchEvent(new KeyboardEvent("keyup", { key: "Shift", shiftKey: false }));
+      await footer.updateComplete;
+      expect(modeBtn.textContent).toContain("Normal");
+
+      footer.remove();
+    });
   });
 
   describe("<dndm-roll-history> entries", () => {
