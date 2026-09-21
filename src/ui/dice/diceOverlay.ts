@@ -5,6 +5,16 @@
  * Browsers strictly limit simultaneous active WebGL contexts (8–16 max across the page).
  * We pool all client rolls through a single Three.js DiceBox instance mounted on
  * a full-viewport transparent overlay above Phaser.
+ *
+ * Latest roll wins:
+ * Only one roll's dice are ever on the board. A new roll first makes any
+ * existing dice disappear (cancelling their fade and settling their log
+ * entries immediately), then throws via the stock `box.roll()` path — whose
+ * synchronous fast-forward lands every die on its authoritative face. Throws
+ * therefore never interact, and a re-roll while dice are tumbling simply
+ * clears them and re-throws.
+ * Coloring is per roll (theme_customColorset): host gold, otherwise the
+ * roller's resolved color.
  */
 
 import { buildDiceNotation } from "../../game/dice.js";
@@ -14,14 +24,22 @@ import type { DiceBoxColorset } from "../../lib/dice-box/dice-box.js";
 import { diceAnimationTracker } from "./diceAnimationTracker.js";
 
 export const DEFAULT_DICE_SCALE = 75;
-const FADE_DELAY_MS = 3000;
+export const DICE_FADE_DELAY_MS = 3000;
 
 export class DiceOverlay {
   private box: DiceBox | null = null;
   private initializing: Promise<DiceBox | null> | null = null;
   private container: HTMLElement | null = null;
+  /** The roll currently on the board, if any. */
   private currentRollId: string | null = null;
   private fadeTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Serializes clear-plus-spawn sequences so concurrent rolls cannot
+   * interleave. Launch never waits for physics.
+   */
+  private launchChain: Promise<void> = Promise.resolve();
+  /** Bumps on detach so queued launches from a previous session abort. */
+  private epoch = 0;
   private currentColor = "";
   private currentFontColor = "";
   private soundEnabled = false;
@@ -106,25 +124,22 @@ export class DiceOverlay {
    * Detaches and disposes the 3D dice overlay.
    */
   detach(): void {
+    this.epoch += 1;
+    this.launchChain = Promise.resolve();
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
       this.resizeObserver = null;
     }
-    if (this.fadeTimer !== null) {
-      clearTimeout(this.fadeTimer);
-      this.fadeTimer = null;
-    }
+    this.clearCurrentRoll();
     if (this.box) {
       try {
         this.box.onRollComplete = null;
-        this.box.clearDice();
       } catch {
         // best effort
       }
       this.box = null;
     }
     this.container = null;
-    this.currentRollId = null;
     this.initializing = null;
   }
 
@@ -147,8 +162,7 @@ export class DiceOverlay {
       try {
         // Check for WebGL support
         const canvas = document.createElement("canvas");
-        const gl =
-          canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+        const gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
         if (!gl) {
           console.warn("WebGL not supported; 3D dice falling back to immediate settle.");
           return null;
@@ -198,46 +212,62 @@ export class DiceOverlay {
 
   /**
    * Spawns tumbling 3D dice for the supplied RollResult with the resolved roller colors.
+   *
+   * Latest roll wins: any dice already on the board disappear first, so throws
+   * never interact.
    */
-  async roll(
+  async roll(rollResult: RollResult, color: string, fontColor: string): Promise<void> {
+    const rollId = rollResult.id;
+
+    diceAnimationTracker.markAnimating(rollId);
+
+    const epoch = this.epoch;
+    const task = this.launchChain.then(() => {
+      if (epoch !== this.epoch) {
+        diceAnimationTracker.markSettled(rollId);
+        return;
+      }
+      return this.runRoll(rollResult, color, fontColor, epoch);
+    });
+    // Keep the chain alive across failures; runRoll itself never throws.
+    this.launchChain = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    await task;
+  }
+
+  private async runRoll(
     rollResult: RollResult,
     color: string,
     fontColor: string,
+    epoch: number,
   ): Promise<void> {
     const rollId = rollResult.id;
-
-    // Interrupt previous in-flight roll if one was animating
-    if (this.currentRollId !== null && this.currentRollId !== rollId) {
-      diceAnimationTracker.markSettled(this.currentRollId);
-    }
-
-    if (this.fadeTimer !== null) {
-      clearTimeout(this.fadeTimer);
-      this.fadeTimer = null;
-    }
-
-    diceAnimationTracker.markAnimating(rollId);
-    this.currentRollId = rollId;
-
-    const box = await this.ensureBox();
-    if (!box) {
-      // Immediate fallback if 3D dice engine is not available
-      diceAnimationTracker.markSettled(rollId);
-      this.currentRollId = null;
-      return;
-    }
-
-    // Ensure 3D physics box walls and camera match current view window bounds
-    box.setDimensions();
-
-    const notation = buildDiceNotation(rollResult);
-    if (!notation) {
-      diceAnimationTracker.markSettled(rollId);
-      this.currentRollId = null;
-      return;
-    }
-
     try {
+      const box = await this.ensureBox();
+      if (epoch !== this.epoch) {
+        diceAnimationTracker.markSettled(rollId);
+        return;
+      }
+      if (!box) {
+        // Immediate fallback if 3D dice engine is not available
+        diceAnimationTracker.markSettled(rollId);
+        return;
+      }
+
+      // Ensure 3D physics box walls and camera match current view window bounds
+      box.setDimensions();
+
+      const notation = buildDiceNotation(rollResult);
+      if (!notation) {
+        diceAnimationTracker.markSettled(rollId);
+        return;
+      }
+
+      // Latest roll wins: vanish existing dice so throws never interact.
+      this.clearCurrentRoll();
+
       const configUpdate: Record<string, unknown> = {};
       if (color !== this.currentColor || fontColor !== this.currentFontColor) {
         this.currentColor = color;
@@ -253,34 +283,82 @@ export class DiceOverlay {
       if (Object.keys(configUpdate).length > 0) {
         await box.updateConfig(configUpdate);
       }
-
-      box.onRollComplete = () => {
-        if (this.currentRollId === rollId) {
-          diceAnimationTracker.markSettled(rollId);
-          this.fadeTimer = setTimeout(() => {
-            try {
-              box.clearDice();
-            } catch {
-              // best effort
-            }
-            if (this.currentRollId === rollId) {
-              this.currentRollId = null;
-            }
-          }, FADE_DELAY_MS);
-        }
-      };
-
-      const p = box.roll(notation);
-      if (p && typeof p.catch === "function") {
-        p.catch((err) => {
-          console.warn("Dice roll physics failed", err);
-          diceAnimationTracker.markSettled(rollId);
-        });
+      if (epoch !== this.epoch) {
+        diceAnimationTracker.markSettled(rollId);
+        return;
       }
+
+      // Stock throw on a guaranteed-empty board: clears, spawns, and lands
+      // every die on its authoritative face. Returns after launch (never waits
+      // for physics); completion settles the roll and arms its fade.
+      let launch: Promise<unknown>;
+      try {
+        launch = box.roll(notation);
+      } catch (err) {
+        console.warn("Dice roll physics failed", err);
+        diceAnimationTracker.markSettled(rollId);
+        return;
+      }
+      this.currentRollId = rollId;
+      launch.then(
+        () => {
+          if (epoch === this.epoch) this.settleCurrent(rollId);
+        },
+        (err) => {
+          console.warn("Dice roll physics failed", err);
+          if (epoch === this.epoch) this.settleCurrent(rollId);
+        },
+      );
     } catch (err) {
       console.warn("Failed to launch 3D roll:", err);
       diceAnimationTracker.markSettled(rollId);
-      this.currentRollId = null;
+    }
+  }
+
+  /** Settles the board's roll and arms its fade. Stale completions are ignored. */
+  private settleCurrent(rollId: string): void {
+    if (this.currentRollId !== rollId) return;
+    diceAnimationTracker.markSettled(rollId);
+    if (this.fadeTimer !== null) {
+      clearTimeout(this.fadeTimer);
+    }
+    this.fadeTimer = setTimeout(() => {
+      this.fadeTimer = null;
+      this.fadeCurrent(rollId);
+    }, DICE_FADE_DELAY_MS);
+  }
+
+  /** Fades the board's roll if it is still the latest one. */
+  private fadeCurrent(rollId: string): void {
+    if (this.currentRollId !== rollId) return;
+    this.currentRollId = null;
+    if (this.box) {
+      try {
+        this.box.clearDice();
+      } catch {
+        // best effort
+      }
+    }
+  }
+
+  /**
+   * Vanishes the board's roll: cancels its fade, reveals its log entry
+   * immediately, and clears the scene. No-op when the board is empty.
+   */
+  private clearCurrentRoll(): void {
+    if (this.fadeTimer !== null) {
+      clearTimeout(this.fadeTimer);
+      this.fadeTimer = null;
+    }
+    if (this.currentRollId === null) return;
+    diceAnimationTracker.markSettled(this.currentRollId);
+    this.currentRollId = null;
+    if (this.box) {
+      try {
+        this.box.clearDice();
+      } catch {
+        // best effort
+      }
     }
   }
 }

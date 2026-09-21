@@ -25,6 +25,7 @@ export default class DiceBox {
   roll(notation: string): Promise<unknown>;
   reroll(diceIndices: number[]): Promise<unknown>;
   add(notation: string): Promise<unknown>;
+  remove(diceIndices: number[]): Promise<unknown>;
   clearDice(): void;
   updateConfig(options: Partial<DiceBoxOptions>): Promise<void>;
   setDimensions(dimensions?: { x?: number; y?: number }): void;
@@ -33,4 +34,5 @@ export default class DiceBox {
   sounds: boolean;
   baseScale: number;
   onRollComplete: ((results: unknown) => void) | null;
+  onAddDiceComplete?: ((results: unknown) => void) | null;
 }
