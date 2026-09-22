@@ -225,12 +225,15 @@ describe("<dndm-character-sheet>", () => {
     expect(el.querySelector(".dndm-sheet-name-input")).not.toBeNull();
   });
 
-  it("lists player names (not blank entries) in the Assign Owner dropdown", async () => {
+  it("keeps the side rail title bar minimal; owner + actions live in the settings modal", async () => {
     const sheet1 = makeSheet("sheet-1", "Thorin", null);
+    const onPlaceToken = vi.fn();
+    const onDuplicateSheet = vi.fn();
     el.sheets = { "sheet-1": sheet1 };
     el.selectedSheetId = "sheet-1";
     el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
     el.isDm = true;
+    el.activeMapId = "map-a";
     el.dmPlayerId = "dm-1";
     // Roster as the app provides it: lobby players mapped to display entries.
     el.roster = [
@@ -238,18 +241,61 @@ describe("<dndm-character-sheet>", () => {
       { id: "player-1", name: "Alice" },
       { id: "player-2", name: "Bob" },
     ];
+    el.onPlaceToken = onPlaceToken;
+    el.onDuplicateSheet = onDuplicateSheet;
 
     document.body.appendChild(el);
     await el.updateComplete;
 
-    const select = el.querySelector('select[title="Assign Owner"]') as HTMLSelectElement;
-    expect(select).not.toBeNull();
-    const options = Array.from(select.querySelectorAll("option")).map((o) => o.textContent?.trim());
-    expect(options).toContain("Alice");
-    expect(options).toContain("Bob");
-    expect(options).not.toContain("Dungeon Master");
-    for (const text of options) {
+    // Side rail title bar: gear + name only — no owner dropdown, no action buttons.
+    expect(el.querySelector('select[title="Assign Owner"]')).toBeNull();
+    const titleBar = el.querySelector(".dndm-sheet-header-title-bar");
+    expect(titleBar?.textContent).not.toContain("Place token");
+    expect(titleBar?.textContent).not.toContain("Copy");
+
+    // Open settings via the gear button.
+    const gear = titleBar?.querySelector(
+      'button[title="Sheet Settings"]',
+    ) as HTMLButtonElement;
+    expect(gear).toBeDefined();
+    gear.click();
+    await el.updateComplete;
+
+    const modal = el.querySelector("dndm-sheet-settings-modal");
+    expect(modal).not.toBeNull();
+    // Flush nested modal renders (settings modal -> dndm-modal body).
+    await (modal as unknown as { updateComplete: Promise<unknown> }).updateComplete;
+    const inner = modal!.querySelector("dndm-modal");
+    if (inner) {
+      await (inner as unknown as { updateComplete: Promise<unknown> }).updateComplete;
+    }
+    await el.updateComplete;
+
+    // Owner assignment still available in the modal with player names only.
+    const selects = Array.from(modal!.querySelectorAll("select"));
+    const ownerOptions = Array.from(selects[0]?.querySelectorAll("option") ?? []).map((o) =>
+      o.textContent?.trim(),
+    );
+    expect(ownerOptions).toContain("Alice");
+    expect(ownerOptions).toContain("Bob");
+    expect(ownerOptions).not.toContain("Dungeon Master");
+    for (const text of ownerOptions) {
       expect(text).not.toBe("");
     }
+
+    // Sheet actions in the modal forward to the sheet callbacks.
+    const modalButtons = Array.from(modal!.querySelectorAll<HTMLButtonElement>("button"));
+    const placeBtn = modalButtons.find((b) => b.textContent?.trim() === "Place token");
+    const copyBtn = modalButtons.find((b) => b.textContent?.trim() === "Copy");
+    expect(placeBtn).toBeDefined();
+    expect(copyBtn).toBeDefined();
+
+    placeBtn!.click();
+    expect(onPlaceToken).toHaveBeenCalledTimes(1);
+    expect(onPlaceToken).toHaveBeenCalledWith("sheet-1");
+
+    copyBtn!.click();
+    expect(onDuplicateSheet).toHaveBeenCalledTimes(1);
+    expect(onDuplicateSheet).toHaveBeenCalledWith("sheet-1");
   });
 });

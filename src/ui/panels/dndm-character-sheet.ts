@@ -187,15 +187,6 @@ export class DndmCharacterSheet extends GameElement {
     }
   }
 
-  /**
-   * Players that can own a sheet. The host is not a player, so it is never an
-   * assignable owner. Name lookups keep the full roster for legacy sheets.
-   */
-  private get assignableRoster(): readonly { id: string; name: string }[] {
-    if (this.dmPlayerId === null) return this.roster;
-    return this.roster.filter((p) => p.id !== this.dmPlayerId);
-  }
-
   private getEffectiveState(): DndMapperState {    return {
       phase: "Playing",
       settings: this.settings,
@@ -451,15 +442,6 @@ export class DndmCharacterSheet extends GameElement {
         <!-- Roster / Selector Header -->
         <div class="dndm-sheet-roster">
           <div class="dndm-sheet-roster-controls">
-            <input
-              type="text"
-              class="dndm-sheet-search"
-              placeholder="Search sheets..."
-              .value=${this.searchQuery}
-              @input=${(e: Event) => {
-                this.searchQuery = (e.target as HTMLInputElement).value;
-              }}
-            />
             <button
               class="dndm-btn dndm-btn--subtle"
               style="padding: 2px 6px; font-size: 0.75rem;"
@@ -469,31 +451,45 @@ export class DndmCharacterSheet extends GameElement {
             >
               ${this.scopeFilter === "map" ? "Map" : "All"}
             </button>
-            ${this.isDm || this.settings.playersCanCreateNPCs
-              ? html`
-                  <button
-                    class="dndm-btn dndm-btn--primary"
-                    style="padding: 2px 8px; font-size: 0.75rem;"
-                    @click=${this.handleCreateSheet}
-                  >
-                    + New
-                  </button>
-                `
-              : nothing}
-            ${this.isDm
-              ? html`
-                  <button
-                    class="dndm-btn dndm-btn--subtle"
-                    title="Attribute Schema Presets"
-                    style="padding: 2px 6px; font-size: 0.75rem;"
-                    @click=${() => {
-                      this.schemaModalOpen = true;
-                    }}
-                  >
-                    Schema
-                  </button>
-                `
-              : nothing}
+            <div style="display: flex; align-items: center; gap: 4px; margin-left: auto;">
+              ${this.isDm || this.settings.playersCanCreateNPCs
+                ? html`
+                    <button
+                      class="dndm-btn dndm-btn--primary"
+                      title="New character sheet"
+                      style="padding: 2px 8px; font-size: 0.75rem; min-width: 28px;"
+                      @click=${this.handleCreateSheet}
+                    >
+                      +
+                    </button>
+                  `
+                : nothing}
+              ${this.isDm
+                ? html`
+                    <button
+                      class="dndm-btn dndm-btn--subtle"
+                      title="Attribute Schema Presets"
+                      style="padding: 2px 6px; font-size: 0.75rem;"
+                      @click=${() => {
+                        this.schemaModalOpen = true;
+                      }}
+                    >
+                      Schema
+                    </button>
+                  `
+                : nothing}
+            </div>
+          </div>
+          <div class="dndm-sheet-search-row">
+            <input
+              type="text"
+              class="dndm-sheet-search"
+              placeholder="Search sheets..."
+              .value=${this.searchQuery}
+              @input=${(e: Event) => {
+                this.searchQuery = (e.target as HTMLInputElement).value;
+              }}
+            />
           </div>
 
           <!-- Sheet Chips -->
@@ -534,6 +530,13 @@ export class DndmCharacterSheet extends GameElement {
         .dmPlayerId=${this.dmPlayerId}
         .maps=${this.maps}
         .isDm=${this.isDm}
+        .activeMapId=${this.activeMapId}
+        @place-token=${(e: CustomEvent<{ sheetId: string }>) => {
+          this.handlePlaceToken(e.detail.sheetId);
+        }}
+        @duplicate-sheet=${(e: CustomEvent<{ sheetId: string }>) => {
+          this.handleDuplicateSheet(e.detail.sheetId);
+        }}
         @save=${(e: CustomEvent<SheetSettingsPatch>) => {
           if (selectedSheet) {
             const { characterName, color, scopedMapId, ownerUserId } = e.detail;
@@ -636,11 +639,16 @@ export class DndmCharacterSheet extends GameElement {
     return html`
       <!-- Title Bar -->
       <div class="dndm-sheet-header-title-bar">
-        <span
-          class="dndm-sheet-color-dot"
-          style="background-color: ${sheet.color || "#4a90e2"};"
-          title="Character token color"
-        ></span>
+        <button
+          class="dndm-btn dndm-btn--subtle"
+          title="Sheet Settings"
+          style="padding: 2px 6px; font-size: 1rem; line-height: 1; color: ${sheet.color || "#4a90e2"};"
+          @click=${() => {
+            this.settingsModalOpen = true;
+          }}
+        >
+          ⚙
+        </button>
         <input
           type="text"
           class="dndm-sheet-name-input"
@@ -648,55 +656,6 @@ export class DndmCharacterSheet extends GameElement {
           ?disabled=${!editable}
           @input=${(e: Event) => this.onNameInput(sheet.id, e)}
         />
-        ${this.isDm && sheet.ownerUserId === null
-          ? html`
-              <select
-                class="dndm-select dndm-select--small"
-                style="font-size: 0.75rem; padding: 2px 4px; max-width: 110px;"
-                title="Assign Owner"
-                @change=${(e: Event) => {
-                  const val = (e.target as HTMLSelectElement).value;
-                  if (val) {
-                    this.emitAssignSheetOwner(sheet.id, val);
-                  }
-                }}
-              >
-                <option value="">Assign Owner...</option>
-                ${this.assignableRoster.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
-              </select>
-            `
-          : nothing}
-        ${this.isDm
-          ? html`
-              <button
-                class="dndm-btn dndm-btn--subtle"
-                title="Place a token for this sheet on the active map"
-                style="padding: 2px 6px; font-size: 0.8rem;"
-                ?disabled=${!this.activeMapId}
-                @click=${() => this.handlePlaceToken(sheet.id)}
-              >
-                Place token
-              </button>
-              <button
-                class="dndm-btn dndm-btn--subtle"
-                title="Duplicate Sheet"
-                style="padding: 2px 6px; font-size: 0.8rem;"
-                @click=${() => this.handleDuplicateSheet(sheet.id)}
-              >
-                Copy
-              </button>
-            `
-          : nothing}
-        <button
-          class="dndm-btn dndm-btn--subtle"
-          title="Sheet Settings"
-          style="padding: 2px 6px; font-size: 0.8rem;"
-          @click=${() => {
-            this.settingsModalOpen = true;
-          }}
-        >
-          ⚙
-        </button>
       </div>
 
       ${sheet.representsUserId

@@ -33,11 +33,20 @@ export class DndmSheetSettingsModal extends GameElement {
   @property({ type: Boolean })
   isDm = false;
 
+  @property({ type: String })
+  activeMapId: string | null = null;
+
   @property({ attribute: false })
   onSave?: (patch: SheetSettingsPatch) => void;
 
   @property({ attribute: false })
   onDelete?: (sheetId: string) => void;
+
+  @property({ attribute: false })
+  onPlaceToken?: (sheetId: string) => void;
+
+  @property({ attribute: false })
+  onDuplicateSheet?: (sheetId: string) => void;
 
   @property({ attribute: false })
   onCancel?: () => void;
@@ -96,6 +105,32 @@ export class DndmSheetSettingsModal extends GameElement {
       }),
     );
     this.onDelete?.(sheetId);
+  };
+
+  private handlePlaceToken = (): void => {
+    if (!this.sheet) return;
+    const sheetId = this.sheet.id;
+    this.dispatchEvent(
+      new CustomEvent<{ sheetId: string }>("place-token", {
+        bubbles: true,
+        composed: true,
+        detail: { sheetId },
+      }),
+    );
+    this.onPlaceToken?.(sheetId);
+  };
+
+  private handleDuplicateSheet = (): void => {
+    if (!this.sheet) return;
+    const sheetId = this.sheet.id;
+    this.dispatchEvent(
+      new CustomEvent<{ sheetId: string }>("duplicate-sheet", {
+        bubbles: true,
+        composed: true,
+        detail: { sheetId },
+      }),
+    );
+    this.onDuplicateSheet?.(sheetId);
   };
 
   private handleCancel = (): void => {
@@ -221,6 +256,29 @@ export class DndmSheetSettingsModal extends GameElement {
                         )}
                       </select>
                     </label>
+
+                    <div>
+                      <span class="dndm-label">Sheet Actions</span>
+                      <div style="display: flex; gap: 8px; margin-top: 4px;">
+                        <button
+                          class="dndm-btn dndm-btn--subtle"
+                          type="button"
+                          title="Place a token for this sheet on the active map"
+                          ?disabled=${!this.activeMapId}
+                          @click=${this.handlePlaceToken}
+                        >
+                          Place token
+                        </button>
+                        <button
+                          class="dndm-btn dndm-btn--subtle"
+                          type="button"
+                          title="Duplicate Sheet"
+                          @click=${this.handleDuplicateSheet}
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
                   `
                 : nothing
             }

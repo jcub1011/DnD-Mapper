@@ -22,6 +22,10 @@
   gap: var(--dndm-spacing-xs);
 }
 
+.dndm-sheet-search-row {
+  display: flex;
+}
+
 .dndm-sheet-search {
   flex: 1;
   min-width: 0;
@@ -50,15 +54,19 @@
 
 .dndm-sheet-chips {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px;
-  max-height: 80px;
-  overflow-y: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
 }
 
 .dndm-sheet-chip {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
   gap: 4px;
   padding: 2px 8px;
   font-size: 0.75rem;
