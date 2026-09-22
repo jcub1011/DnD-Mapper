@@ -88,13 +88,43 @@
 }
 
 /* Inside the rail (which already supplies the dark+blur overlay), flatten
-   panels so two stacked dark layers don't fight each other. */
+   panels so two stacked dark layers don't fight each other. Rail panels
+   are borderless with content flush to the panel's left/right edges. */
 .dndm-rail .dndm-panel {
   background: transparent;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
-  border-color: var(--dndm-border-accent);
+  border: none;
+  border-radius: 0;
   box-shadow: none;
+}
+
+.dndm-rail .dndm-panel-header {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.dndm-rail .dndm-panel-header::before {
+  left: 0;
+}
+
+.dndm-rail .dndm-panel-title {
+  padding-left: 0.6rem;
+}
+
+.dndm-rail .dndm-panel-header::after {
+  left: 0;
+  right: 0;
+}
+
+.dndm-rail .dndm-panel-divider {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.dndm-rail .dndm-panel-body {
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .dndm-panel-header {
