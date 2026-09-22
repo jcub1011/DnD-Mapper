@@ -18,6 +18,9 @@ export class DndmTokenPanel extends GameElement {
   @property({ attribute: false })
   roster: readonly { id: string; name: string }[] = [];
 
+  @property({ type: String })
+  dmPlayerId: string | null = null;
+
   @property({ attribute: false })
   onCenterOnToken?: (x: number, y: number) => void;
 
@@ -104,6 +107,10 @@ export class DndmTokenPanel extends GameElement {
 
   override render(): TemplateResult {
     const tokens = this.activeMap?.tokens ?? [];
+    // The host is not a player, so it is never an assignable owner. Name
+    // lookups below intentionally keep the full roster for legacy tokens.
+    const assignableRoster =
+      this.dmPlayerId === null ? this.roster : this.roster.filter((p) => p.id !== this.dmPlayerId);
 
     return html`
       <dndm-collapsible-panel
@@ -154,7 +161,7 @@ export class DndmTokenPanel extends GameElement {
                             }}
                           >
                             <option value="">Assign...</option>
-                            ${this.roster.map(
+                            ${assignableRoster.map(
                               (p) => html`<option value=${p.id}>${p.name}</option>`,
                             )}
                           </select>

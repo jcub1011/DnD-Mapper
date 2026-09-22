@@ -16,6 +16,9 @@ export class DndmTokenDetailsModal extends GameElement {
   @property({ attribute: false })
   roster: readonly { id: string; name: string }[] = [];
 
+  @property({ type: String })
+  dmPlayerId: string | null = null;
+
   @property({ type: Boolean })
   isDm = false;
 
@@ -147,6 +150,10 @@ export class DndmTokenDetailsModal extends GameElement {
     const ownerName = t?.ownerUserId
       ? (this.roster.find((p) => p.id === t.ownerUserId)?.name ?? t.ownerUserId)
       : null;
+    // The host is not a player, so it is never an assignable owner. Name
+    // lookups above intentionally keep the full roster for legacy tokens.
+    const assignableRoster =
+      this.dmPlayerId === null ? this.roster : this.roster.filter((p) => p.id !== this.dmPlayerId);
 
     return html`
       <dndm-modal
@@ -234,7 +241,7 @@ export class DndmTokenDetailsModal extends GameElement {
                           @change=${this.handleReassign}
                         >
                           <option value="">Unassigned (NPC / DM Controlled)</option>
-                          ${this.roster.map(
+                          ${assignableRoster.map(
                             (p) => html`<option value=${p.id}>${p.name}</option>`,
                           )}
                         </select>

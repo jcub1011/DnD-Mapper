@@ -1163,6 +1163,7 @@ export class DndmApp extends GameElement {
                   .tokens=${active.tokens}
                   .sheets=${this.match.sheets}
                   .roster=${this.roster}
+                  .dmPlayerId=${this.match.dmPlayerId}
                   .currentUserId=${this.controller?.playerId ?? null}
                   .isDm=${this.isDm}
                   .onCenterOnToken=${(x: number, y: number) => {
@@ -1317,6 +1318,7 @@ export class DndmApp extends GameElement {
               .isDm=${this.isDm}
               .currentUserId=${this.controller?.playerId ?? null}
               .roster=${this.roster}
+              .dmPlayerId=${this.match.dmPlayerId}
               .maps=${this.match.maps}
               .onSelectSheet=${(id: string | null) => {
                 this.selectedSheetId = id;

@@ -156,6 +156,54 @@ describe("Auto-Spawn on Session Start", () => {
     const fullMap = result!.state.maps[0] as GameMap;
     expect(fullMap.tokens).toHaveLength(2);
   });
+
+  it("does not spawn a token for the host/DM", () => {
+    const base = createDefaultDndMapperState();
+    const map: GameMap = {
+      id: "map-main",
+      name: "Main Map",
+      grid: {
+        ...createDefaultGridConfig(),
+        widthCells: 20,
+        heightCells: 20,
+      },
+      images: [],
+      tokens: [],
+      createdUtc: "2026-09-08T00:00:00.000Z",
+      listOrder: 0,
+      defaultSpawnPosition: { x: 10, y: 10 },
+      markupSvg: null,
+      fogMask: "",
+    };
+    const state: DndMapperState = {
+      ...base,
+      phase: "Lobby",
+      dmPlayerId: "user-dm",
+      activeMapId: "map-main",
+      maps: [map],
+      sheets: {},
+      activeCombat: null,
+    };
+    const roster: PlayerInfo[] = [
+      { id: "user-dm", displayName: "Dungeon Master" },
+      { id: "user-alice", displayName: "Alice" },
+    ];
+
+    const result = applyIntent(
+      state,
+      "user-dm",
+      { kind: "startSession" },
+      Date.now(),
+      roster,
+    );
+
+    expect(result).not.toBeNull();
+    const fullMap = result!.state.maps[0] as GameMap;
+    // Only Alice gets a token; the host owns unassigned content instead.
+    expect(fullMap.tokens).toHaveLength(1);
+    expect(fullMap.tokens[0].ownerUserId).toBe("user-alice");
+    expect(fullMap.tokens.some((t) => t.ownerUserId === "user-dm")).toBe(false);
+  });
 });
 
 describe("handlePlayerLeft (Abandonment & Lifecycle)", () => {

@@ -88,6 +88,9 @@ export class DndmCharacterSheet extends GameElement {
   @property({ attribute: false })
   roster: readonly { id: string; name: string }[] = [];
 
+  @property({ type: String })
+  dmPlayerId: string | null = null;
+
   @property({ attribute: false })
   maps: readonly (GameMap | MapSummary)[] = [];
 
@@ -181,8 +184,16 @@ export class DndmCharacterSheet extends GameElement {
     }
   }
 
-  private getEffectiveState(): DndMapperState {
-    return {
+  /**
+   * Players that can own a sheet. The host is not a player, so it is never an
+   * assignable owner. Name lookups keep the full roster for legacy sheets.
+   */
+  private get assignableRoster(): readonly { id: string; name: string }[] {
+    if (this.dmPlayerId === null) return this.roster;
+    return this.roster.filter((p) => p.id !== this.dmPlayerId);
+  }
+
+  private getEffectiveState(): DndMapperState {    return {
       phase: "Playing",
       settings: this.settings,
       attributeSchema: this.attributeSchema,
@@ -500,6 +511,7 @@ export class DndmCharacterSheet extends GameElement {
         .isOpen=${this.settingsModalOpen}
         .sheet=${selectedSheet}
         .roster=${this.roster}
+        .dmPlayerId=${this.dmPlayerId}
         .maps=${this.maps}
         .isDm=${this.isDm}
         @save=${(e: CustomEvent<SheetSettingsPatch>) => {
@@ -630,7 +642,7 @@ export class DndmCharacterSheet extends GameElement {
                 }}
               >
                 <option value="">Assign Owner...</option>
-                ${this.roster.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
+                ${this.assignableRoster.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
               </select>
             `
           : nothing}

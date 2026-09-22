@@ -58,6 +58,15 @@ export class DndmLobby extends GameElement {
     this.onStartSession?.();
   }
 
+  /**
+   * Players excluding the host/DM. The host is not a player and is never
+   * listed or counted here; the host owns anything not assigned to a player.
+   */
+  private get players(): readonly KBPlayer[] {
+    if (this.dmPlayerId === null) return this.roster;
+    return this.roster.filter((p) => p.id !== this.dmPlayerId);
+  }
+
   override render(): TemplateResult {
     return html`
       <div class="dndm-lobby-view">
@@ -73,11 +82,10 @@ export class DndmLobby extends GameElement {
           : nothing}
 
         <div class="card">
-          <h4>Players (${this.roster.length})</h4>
+          <h4>Players (${this.players.length})</h4>
           <div class="player-list">
-            ${this.roster.map((p) => {
+            ${this.players.map((p) => {
               const isMe = p.id === this.localPlayerId;
-              const isDmPlayer = p.id === this.dmPlayerId;
               const canKick = this.isOwner && !isMe;
 
               if (canKick) {
@@ -88,18 +96,18 @@ export class DndmLobby extends GameElement {
                     title="Click to kick player"
                     @click=${() => this.handleKick(p)}
                   >
-                    ${p.displayName}${isDmPlayer ? " (DM)" : ""}${isMe ? " (You)" : ""}
+                    ${p.displayName}${isMe ? " (You)" : ""}
                   </button>
                 `;
               }
 
               return html`
                 <span class="player-chip">
-                  ${p.displayName}${isDmPlayer ? " (DM)" : ""}${isMe ? " (You)" : ""}
+                  ${p.displayName}${isMe ? " (You)" : ""}
                 </span>
               `;
             })}
-            ${this.roster.length === 0
+            ${this.players.length === 0
               ? html`<span class="dndm-text-muted">Waiting for players to join…</span>`
               : nothing}
           </div>

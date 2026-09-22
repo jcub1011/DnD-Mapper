@@ -33,6 +33,9 @@ export class DndmTokenRail extends GameElement {
   @property({ attribute: false })
   roster: readonly { id: string; name: string }[] = [];
 
+  @property({ type: String })
+  dmPlayerId: string | null = null;
+
   @property({ attribute: false })
   currentUserId: string | null = null;
 
@@ -305,7 +308,9 @@ export class DndmTokenRail extends GameElement {
               const isMine =
                 !!this.currentUserId &&
                 (t.ownerUserId === this.currentUserId ||
-                  t.representsUserId === this.currentUserId);
+                  t.representsUserId === this.currentUserId ||
+                  // The host owns anything not assigned to a player.
+                  (this.isDm && t.ownerUserId === null));
               const label = `${t.name}${t.hidden ? " (hidden)" : ""}${isMine ? " (you)" : ""}. Click for details, hold to center${this.isDm ? ", right-click to hide or reveal" : ""}.`;
               return html`
                 <button
@@ -390,6 +395,7 @@ export class DndmTokenRail extends GameElement {
         ?isOpen=${this.selectedToken !== null}
         .token=${this.selectedToken}
         .roster=${this.roster}
+        .dmPlayerId=${this.dmPlayerId}
         .isDm=${this.isDm}
         .onUpdateToken=${this.onUpdateToken}
         .onToggleHidden=${this.onToggleHidden}

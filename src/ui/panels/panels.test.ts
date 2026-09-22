@@ -10,6 +10,8 @@ import "../panels/dndm-map-list";
 import type { DndmMapList } from "../panels/dndm-map-list";
 import "../panels/dndm-token-panel";
 import type { DndmTokenPanel } from "../panels/dndm-token-panel";
+import "../panels/dndm-token-rail";
+import type { DndmTokenRail } from "../panels/dndm-token-rail";
 import "../panels/dndm-my-token";
 import type { DndmMyToken } from "../panels/dndm-my-token";
 import "../panels/dndm-saves-panel";
@@ -217,6 +219,111 @@ describe("UI Panels and Canvas Controls (07 — UI Shell)", () => {
 
       el.remove();
     });
+
+    it("excludes the host from assignable owners", async () => {
+      const el = document.createElement("dndm-token-panel") as DndmTokenPanel;
+      const token1: Token = {
+        id: "t1",
+        mapId: "m1",
+        name: "Goblin",
+        color: "#1e88e5",
+        type: "NPCToken",
+        iconKind: "Initial",
+        x: 5,
+        y: 8,
+        hidden: false,
+        ownerUserId: null,
+        representsUserId: null,
+        sheetId: null,
+      };
+
+      el.activeMap = makeMap("m1", "Dungeon", [token1]);
+      el.isDm = true;
+      el.dmPlayerId = "dm-user";
+      el.roster = [
+        { id: "dm-user", name: "Dungeon Master" },
+        { id: "u1", name: "Gimli" },
+      ];
+
+      document.body.appendChild(el);
+      await el.updateComplete;
+
+      const select = el.querySelector("select") as HTMLSelectElement;
+      expect(select).not.toBeNull();
+      const options = Array.from(select.querySelectorAll("option")).map((o) => o.textContent);
+      expect(options).toContain("Gimli");
+      expect(options).not.toContain("Dungeon Master");
+
+      el.remove();
+    });
+  });
+
+  describe("<dndm-token-rail>", () => {
+    it("marks unassigned tokens as mine for the host", async () => {
+      const el = document.createElement("dndm-token-rail") as DndmTokenRail;
+      const token1: Token = {
+        id: "t1",
+        mapId: "m1",
+        name: "Goblin",
+        color: "#1e88e5",
+        type: "NPCToken",
+        iconKind: "Initial",
+        x: 5,
+        y: 8,
+        hidden: false,
+        ownerUserId: null,
+        representsUserId: null,
+        sheetId: null,
+      };
+
+      el.tokens = [token1];
+      el.isDm = true;
+      el.currentUserId = "dm-user";
+      el.dmPlayerId = "dm-user";
+      el.roster = [{ id: "dm-user", name: "Dungeon Master" }];
+
+      document.body.appendChild(el);
+      await el.updateComplete;
+
+      const avatar = el.querySelector(".dndm-token-rail-avatar.is-mine") as HTMLElement;
+      expect(avatar).not.toBeNull();
+
+      el.remove();
+    });
+
+    it("does not mark unassigned tokens as mine for regular players", async () => {
+      const el = document.createElement("dndm-token-rail") as DndmTokenRail;
+      const token1: Token = {
+        id: "t1",
+        mapId: "m1",
+        name: "Goblin",
+        color: "#1e88e5",
+        type: "NPCToken",
+        iconKind: "Initial",
+        x: 5,
+        y: 8,
+        hidden: false,
+        ownerUserId: null,
+        representsUserId: null,
+        sheetId: null,
+      };
+
+      el.tokens = [token1];
+      el.isDm = false;
+      el.currentUserId = "u1";
+      el.dmPlayerId = "dm-user";
+      el.roster = [
+        { id: "dm-user", name: "Dungeon Master" },
+        { id: "u1", name: "Gimli" },
+      ];
+
+      document.body.appendChild(el);
+      await el.updateComplete;
+
+      expect(el.querySelector(".dndm-token-rail-avatar.is-mine")).toBeNull();
+
+      el.remove();
+    });
   });
 
   describe("<dndm-my-token>", () => {
@@ -322,6 +429,7 @@ describe("UI Panels and Canvas Controls (07 — UI Shell)", () => {
       el.isDm = true;
       el.isOwner = true;
       el.localPlayerId = "p1";
+      el.dmPlayerId = "p1";
       el.roster = [
         { id: "p1", displayName: "Dungeon Master" },
         { id: "p2", displayName: "Gimli" },
@@ -331,6 +439,11 @@ describe("UI Panels and Canvas Controls (07 — UI Shell)", () => {
 
       document.body.appendChild(el);
       await el.updateComplete;
+
+      // 0. Host is not a player: hidden from the list and excluded from the count
+      expect(el.textContent).toContain("Players (1)");
+      expect(el.textContent).toContain("Gimli");
+      expect(el.textContent).not.toContain("Dungeon Master");
 
       // 1. DM sees Start Session button enabled
       const startBtn = el.querySelector("button.dndm-btn--primary") as HTMLButtonElement;
@@ -381,6 +494,7 @@ describe("UI Panels and Canvas Controls (07 — UI Shell)", () => {
       el.isDm = false;
       el.isOwner = false;
       el.localPlayerId = "p2";
+      el.dmPlayerId = "p1";
       el.roster = [
         { id: "p1", displayName: "Dungeon Master" },
         { id: "p2", displayName: "Gimli" },
@@ -389,12 +503,16 @@ describe("UI Panels and Canvas Controls (07 — UI Shell)", () => {
       document.body.appendChild(el);
       await el.updateComplete;
 
+      // Host is not counted as a player
+      expect(el.textContent).toContain("Players (1)");
+      expect(el.textContent).not.toContain("Dungeon Master");
+
       // Regular players do not see the Start Session button; they see the waiting message
       const startBtn = el.querySelector("button.dndm-btn--primary");
       expect(startBtn).toBeNull();
       expect(el.textContent).toContain("Waiting for DM to start session…");
 
-      // Player p2 cannot kick DM p1 (DM is rendered as span, not button)
+      // Player p2 cannot kick anyone (DM is hidden entirely, not rendered)
       const kickButtons = el.querySelectorAll("button.player-chip");
       expect(kickButtons.length).toBe(0);
 

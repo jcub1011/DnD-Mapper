@@ -1392,7 +1392,9 @@ export function applyIntent(
       }
 
       // Auto-spawn on session start:
-      // For each connected player in roster lacking an active token on active map, spawn one
+      // For each connected player (excluding the host/DM — the host is not a
+      // player and owns anything unassigned) lacking an active token on active
+      // map, spawn one
       let spawnedTokensCount = 0;
       if (roster && roster.length > 0) {
         const fullMaps = nextMaps.filter(isFullMap);
@@ -1404,6 +1406,7 @@ export function applyIntent(
           };
           const newTokens: Token[] = [];
           for (const player of roster) {
+            if (player.id === state.dmPlayerId) continue;
             const hasToken = targetMap.tokens.some((t) => t.ownerUserId === player.id);
             if (!hasToken) {
               newTokens.push({

@@ -24,6 +24,9 @@ export class DndmSheetSettingsModal extends GameElement {
   @property({ attribute: false })
   roster: readonly { id: string; name: string }[] = [];
 
+  @property({ type: String })
+  dmPlayerId: string | null = null;
+
   @property({ attribute: false })
   maps: readonly (GameMap | MapSummary)[] = [];
 
@@ -106,6 +109,9 @@ export class DndmSheetSettingsModal extends GameElement {
   };
 
   override render(): TemplateResult {
+    // The host is not a player, so it is never an assignable owner.
+    const assignableRoster =
+      this.dmPlayerId === null ? this.roster : this.roster.filter((p) => p.id !== this.dmPlayerId);
     return html`
       <dndm-modal
         .isOpen=${this.isOpen && !!this.sheet}
@@ -159,7 +165,7 @@ export class DndmSheetSettingsModal extends GameElement {
                       }}
                       >
                         <option value="">Unassigned (NPC / DM Controlled)</option>
-                        ${this.roster.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
+                        ${assignableRoster.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
                       </select>
                     </label>
 
@@ -175,7 +181,7 @@ export class DndmSheetSettingsModal extends GameElement {
                       }}
                       >
                         <option value="">None</option>
-                        ${this.roster.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
+                        ${assignableRoster.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
                       </select>
                     </label>
 
