@@ -134,7 +134,7 @@ export class DndmLoadedDicePanel extends GameElement {
             class="dndm-btn dndm-btn--small dndm-btn--primary"
             type="button"
             title="Create a new loaded dice rule"
-            @click=${this.openCreateModal}
+            @click=${() => this.openCreateModal()}
           >
             + Rule
           </button>
@@ -185,7 +185,7 @@ export class DndmLoadedDicePanel extends GameElement {
         class="dndm-loaded-rule-card ${rule.enabled ? "" : "dndm-loaded-rule-card--disabled"}"
         draggable="true"
         @dragstart=${(e: DragEvent) => this.handleDragStart(index, e)}
-        @dragover=${this.handleDragOver}
+        @dragover=${(e: DragEvent) => this.handleDragOver(e)}
         @drop=${(e: DragEvent) => this.handleDrop(index, e)}
       >
         <span class="dndm-loaded-rule-drag-handle" title="Drag to reorder precedence">⋮⋮</span>

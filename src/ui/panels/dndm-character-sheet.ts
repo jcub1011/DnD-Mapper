@@ -631,7 +631,7 @@ export class DndmCharacterSheet extends GameElement {
                       class="dndm-btn dndm-btn--primary"
                       title="New character sheet"
                       style="padding: 2px 8px; font-size: 0.75rem; min-width: 28px;"
-                      @click=${this.handleCreateSheet}
+                      @click=${() => this.handleCreateSheet()}
                     >
                       +
                     </button>

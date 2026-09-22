@@ -151,7 +151,7 @@ export class DndmHostInitiative extends GameElement {
           type="button"
           class="dndm-btn dndm-btn--small dndm-btn--primary"
           ?disabled=${!this.selectedTokenToAdd}
-          @click=${this.handleAddCombatant}
+          @click=${() => this.handleAddCombatant()}
         >
           Add
         </button>

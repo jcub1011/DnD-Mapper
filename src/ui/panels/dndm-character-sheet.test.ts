@@ -503,4 +503,31 @@ describe("<dndm-character-sheet>", () => {
     expect(onDuplicateSheet).toHaveBeenCalledTimes(1);
     expect(onDuplicateSheet).toHaveBeenCalledWith("sheet-1");
   });
+
+  it("calls onCreateSheet with the active map scope when the + button is clicked", async () => {
+    const onCreateSheet = vi.fn();
+    el.sheets = {};
+    el.selectedSheetId = null;
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+    el.currentUserId = "dm-1";
+    el.activeMapId = "map-a";
+    el.onCreateSheet = onCreateSheet;
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+    const panel = el.querySelector(
+      "dndm-collapsible-panel",
+    ) as unknown as { updateComplete: Promise<unknown> } | null;
+    if (panel) await panel.updateComplete;
+    await el.updateComplete;
+
+    const btn = el.querySelector(
+      'button[title="New character sheet"]',
+    ) as HTMLButtonElement;
+    expect(btn).not.toBeNull();
+    btn.click();
+    expect(onCreateSheet).toHaveBeenCalledTimes(1);
+    expect(onCreateSheet).toHaveBeenCalledWith("New Character", "map-a");
+  });
 });
