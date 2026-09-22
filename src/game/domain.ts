@@ -442,6 +442,12 @@ export interface CharacterSheet {
   readonly maxHp: number | null;
   readonly armorClass: number | null;
   readonly color: string;
+  /**
+   * True once the color was explicitly chosen by a user (sheet/token editor or
+   * create intent with an explicit color). While false, the color is seeded
+   * from the character name and re-seeds automatically on rename.
+   */
+  readonly colorOverridden: boolean;
   readonly scopedMapId: string | null;
   readonly statusEffects: readonly StatusEffect[];
   readonly rollTemplates: readonly RollTemplate[];

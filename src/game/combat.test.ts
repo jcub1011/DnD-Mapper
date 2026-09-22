@@ -212,6 +212,7 @@ describe("Combat Domain Helpers (Phase 9)", () => {
         maxHp: 20,
         armorClass: 15,
         color: "#f00",
+        colorOverridden: false,
         scopedMapId: null,
         statusEffects: [],
         rollTemplates: [],

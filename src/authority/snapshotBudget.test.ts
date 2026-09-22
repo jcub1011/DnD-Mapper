@@ -108,6 +108,7 @@ function makeStressCampaign(): DndMapperState {
       ownerUserId: s < 10 ? `user-${s}` : null,
       representsUserId: null,
       color: "#2ecc71",
+      colorOverridden: false,
       scopedMapId: null,
       hp: 35 + s,
       maxHp: 40 + s,

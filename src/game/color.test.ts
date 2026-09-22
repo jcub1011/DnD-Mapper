@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  fallbackColorForHash,
   getContrastRatio,
   getReadableTextColor,
   getRelativeLuminance,
   parseHexColor,
+  resolveDiceColor,
+  seedColorForName,
+  stringHashCode,
+  HOST_GOLD,
 } from "./color.js";
+import {
+  createDefaultDndMapperState,
+  type CharacterSheet,
+  type DndMapperState,
+} from "./domain.js";
 
 describe("color contrast helpers", () => {
   describe("parseHexColor", () => {
@@ -72,6 +82,70 @@ describe("color contrast helpers", () => {
 
     it("falls back to black text on invalid input", () => {
       expect(getReadableTextColor("")).toBe("#000000");
+    });
+  });
+
+  describe("seedColorForName", () => {
+    it("is deterministic and trims/case-folds the name", () => {
+      expect(seedColorForName("Aria")).toBe(seedColorForName("Aria"));
+      expect(seedColorForName("  ARIA  ")).toBe(seedColorForName("aria"));
+    });
+
+    it("differs across names", () => {
+      expect(seedColorForName("Aria")).not.toBe(seedColorForName("Borin"));
+    });
+  });
+
+  describe("resolveDiceColor", () => {
+    function makeSheet(id: string, ownerUserId: string | null, color: string): CharacterSheet {
+      return {
+        id,
+        ownerUserId,
+        representsUserId: null,
+        characterName: "Hero",
+        values: {},
+        notes: "",
+        hp: null,
+        maxHp: null,
+        armorClass: null,
+        color,
+        colorOverridden: true,
+        scopedMapId: null,
+        statusEffects: [],
+        rollTemplates: [],
+      };
+    }
+
+    function stateWithSheets(sheets: readonly CharacterSheet[]): DndMapperState {
+      return {
+        ...createDefaultDndMapperState("dm-1"),
+        sheets: Object.fromEntries(sheets.map((s) => [s.id, s])),
+      };
+    }
+
+    it("returns gold for the DM", () => {
+      const state = stateWithSheets([]);
+      expect(resolveDiceColor(state, "dm-1", [])).toBe(HOST_GOLD);
+    });
+
+    it("uses the color of the roller's associated character sheet", () => {
+      const state = stateWithSheets([makeSheet("sheet-1", "player-1", "#123456")]);
+      expect(resolveDiceColor(state, "player-1", [])).toBe("#123456");
+    });
+
+    it("falls back to the player display-name hash when unassigned", () => {
+      const state = stateWithSheets([]);
+      const roster = [{ id: "player-9", displayName: "Zelda" }];
+      expect(resolveDiceColor(state, "player-9", roster)).toBe(
+        fallbackColorForHash(stringHashCode("Zelda")),
+      );
+    });
+
+    it("falls back to the user-id hash when the roster name is unknown", () => {
+      const state = stateWithSheets([]);
+      expect(resolveDiceColor(state, "player-9", [])).toBe(
+        fallbackColorForHash(stringHashCode("player-9")),
+      );
     });
   });
 });

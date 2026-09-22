@@ -144,8 +144,11 @@ describe("applyIntent — rejection (anti-cheat)", () => {
       1000,
     );
     state = spawnRes!.state;
-    if (spawnRes!.patch?.kind !== "token") throw new Error("expected token patch");
-    const token = spawnRes!.patch.token;
+    // Spawning a token also creates its bound sheet, so the patch is `full`.
+    if (spawnRes!.patch?.kind !== "full") throw new Error("expected full patch");
+    const token = (state.maps.find((m) => m.id === state.activeMapId) as GameMap).tokens.find(
+      (t) => t.name === "AliceToken",
+    )!;
 
     // Bob tries to move Alice's token
     const hackedToken = { ...token, ownerUserId: "player-1" };
@@ -237,10 +240,18 @@ describe("applyIntent — maps & tokens", () => {
     );
     expect(spawnRes).not.toBeNull();
     state = spawnRes!.state;
-    if (spawnRes!.patch?.kind !== "token") throw new Error("expected token patch");
-    const token = spawnRes!.patch.token;
+    // Spawning a token also creates its bound sheet, so the patch is `full`.
+    if (spawnRes!.patch?.kind !== "full") throw new Error("expected full patch");
+    const token = (state.maps.find((m) => m.id === mapId) as GameMap).tokens.find(
+      (t) => t.name === "Paladin",
+    )!;
     expect(token.x).toBe(2.5);
     expect(token.y).toBe(3.5);
+    // The counterpart sheet shares name and color with the token.
+    const pairSheet = state.sheets[token.sheetId!];
+    expect(pairSheet).toBeDefined();
+    expect(pairSheet.characterName).toBe("Paladin");
+    expect(pairSheet.color).toBe("#fff");
 
     // Move token (respecting cell centering and clamp)
     const moveRes = applyIntent(
@@ -261,13 +272,15 @@ describe("applyIntent — maps & tokens", () => {
     expect(moved.x).toBe(10.5);
     expect(moved.y).toBe(15.5);
 
-    // Remove token
+    // Remove token — the 1:1 binding deletes the bound sheet as well.
+    const sheetId = token.sheetId!;
     const removeRes = applyIntent(state, "dm-1", { kind: "removeToken", tokenId: token.id }, 3200);
     expect(removeRes).not.toBeNull();
     state = removeRes!.state;
-    expect(removeRes!.patch).toEqual({ kind: "tokenRemoved", tokenId: token.id });
+    if (removeRes!.patch?.kind !== "full") throw new Error("expected full patch");
     const activeMap = state.maps.find((m) => m.id === mapId) as GameMap;
     expect(activeMap.tokens).toHaveLength(0);
+    expect(state.sheets[sheetId]).toBeUndefined();
   });
 });
 
@@ -472,6 +485,7 @@ describe("Character Sheet Permissions (Phase 6)", () => {
     maxHp: 20,
     armorClass: 14,
     color: "#4a90e2",
+    colorOverridden: false,
     scopedMapId: null,
     statusEffects: [],
     rollTemplates: [],
@@ -575,7 +589,9 @@ describe("Phase 9: Combat & Initiative Rules", () => {
       1000,
     );
     state = pRes!.state;
-    const playerToken = (pRes!.patch as { token: Token }).token;
+    const playerToken = (state.maps.find((m) => m.id === mapId) as GameMap).tokens.find(
+      (t) => t.name === "AliceHero",
+    )!;
     const upRes = applyIntent(
       state,
       "dm-1",
@@ -828,7 +844,9 @@ describe("Phase 9: Combat & Initiative Rules", () => {
       2050,
     )!;
     state = extraToken.state;
-    const spawnedTokenId = (extraToken.patch as { token: Token }).token.id;
+    const spawnedTokenId = (state.maps.find((m) => m.id === mapId) as GameMap).tokens.find(
+      (t) => t.name === "Reinforcement",
+    )!.id;
 
     // Add to combat
     const addRes = applyIntent(

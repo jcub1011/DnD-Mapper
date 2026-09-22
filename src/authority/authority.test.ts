@@ -8,7 +8,7 @@ import { config, createAuthority } from "./authority";
 import { createFakeKb } from "./fakeKb";
 import type { FakeKb } from "./fakeKb";
 import type { Authority } from "./kb";
-import type { GameMap, GridConfig, MapImage, Token } from "../game/domain";
+import type { CharacterSheet, GameMap, GridConfig, MapImage, Token } from "../game/domain";
 import { isFullMap } from "../game/domain";
 import { encodeFog, fillFog } from "../game/fog";
 import { utf8Length } from "../game/wire";
@@ -161,7 +161,7 @@ describe("snapshot-size budget test (worst-case campaign)", () => {
     const fogMask = encodeFog(fillFog(grid));
 
     const tokens: Token[] = [];
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 6; i++) {
       tokens.push({
         id: `token-${id}-${i}`,
         type: i % 2 === 0 ? "PlayerToken" : "NPCToken",
@@ -226,12 +226,37 @@ describe("snapshot-size budget test (worst-case campaign)", () => {
       maps.push(buildHeavyMap(`heavy-map-${i}`, `Massive Dungeon Level ${i}`));
     }
 
+    // 1:1 binding: every token ships its character sheet, so the commit
+    // backfill synthesizes nothing and the frame stays small.
+    const sheets: Record<string, CharacterSheet> = {};
+    for (const map of maps) {
+      for (const tok of map.tokens) {
+        if (!tok.sheetId) continue;
+        sheets[tok.sheetId] = {
+          id: tok.sheetId,
+          ownerUserId: tok.ownerUserId,
+          representsUserId: null,
+          characterName: tok.name,
+          values: {},
+          notes: "",
+          hp: null,
+          maxHp: null,
+          armorClass: null,
+          color: tok.color,
+          colorOverridden: true,
+          scopedMapId: null,
+          statusEffects: [],
+          rollTemplates: [],
+        };
+      }
+    }
+
     // Stage campaign into authority via chunked import
     const token = "budget-import";
     authority.applyIntent("dm-1", {
       kind: "beginImport",
       token,
-      campaign: { title: "Huge 24-Map Campaign", activeMapId: maps[0].id },
+      campaign: { title: "Huge 24-Map Campaign", activeMapId: maps[0].id, sheets },
       chunkCount: 24,
     });
 

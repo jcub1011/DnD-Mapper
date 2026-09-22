@@ -116,6 +116,7 @@ describe("<dndm-host-initiative>", () => {
       maxHp: 30,
       armorClass: 16,
       color: "#f00",
+      colorOverridden: false,
       scopedMapId: null,
       statusEffects: [{ id: "e1", name: "Blessed", appliedUtc: "", attributeDeltas: [], maxHpDelta: null, onApplyHpDelta: null, notes: "" }],
       rollTemplates: [],

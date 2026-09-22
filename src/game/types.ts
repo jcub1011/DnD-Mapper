@@ -159,7 +159,7 @@ export type Intent =
   | { readonly kind: "commitImport"; readonly token: string }
   | { readonly kind: "startSession" }
   // sheets (10 intents; assignCharacterToPlayer in Phase 11)
-  | { readonly kind: "createSheet"; readonly characterName: string; readonly scopedMapId?: string | null; readonly ownerUserId?: string | null }
+  | { readonly kind: "createSheet"; readonly characterName: string; readonly scopedMapId?: string | null; readonly ownerUserId?: string | null; readonly color?: string | null }
   | { readonly kind: "updateSheet"; readonly sheetId: string; readonly patch: Partial<Pick<CharacterSheet, "characterName" | "color" | "scopedMapId" | "notes">> }
   | { readonly kind: "deleteSheet"; readonly sheetId: string }
   | { readonly kind: "duplicateSheet"; readonly sheetId: string }

@@ -52,6 +52,7 @@ function createMockState(): DndMapperState {
     maxHp: 20,
     armorClass: 16,
     color: "#ff0000",
+    colorOverridden: false,
     scopedMapId: null,
     statusEffects: [],
     rollTemplates: [],

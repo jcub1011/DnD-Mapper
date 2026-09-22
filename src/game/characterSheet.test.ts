@@ -10,6 +10,7 @@ import {
   type DndMapperState,
   type StatusEffect,
 } from "./domain";
+import { seedColorForName } from "./color";
 import { applyIntent, createState } from "./rules";
 
 const ROSTER = [
@@ -55,6 +56,7 @@ describe("Character Sheet Domain & Rules (Phase 6)", () => {
         maxHp: null,
         armorClass: null,
         color: "#f00",
+        colorOverridden: false,
         scopedMapId: null,
         statusEffects: [],
         rollTemplates: [],
@@ -93,6 +95,7 @@ describe("Character Sheet Domain & Rules (Phase 6)", () => {
         maxHp: 20,
         armorClass: 15,
         color: "#f00",
+        colorOverridden: false,
         scopedMapId: null,
         statusEffects: [effect1, effect2],
         rollTemplates: [],
@@ -126,6 +129,7 @@ describe("Character Sheet Domain & Rules (Phase 6)", () => {
         maxHp: 30,
         armorClass: 14,
         color: "#f00",
+        colorOverridden: false,
         scopedMapId: null,
         statusEffects: [effect],
         rollTemplates: [],
@@ -161,7 +165,16 @@ describe("Character Sheet Domain & Rules (Phase 6)", () => {
       // Default schema is DnD5eCore (6 abilities default to 10)
       expect(sheet!.values["Strength"]).toEqual({ kind: "Score", value: 10 });
       expect(sheet!.values["Dexterity"]).toEqual({ kind: "Score", value: 10 });
-      expect(res!.patch).toEqual({ kind: "sheet", sheet: sheet! });
+      // Color is seeded from the sheet name until manually overridden.
+      expect(sheet!.colorOverridden).toBe(false);
+      expect(sheet!.color).toBe(seedColorForName("Valeros"));
+      // 1:1 binding: the sheet arrives with its token, sharing name/color.
+      if (res!.patch?.kind !== "full") throw new Error("expected full patch");
+      const map = res!.state.maps.filter(isFullMap).find((m) => m.id === res!.state.activeMapId)!;
+      const token = map.tokens.find((t) => t.sheetId === sheet!.id);
+      expect(token).toBeDefined();
+      expect(token!.name).toBe("Valeros");
+      expect(token!.color).toBe(sheet!.color);
     });
   });
 
@@ -323,10 +336,10 @@ describe("Character Sheet Domain & Rules (Phase 6)", () => {
   });
 
   describe("deleteSheet Intent", () => {
-    it("removes sheet and unlinks any tokens referencing sheetId", () => {
+    it("removes sheet and deletes its bound token (1:1 binding)", () => {
       let state = setupMatch();
       const mapId = state.activeMapId!;
-      // Create sheet
+      // Create sheet — its bound token spawns alongside it.
       state = applyIntent(
         state,
         "dm-1",
@@ -334,28 +347,6 @@ describe("Character Sheet Domain & Rules (Phase 6)", () => {
         1000,
       )!.state;
       const sheetId = Object.keys(state.sheets)[0];
-
-      // Spawn token linked to sheet
-      state = applyIntent(
-        state,
-        "dm-1",
-        {
-          kind: "spawnToken",
-          mapId,
-          token: {
-            type: "PlayerToken",
-            name: "Linked Token",
-            color: "#4a90e2",
-            iconKind: "Initial",
-            mapId,
-            x: 2,
-            y: 2,
-            sheetId,
-            hidden: false,
-          },
-        },
-        1001,
-      )!.state;
 
       const activeMap = state.maps.filter(isFullMap).find((m) => m.id === mapId)!;
       const token = activeMap.tokens.find((t) => t.sheetId === sheetId);
@@ -368,9 +359,233 @@ describe("Character Sheet Domain & Rules (Phase 6)", () => {
 
       expect(state.sheets[sheetId]).toBeUndefined();
       const updatedMap = state.maps.filter(isFullMap).find((m) => m.id === mapId)!;
-      const unlinkedToken = updatedMap.tokens.find((t) => t.id === token!.id);
-      expect(unlinkedToken).toBeDefined();
-      expect(unlinkedToken!.sheetId).toBeNull();
+      expect(updatedMap.tokens.find((t) => t.id === token!.id)).toBeUndefined();
+    });
+
+    it("removes the bound sheet when its token is deleted", () => {
+      let state = setupMatch();
+      const mapId = state.activeMapId!;
+      state = applyIntent(
+        state,
+        "dm-1",
+        { kind: "createSheet", characterName: "Doomed" },
+        1000,
+      )!.state;
+      const sheetId = Object.keys(state.sheets)[0];
+      const token = state.maps
+        .filter(isFullMap)
+        .find((m) => m.id === mapId)!
+        .tokens.find((t) => t.sheetId === sheetId)!;
+
+      const delRes = applyIntent(state, "dm-1", { kind: "deleteToken", tokenId: token.id }, 1001);
+      expect(delRes).not.toBeNull();
+      state = delRes!.state;
+
+      expect(state.sheets[sheetId]).toBeUndefined();
+      const updatedMap = state.maps.filter(isFullMap).find((m) => m.id === mapId)!;
+      expect(updatedMap.tokens.find((t) => t.id === token.id)).toBeUndefined();
+    });
+  });
+
+  describe("Token ↔ Sheet 1:1 Binding", () => {
+    function setupPaired(characterName = "Aria"): {
+      state: DndMapperState;
+      sheetId: string;
+      tokenId: string;
+      mapId: string;
+    } {
+      let state = setupMatch();
+      const mapId = state.activeMapId!;
+      state = applyIntent(state, "dm-1", { kind: "createSheet", characterName }, 1000)!.state;
+      const sheetId = Object.keys(state.sheets)[0];
+      const token = state.maps
+        .filter(isFullMap)
+        .find((m) => m.id === mapId)!
+        .tokens.find((t) => t.sheetId === sheetId)!;
+      return { state, sheetId, tokenId: token.id, mapId };
+    }
+
+    function boundToken(state: DndMapperState, mapId: string, sheetId: string) {
+      return state.maps
+        .filter(isFullMap)
+        .find((m) => m.id === mapId)!
+        .tokens.find((t) => t.sheetId === sheetId)!;
+    }
+
+    it("seeds the pair color from the sheet name", () => {
+      const { state, sheetId, mapId } = setupPaired("Aria");
+      const sheet = state.sheets[sheetId];
+      expect(sheet.colorOverridden).toBe(false);
+      expect(sheet.color).toBe(seedColorForName("Aria"));
+      expect(boundToken(state, mapId, sheetId).color).toBe(sheet.color);
+    });
+
+    it("propagates sheet rename to the token and reseeds color while not overridden", () => {
+      const bindingSetup = setupPaired("Aria");
+      const { sheetId, mapId } = bindingSetup;
+      let state = bindingSetup.state;
+      state = applyIntent(
+        state,
+        "dm-1",
+        { kind: "updateSheet", sheetId, patch: { characterName: "Borin" } },
+        1001,
+      )!.state;
+
+      const sheet = state.sheets[sheetId];
+      expect(sheet.characterName).toBe("Borin");
+      expect(sheet.colorOverridden).toBe(false);
+      expect(sheet.color).toBe(seedColorForName("Borin"));
+      const token = boundToken(state, mapId, sheetId);
+      expect(token.name).toBe("Borin");
+      expect(token.color).toBe(sheet.color);
+    });
+
+    it("freezes the color on explicit pick; later renames keep the manual color", () => {
+      const bindingSetup = setupPaired("Aria");
+      const { sheetId, mapId } = bindingSetup;
+      let state = bindingSetup.state;
+      state = applyIntent(
+        state,
+        "dm-1",
+        { kind: "updateSheet", sheetId, patch: { color: "#112233" } },
+        1001,
+      )!.state;
+      expect(state.sheets[sheetId].colorOverridden).toBe(true);
+
+      state = applyIntent(
+        state,
+        "dm-1",
+        { kind: "updateSheet", sheetId, patch: { characterName: "Borin" } },
+        1002,
+      )!.state;
+      const sheet = state.sheets[sheetId];
+      expect(sheet.characterName).toBe("Borin");
+      expect(sheet.color).toBe("#112233");
+      const token = boundToken(state, mapId, sheetId);
+      expect(token.name).toBe("Borin");
+      expect(token.color).toBe("#112233");
+    });
+
+    it("mirrors token name/color edits onto the sheet", () => {
+      const bindingSetup = setupPaired("Aria");
+      const { sheetId, mapId, tokenId } = bindingSetup;
+      let state = bindingSetup.state;
+      state = applyIntent(
+        state,
+        "dm-1",
+        { kind: "updateToken", tokenId, patch: { name: "Aria the Bold", color: "#445566" } },
+        1001,
+      )!.state;
+
+      const sheet = state.sheets[sheetId];
+      expect(sheet.characterName).toBe("Aria the Bold");
+      expect(sheet.color).toBe("#445566");
+      expect(sheet.colorOverridden).toBe(true);
+      expect(boundToken(state, mapId, sheetId).name).toBe("Aria the Bold");
+    });
+
+    it("shares player assignation both ways, including unassign", () => {
+      const bindingSetup = setupPaired("Aria");
+      const { sheetId, mapId } = bindingSetup;
+      let state = bindingSetup.state;
+
+      // Assign the sheet → the token follows (and becomes a player token).
+      state = applyIntent(
+        state,
+        "dm-1",
+        { kind: "assignCharacterToPlayer", sheetId, playerId: "player-1" },
+        1001,
+      )!.state;
+      expect(state.sheets[sheetId].ownerUserId).toBe("player-1");
+      let token = boundToken(state, mapId, sheetId);
+      expect(token.ownerUserId).toBe("player-1");
+      expect(token.type).toBe("PlayerToken");
+
+      // Unassign the token → the sheet follows (and the token becomes an NPC).
+      state = applyIntent(
+        state,
+        "dm-1",
+        { kind: "reassignTokenOwner", tokenId: token.id, newOwnerUserId: null },
+        1002,
+      )!.state;
+      expect(state.sheets[sheetId].ownerUserId).toBeNull();
+      token = boundToken(state, mapId, sheetId);
+      expect(token.ownerUserId).toBeNull();
+      expect(token.type).toBe("NPCToken");
+    });
+
+    it("duplicateSheet clones the pair with fresh ids", () => {
+      const bindingSetup = setupPaired("Aria");
+      const { sheetId, mapId } = bindingSetup;
+      let state = bindingSetup.state;
+      state = applyIntent(state, "dm-1", { kind: "duplicateSheet", sheetId }, 1001)!.state;
+
+      const ids = Object.keys(state.sheets);
+      expect(ids).toHaveLength(2);
+      const cloneId = ids.find((id) => id !== sheetId)!;
+      expect(state.sheets[cloneId].characterName).toBe("Aria (copy)");
+      const cloneToken = boundToken(state, mapId, cloneId);
+      expect(cloneToken.name).toBe("Aria (copy)");
+      expect(cloneToken.color).toBe(state.sheets[cloneId].color);
+      // Original pair untouched.
+      expect(boundToken(state, mapId, sheetId).name).toBe("Aria");
+    });
+
+    it("duplicateToken clones the pair with fresh ids", () => {
+      const bindingSetup = setupPaired("Aria");
+      const { sheetId, mapId, tokenId } = bindingSetup;
+      let state = bindingSetup.state;
+      state = applyIntent(state, "dm-1", { kind: "duplicateToken", tokenId }, 1001)!.state;
+
+      const ids = Object.keys(state.sheets);
+      expect(ids).toHaveLength(2);
+      const cloneId = ids.find((id) => id !== sheetId)!;
+      expect(state.sheets[cloneId].characterName).toBe("Aria (copy)");
+      expect(boundToken(state, mapId, cloneId).name).toBe("Aria (copy)");
+    });
+
+    it("spawnToken creates the counterpart sheet", () => {
+      let state = setupMatch();
+      const mapId = state.activeMapId!;
+      state = applyIntent(
+        state,
+        "dm-1",
+        {
+          kind: "spawnToken",
+          mapId,
+          token: {
+            type: "NPCToken",
+            name: "Goblin",
+            color: "#00ff00",
+            iconKind: "Initial",
+            x: 2,
+            y: 2,
+            sheetId: null,
+            hidden: false,
+          },
+        },
+        1000,
+      )!.state;
+
+      const sheetId = Object.keys(state.sheets)[0];
+      const sheet = state.sheets[sheetId];
+      expect(sheet.characterName).toBe("Goblin");
+      expect(sheet.color).toBe("#00ff00");
+      expect(sheet.colorOverridden).toBe(true);
+      expect(boundToken(state, mapId, sheetId).name).toBe("Goblin");
+    });
+
+    it("createSheet with an explicit color marks the pair overridden", () => {
+      let state = setupMatch();
+      state = applyIntent(
+        state,
+        "dm-1",
+        { kind: "createSheet", characterName: "Mira", color: "#abcdef" },
+        1000,
+      )!.state;
+      const sheet = Object.values(state.sheets)[0];
+      expect(sheet.color).toBe("#abcdef");
+      expect(sheet.colorOverridden).toBe(true);
     });
   });
 

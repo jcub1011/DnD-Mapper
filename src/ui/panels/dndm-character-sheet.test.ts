@@ -27,6 +27,7 @@ function makeSheet(id: string, name: string, ownerUserId: string | null = null):
     maxHp: 30,
     armorClass: 16,
     color: "#4a90e2",
+    colorOverridden: false,
     scopedMapId: null,
     statusEffects: [
       {

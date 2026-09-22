@@ -206,7 +206,7 @@ export class DndmTokenPanel extends GameElement {
       <dndm-confirm
         ?isOpen=${this.pendingDeleteToken !== null}
         modalTitle="Delete token?"
-        message=${`This removes "${this.pendingDeleteToken?.name}" from the map.`}
+        message=${`This removes "${this.pendingDeleteToken?.name}" from the map. Its linked character sheet will also be deleted.`}
         confirmText="Delete"
         .onConfirm=${() => this.confirmDelete()}
         .onCancel=${() => {

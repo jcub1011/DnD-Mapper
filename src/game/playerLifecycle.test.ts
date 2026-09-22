@@ -62,6 +62,7 @@ function makeLifecycleState(): {
     ownerUserId: "user-alice",
     representsUserId: null,
     color: "#3498db",
+    colorOverridden: false,
     scopedMapId: null,
     hp: 30,
     maxHp: 30,
@@ -132,9 +133,15 @@ describe("Auto-Spawn on Session Start", () => {
     expect(bobToken).toBeDefined();
     expect(bobToken!.type).toBe("PlayerToken");
     expect(bobToken!.name).toBe("Bob");
-    // Spawned at defaultSpawnPosition
-    expect(bobToken!.x).toBe(10);
-    expect(bobToken!.y).toBe(10);
+    // Spawned at defaultSpawnPosition, snapped to the cell centre
+    expect(bobToken!.x).toBe(10.5);
+    expect(bobToken!.y).toBe(10.5);
+    // 1:1 binding: the auto-spawned token arrives with its character sheet.
+    const bobSheet = bobToken!.sheetId ? nextState.sheets[bobToken!.sheetId] : undefined;
+    expect(bobSheet).toBeDefined();
+    expect(bobSheet!.characterName).toBe("Bob");
+    expect(bobSheet!.ownerUserId).toBe("user-bob");
+    expect(bobSheet!.color).toBe(bobToken!.color);
   });
 
   it("does not spawn tokens if all players already have tokens", () => {

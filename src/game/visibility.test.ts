@@ -44,6 +44,7 @@ function makeSheet(overrides?: Partial<CharacterSheet>): CharacterSheet {
     statusEffects: [],
     rollTemplates: [],
     ...overrides,
+    colorOverridden: overrides?.colorOverridden ?? false,
   };
 }
 

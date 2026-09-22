@@ -132,7 +132,7 @@ export class DndmSheetSettingsModal extends GameElement {
               />
             </label>
 
-            <label class="dndm-label">
+            <label class="dndm-label" title="Picking a color here overrides the name-seeded color for the sheet and its linked token.">
               Token &amp; Accent Color
               <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
                 <input
@@ -239,7 +239,7 @@ export class DndmSheetSettingsModal extends GameElement {
       <dndm-confirm
         .isOpen=${this.confirmDelete}
         modalTitle="Delete Character Sheet"
-        message="Are you sure you want to delete '${this.sheet?.characterName}'? Any tokens linked to this sheet will become unlinked."
+        message="Are you sure you want to delete '${this.sheet?.characterName}'? Its linked token will also be deleted."
         confirmText="Delete"
         @confirm=${this.handleDelete}
         @cancel=${() => {

@@ -74,6 +74,7 @@ function makeVerbsState(): DndMapperState {
         ownerUserId: "dm-user",
         representsUserId: null,
         color: "#f00",
+        colorOverridden: false,
         scopedMapId: null,
         hp: 20,
         maxHp: 20,

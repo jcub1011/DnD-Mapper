@@ -54,6 +54,8 @@ import {
   toMapSummary,
 } from "./domain.js";
 import { BUILTIN_ROLL_TEMPLATES, executeRoll, validateDiceTerms } from "./dice.js";
+import { seedColorForName } from "./color.js";
+import { snapToken } from "./snapping.js";
 import { clearFog, decodeFog, encodeFog, fillFog, setCellsFogged } from "./fog.js";
 import {
   addImageToMap,
@@ -147,6 +149,266 @@ export function maySpawnToken(state: DndMapperState, fromId: string, token: NewT
     return false;
   }
   return true;
+}
+
+// ── Token ↔ Sheet 1:1 Binding ─────────────────────────────────────────────
+// Tokens and character sheets are bound 1:1: every token has exactly one
+// sheet and every sheet has exactly one token. A bound pair shares its name,
+// color identifier, and player assignation (ownerUserId / representsUserId,
+// including unassigned). The color is seeded from the sheet name until a user
+// explicitly picks one (colorOverridden), after which renames stop reseeding.
+
+export interface BoundPairSpec {
+  readonly name: string;
+  readonly color?: string | null;
+  readonly ownerUserId: string | null;
+  readonly representsUserId: string | null;
+  readonly type: Token["type"];
+  readonly iconKind?: Token["iconKind"];
+  readonly scopedMapId?: string | null;
+}
+
+function spawnPositionForMap(map: GameMap): { readonly x: number; readonly y: number } {
+  return (
+    map.defaultSpawnPosition ?? {
+      x: Math.floor(map.grid.widthCells / 2) + 0.5,
+      y: Math.floor(map.grid.heightCells / 2) + 0.5,
+    }
+  );
+}
+
+function pickPairMap(
+  fullMaps: readonly GameMap[],
+  activeMapId: string | null,
+): GameMap | null {
+  return fullMaps.find((m) => m.id === activeMapId) ?? fullMaps[0] ?? null;
+}
+
+/** Finds the token bound to a sheet, anywhere on any map. */
+export function findBoundToken(
+  fullMaps: readonly GameMap[],
+  sheetId: string,
+): { readonly map: GameMap; readonly token: Token } | null {
+  for (const m of fullMaps) {
+    const token = m.tokens.find((t) => t.sheetId === sheetId);
+    if (token) return { map: m, token };
+  }
+  return null;
+}
+
+function defaultSheetValues(schema: AttributeSchema): Record<string, AttributeValue> {
+  const values: Record<string, AttributeValue> = {};
+  for (const row of schema.rows) {
+    values[row.name] = row.default;
+  }
+  return values;
+}
+
+/**
+ * Inserts a new sheet plus its bound token on the given map, sharing name,
+ * color, and player assignation. An explicit color marks the pair as manually
+ * overridden; otherwise the color is seeded from the name.
+ */
+function insertBoundPair(
+  fullMaps: readonly GameMap[],
+  targetMapId: string,
+  spec: BoundPairSpec,
+  schema: AttributeSchema,
+  position?: { readonly x: number; readonly y: number } | null,
+): { maps: readonly GameMap[]; sheet: CharacterSheet; token: Token } | null {
+  const target = fullMaps.find((m) => m.id === targetMapId);
+  if (!target) return null;
+  const name = spec.name.trim() || "Unnamed Character";
+  const explicitColor =
+    typeof spec.color === "string" && spec.color.trim().length > 0 ? spec.color : null;
+  const color = explicitColor ?? seedColorForName(name);
+  const sheet: CharacterSheet = {
+    id: generateGuid(),
+    ownerUserId: spec.ownerUserId,
+    representsUserId: spec.representsUserId,
+    characterName: name,
+    values: defaultSheetValues(schema),
+    notes: "",
+    hp: null,
+    maxHp: null,
+    armorClass: null,
+    color,
+    colorOverridden: explicitColor !== null,
+    scopedMapId: typeof spec.scopedMapId === "string" ? spec.scopedMapId : null,
+    statusEffects: [],
+    rollTemplates: [],
+  };
+  const raw = position ?? spawnPositionForMap(target);
+  const pos = snapToken(raw.x, raw.y, target.grid);
+  const token: Token = {
+    id: generateGuid(),
+    type: spec.type,
+    ownerUserId: spec.ownerUserId,
+    representsUserId: spec.representsUserId,
+    name,
+    color,
+    iconKind: spec.iconKind ?? "Initial",
+    mapId: target.id,
+    x: pos.x,
+    y: pos.y,
+    sheetId: sheet.id,
+    hidden: false,
+  };
+  const maps = fullMaps.map((m) =>
+    m.id === target.id ? { ...m, tokens: [...m.tokens, token] } : m,
+  );
+  return { maps, sheet, token };
+}
+
+/**
+ * Synthesizes the missing sheet for an orphan token, preserving the token's
+ * visible name, color, and assignation. The adopted color counts as manually
+ * overridden so backfill never recolors existing tokens.
+ */
+function synthesizeSheetForToken(
+  token: Token,
+  schema: AttributeSchema,
+  sheetId?: string,
+): CharacterSheet {
+  return {
+    id: sheetId ?? generateGuid(),
+    ownerUserId: token.ownerUserId,
+    representsUserId: token.representsUserId,
+    characterName: token.name,
+    values: defaultSheetValues(schema),
+    notes: "",
+    hp: null,
+    maxHp: null,
+    armorClass: null,
+    color: token.color,
+    colorOverridden: true,
+    scopedMapId: null,
+    statusEffects: [],
+    rollTemplates: [],
+  };
+}
+
+/**
+ * Repairs legacy orphans so the 1:1 invariant holds: tokens without a (live)
+ * sheet get a sheet, and sheets without a token get a token on the pair map.
+ * Missing `colorOverridden` flags on imported sheets default to false.
+ */
+function ensureBoundPairs(
+  fullMaps: readonly GameMap[],
+  sheets: Readonly<Record<string, CharacterSheet>>,
+  activeMapId: string | null,
+  schema: AttributeSchema,
+): { maps: readonly GameMap[]; sheets: Record<string, CharacterSheet> } {
+  const nextSheets: Record<string, CharacterSheet> = {};
+  for (const [id, sheet] of Object.entries(sheets)) {
+    nextSheets[id] = {
+      ...sheet,
+      colorOverridden: sheet.colorOverridden ?? false,
+    };
+  }
+
+  let maps: readonly GameMap[] = fullMaps;
+  const pairMap = pickPairMap(fullMaps, activeMapId);
+
+  // 1. Tokens without a live sheet → synthesize the sheet, keep token stable.
+  for (const m of fullMaps) {
+    for (const token of m.tokens) {
+      if (token.sheetId && nextSheets[token.sheetId]) continue;
+      const sheet = synthesizeSheetForToken(token, schema, token.sheetId ?? undefined);
+      nextSheets[sheet.id] = sheet;
+      if (!token.sheetId || token.sheetId !== sheet.id) {
+        const fixed: Token = { ...token, sheetId: sheet.id };
+        maps = maps.map((candidate) =>
+          candidate.id === m.id
+            ? { ...candidate, tokens: candidate.tokens.map((t) => (t.id === token.id ? fixed : t)) }
+            : candidate,
+        );
+      }
+    }
+  }
+
+  // 2. Sheets without a token → spawn the counterpart token.
+  if (pairMap) {
+    const referenced = new Set<string>();
+    for (const m of maps) {
+      for (const t of m.tokens) {
+        if (t.sheetId) referenced.add(t.sheetId);
+      }
+    }
+    for (const sheet of Object.values(nextSheets)) {
+      if (referenced.has(sheet.id)) continue;
+      const pos = spawnPositionForMap(pairMap);
+      const token: Token = {
+        id: generateGuid(),
+        type: sheet.ownerUserId !== null ? "PlayerToken" : "NPCToken",
+        ownerUserId: sheet.ownerUserId,
+        representsUserId: sheet.representsUserId,
+        name: sheet.characterName,
+        color: sheet.color,
+        iconKind: "Initial",
+        mapId: pairMap.id,
+        x: pos.x,
+        y: pos.y,
+        sheetId: sheet.id,
+        hidden: false,
+      };
+      maps = maps.map((candidate) =>
+        candidate.id === pairMap.id
+          ? { ...candidate, tokens: [...candidate.tokens, token] }
+          : candidate,
+      );
+    }
+  }
+
+  return { maps, sheets: nextSheets };
+}
+
+/** Drops combatants whose tokens were removed, clamping the turn index. */
+function stripCombatantsByTokenIds(
+  combat: CombatState | null,
+  tokenIds: ReadonlySet<string>,
+): CombatState | null {
+  if (!combat) return combat;
+  if (!combat.turnOrder.some((c) => tokenIds.has(c.tokenId))) return combat;
+  const turnOrder = combat.turnOrder.filter((c) => !tokenIds.has(c.tokenId));
+  return {
+    ...combat,
+    turnOrder,
+    currentTurnIndex:
+      turnOrder.length === 0 ? 0 : Math.min(combat.currentTurnIndex, turnOrder.length - 1),
+  };
+}
+
+/**
+ * Mirrors shared pair fields from sheet → token. The token type only flips
+ * when ownership actually changed hands (preserves legacy mismatches).
+ */
+function mirrorSheetToToken(token: Token, sheet: CharacterSheet): Token {
+  const ownerChanged =
+    token.ownerUserId !== sheet.ownerUserId || token.representsUserId !== sheet.representsUserId;
+  return {
+    ...token,
+    name: sheet.characterName,
+    color: sheet.color,
+    ownerUserId: sheet.ownerUserId,
+    representsUserId: sheet.representsUserId,
+    type: ownerChanged
+      ? sheet.ownerUserId !== null
+        ? ("PlayerToken" as const)
+        : ("NPCToken" as const)
+      : token.type,
+  };
+}
+
+/** Mirrors shared pair fields from token → sheet (token is the edited side). */
+function mirrorTokenToSheet(sheet: CharacterSheet, token: Token): CharacterSheet {
+  return {
+    ...sheet,
+    characterName: token.name,
+    color: token.color,
+    ownerUserId: token.ownerUserId,
+    representsUserId: token.representsUserId,
+  };
 }
 
 // ── State Initialization ─────────────────────────────────────────────────────
@@ -475,11 +737,33 @@ export function applyIntent(
       const newMap = createNewMap(name, now, state.maps.length);
       const fullMaps = state.maps.filter(isFullMap);
       const nextMaps = [...fullMaps, newMap];
+      const nextActiveMapId = state.activeMapId ?? newMap.id;
+      // Backfill: sheets orphaned while no map existed gain their token now.
+      const repaired = ensureBoundPairs(
+        nextMaps,
+        state.sheets,
+        nextActiveMapId,
+        state.attributeSchema,
+      );
+      const sheetsGrew = Object.keys(repaired.sheets).length !== Object.keys(state.sheets).length;
+      const tokensGrew = repaired.maps.some(
+        (m, i) => isFullMap(m) && isFullMap(nextMaps[i]) && m.tokens.length !== nextMaps[i].tokens.length,
+      );
       const nextState: DndMapperState = {
         ...state,
-        maps: nextMaps,
-        activeMapId: state.activeMapId ?? newMap.id,
+        maps: repaired.maps,
+        sheets: repaired.sheets,
+        activeMapId: nextActiveMapId,
       };
+      if (sheetsGrew || tokensGrew) {
+        return {
+          state: nextState,
+          patch: {
+            kind: "full",
+            state: projectSnapshot(nextState),
+          },
+        };
+      }
       return {
         state: nextState,
         patch: {
@@ -511,11 +795,45 @@ export function applyIntent(
       const nextMaps = deleteMap(fullMaps, intent.mapId);
       const nextActive =
         state.activeMapId === intent.mapId ? (nextMaps[0]?.id ?? null) : state.activeMapId;
+      // 1:1 binding: sheets whose tokens all lived on the deleted map leave
+      // with it. Sheets still referenced elsewhere survive.
+      const referenced = new Set<string>();
+      for (const m of nextMaps) {
+        for (const t of m.tokens) {
+          if (t.sheetId) referenced.add(t.sheetId);
+        }
+      }
+      let nextSheets: Record<string, CharacterSheet> = state.sheets;
+      let strandedRemoved = false;
+      for (const sheetId of Object.keys(state.sheets)) {
+        if (!referenced.has(sheetId)) {
+          if (nextSheets === state.sheets) nextSheets = { ...state.sheets };
+          delete nextSheets[sheetId];
+          strandedRemoved = true;
+        }
+      }
+      const removedTokenIds = new Set<string>();
+      const deleted = fullMaps.find((m) => m.id === intent.mapId);
+      if (deleted) {
+        for (const t of deleted.tokens) removedTokenIds.add(t.id);
+      }
+      const nextCombat = stripCombatantsByTokenIds(state.activeCombat, removedTokenIds);
       const nextState: DndMapperState = {
         ...state,
         maps: nextMaps,
+        sheets: nextSheets,
+        activeCombat: nextCombat,
         activeMapId: nextActive,
       };
+      if (strandedRemoved || nextCombat !== state.activeCombat) {
+        return {
+          state: nextState,
+          patch: {
+            kind: "full",
+            state: projectSnapshot(nextState),
+          },
+        };
+      }
       return {
         state: nextState,
         patch: {
@@ -531,12 +849,45 @@ export function applyIntent(
       const fullMaps = state.maps.filter(isFullMap);
       const { maps: nextMaps, duplicated } = duplicateMap(fullMaps, intent.mapId, now);
       if (!duplicated) return null;
-      const nextState: DndMapperState = { ...state, maps: nextMaps };
+      // 1:1 binding: cloned tokens must not share sheets with the source map —
+      // each clone gets its own sheet copy (same name/color/assignation).
+      let nextSheets: Record<string, CharacterSheet> = state.sheets;
+      let sheetsCloned = false;
+      const remappedTokens = duplicated.tokens.map((t) => {
+        const source = t.sheetId ? state.sheets[t.sheetId] : undefined;
+        if (!source) return t;
+        const cloneId = generateGuid();
+        const sheetClone: CharacterSheet = {
+          ...source,
+          id: cloneId,
+          statusEffects: (source.statusEffects || []).map((e) => ({ ...e })),
+          rollTemplates: (source.rollTemplates || []).map((r) => ({ ...r })),
+        };
+        if (nextSheets === state.sheets) nextSheets = { ...state.sheets };
+        nextSheets[cloneId] = sheetClone;
+        sheetsCloned = true;
+        return { ...t, sheetId: cloneId };
+      });
+      const fixedDuplicated: GameMap =
+        sheetsCloned || remappedTokens.length !== duplicated.tokens.length
+          ? { ...duplicated, tokens: remappedTokens }
+          : duplicated;
+      const finalMaps = nextMaps.map((m) => (m.id === fixedDuplicated.id ? fixedDuplicated : m));
+      const nextState: DndMapperState = { ...state, maps: finalMaps, sheets: nextSheets };
+      if (sheetsCloned) {
+        return {
+          state: nextState,
+          patch: {
+            kind: "full",
+            state: projectSnapshot(nextState),
+          },
+        };
+      }
       return {
         state: nextState,
         patch: {
           kind: "mapList",
-          maps: nextMaps.map(toMapSummary),
+          maps: finalMaps.map(toMapSummary),
         },
       };
     }
@@ -609,14 +960,64 @@ export function applyIntent(
       const newToken = intent.token as NewToken;
       if (!maySpawnToken(state, fromId, newToken)) return null;
       const fullMaps = state.maps.filter(isFullMap);
-      const { maps: nextMaps, token: spawned } = spawnTokenOnMap(fullMaps, intent.mapId, newToken);
-      if (!spawned) return null;
-      const nextState: DndMapperState = { ...state, maps: nextMaps };
+      const targetMap = fullMaps.find((m) => m.id === intent.mapId);
+      if (!targetMap) return null;
+
+      // Adopting an existing unbound sheet: the spawned token takes the
+      // sheet's name/color/assignation so the pair starts in sync.
+      const adoptId = typeof newToken.sheetId === "string" ? newToken.sheetId : null;
+      const adoptSheet = adoptId ? state.sheets[adoptId] : undefined;
+      if (adoptSheet) {
+        if (findBoundToken(fullMaps, adoptSheet.id)) return null; // sheet already paired
+        const { maps: nextMaps, token: spawned } = spawnTokenOnMap(fullMaps, intent.mapId, {
+          ...newToken,
+          name: adoptSheet.characterName,
+          color: adoptSheet.color,
+          sheetId: adoptSheet.id,
+        });
+        if (!spawned) return null;
+        const synced: Token = {
+          ...spawned,
+          ownerUserId: adoptSheet.ownerUserId,
+          representsUserId: adoptSheet.representsUserId,
+          type:
+            adoptSheet.ownerUserId !== null
+              ? ("PlayerToken" as const)
+              : ("NPCToken" as const),
+        };
+        const syncedMaps = nextMaps.map((m) =>
+          m.id === targetMap.id
+            ? { ...m, tokens: m.tokens.map((t) => (t.id === synced.id ? synced : t)) }
+            : m,
+        );
+        const nextState: DndMapperState = { ...state, maps: syncedMaps };
+        return {
+          state: nextState,
+          patch: {
+            kind: "full",
+            state: projectSnapshot(nextState),
+          },
+        };
+      }
+
+      // Fresh spawn: the counterpart sheet is created alongside the token.
+      // An explicit token color counts as a manual override for the pair.
+      const paired = insertBoundPair(fullMaps, intent.mapId, {
+        name: newToken.name,
+        color: newToken.color,
+        ownerUserId: null,
+        representsUserId: null,
+        type: newToken.type,
+        iconKind: newToken.iconKind,
+      }, state.attributeSchema, { x: newToken.x, y: newToken.y });
+      if (!paired) return null;
+      const nextSheets = { ...state.sheets, [paired.sheet.id]: paired.sheet };
+      const nextState: DndMapperState = { ...state, maps: paired.maps, sheets: nextSheets };
       return {
         state: nextState,
         patch: {
-          kind: "token",
-          token: spawned,
+          kind: "full",
+          state: projectSnapshot(nextState),
         },
       };
     }
@@ -657,18 +1058,87 @@ export function applyIntent(
       const found = findTokenById(fullMaps, intent.tokenId);
       if (!found) return null;
       if (!mayEditToken(state, fromId, found.token)) return null;
-      const { maps: nextMaps, token: updated } = updateTokenOnMap(
-        fullMaps,
-        intent.tokenId,
-        intent.patch as Partial<Token>,
-      );
+      // Binding fields are managed by the assign/create/delete intents, never
+      // by direct patch. Ownership changes are DM-only (mirrored to the sheet).
+      const { id: _patchId, mapId: _patchMap, sheetId: _patchSheet, ...restPatch } =
+        intent.patch as Partial<Token>;
+      const mutablePatch: Record<string, unknown> = { ...restPatch };
+      if (!isDm(state, fromId)) {
+        delete mutablePatch.ownerUserId;
+        delete mutablePatch.representsUserId;
+        delete mutablePatch.type;
+      }
+      const patch = mutablePatch as Partial<Token>;
+      const { maps: nextMaps, token: updated } = updateTokenOnMap(fullMaps, intent.tokenId, patch);
       if (!updated) return null;
-      const nextState: DndMapperState = { ...state, maps: nextMaps };
+
+      // Mirror shared fields onto the bound sheet so the pair stays identical.
+      const boundSheet = updated.sheetId ? state.sheets[updated.sheetId] : undefined;
+      if (!boundSheet) {
+        const nextState: DndMapperState = { ...state, maps: nextMaps };
+        return {
+          state: nextState,
+          patch: {
+            kind: "token",
+            token: updated,
+          },
+        };
+      }
+      let nextSheet = mirrorTokenToSheet(boundSheet, updated);
+      let finalToken = updated;
+      if (typeof patch.color === "string" && patch.color !== boundSheet.color) {
+        // An explicit color pick freezes the pair's color identifier.
+        nextSheet = { ...nextSheet, colorOverridden: true };
+      } else if (
+        nextSheet.characterName !== boundSheet.characterName &&
+        !boundSheet.colorOverridden
+      ) {
+        // Rename re-seeds the color on both halves while not overridden.
+        const seeded = seedColorForName(nextSheet.characterName);
+        nextSheet = { ...nextSheet, color: seeded };
+        finalToken = { ...updated, color: seeded };
+      }
+      // The sheet is the source of truth for shared fields: re-mirror.
+      finalToken = mirrorSheetToToken(finalToken, nextSheet);
+      const sheetChanged =
+        nextSheet.characterName !== boundSheet.characterName ||
+        nextSheet.color !== boundSheet.color ||
+        nextSheet.colorOverridden !== boundSheet.colorOverridden ||
+        nextSheet.ownerUserId !== boundSheet.ownerUserId ||
+        nextSheet.representsUserId !== boundSheet.representsUserId;
+      const tokenResynced =
+        finalToken.name !== updated.name ||
+        finalToken.color !== updated.color ||
+        finalToken.ownerUserId !== updated.ownerUserId ||
+        finalToken.representsUserId !== updated.representsUserId ||
+        finalToken.type !== updated.type;
+      if (!sheetChanged && !tokenResynced) {
+        const nextState: DndMapperState = { ...state, maps: nextMaps };
+        return {
+          state: nextState,
+          patch: {
+            kind: "token",
+            token: updated,
+          },
+        };
+      }
+      const syncedMaps = tokenResynced
+        ? nextMaps.map((m) =>
+            m.id === found.map.id
+              ? { ...m, tokens: m.tokens.map((t) => (t.id === finalToken.id ? finalToken : t)) }
+              : m,
+          )
+        : nextMaps;
+      const nextState: DndMapperState = {
+        ...state,
+        maps: syncedMaps,
+        sheets: { ...state.sheets, [nextSheet.id]: nextSheet },
+      };
       return {
         state: nextState,
         patch: {
-          kind: "token",
-          token: updated,
+          kind: "full",
+          state: projectSnapshot(nextState),
         },
       };
     }
@@ -683,17 +1153,33 @@ export function applyIntent(
       const { maps: nextMaps, removed } = removeTokenFromMap(fullMaps, intent.tokenId);
       if (!removed) return null;
 
-      let nextCombat = state.activeCombat;
-      if (nextCombat && nextCombat.turnOrder.some((c) => c.tokenId === intent.tokenId)) {
-        const nextTurnOrder = nextCombat.turnOrder.filter((c) => c.tokenId !== intent.tokenId);
-        const nextTurnIndex =
-          nextTurnOrder.length === 0
-            ? 0
-            : Math.min(nextCombat.currentTurnIndex, nextTurnOrder.length - 1);
-        nextCombat = { ...nextCombat, turnOrder: nextTurnOrder, currentTurnIndex: nextTurnIndex };
+      // 1:1 binding: deleting a token deletes its character sheet as well.
+      let nextSheets: Record<string, CharacterSheet> = state.sheets;
+      if (found.token.sheetId && state.sheets[found.token.sheetId]) {
+        nextSheets = { ...state.sheets };
+        delete nextSheets[found.token.sheetId];
       }
 
-      const nextState: DndMapperState = { ...state, maps: nextMaps, activeCombat: nextCombat };
+      const nextCombat = stripCombatantsByTokenIds(
+        state.activeCombat,
+        new Set([intent.tokenId as string]),
+      );
+
+      const nextState: DndMapperState = {
+        ...state,
+        maps: nextMaps,
+        sheets: nextSheets,
+        activeCombat: nextCombat,
+      };
+      if (nextSheets !== state.sheets || nextCombat !== state.activeCombat) {
+        return {
+          state: nextState,
+          patch: {
+            kind: "full",
+            state: projectSnapshot(nextState),
+          },
+        };
+      }
       return {
         state: nextState,
         patch: {
@@ -710,13 +1196,34 @@ export function applyIntent(
       if (!found) return null;
       if (!mayEditToken(state, fromId, found.token)) return null;
 
-      const cloned: Token = {
+      // 1:1 binding: the clone gets its own sheet — never shared.
+      const sourceSheet = found.token.sheetId ? state.sheets[found.token.sheetId] : undefined;
+      const cloneName = `${found.token.name} (copy)`;
+      const cloneBase = {
         ...found.token,
         id: generateGuid(),
-        name: `${found.token.name} (copy)`,
+        name: cloneName,
         x: found.token.x + 1,
         y: found.token.y + 1,
       };
+
+      let nextSheets: Record<string, CharacterSheet>;
+      let cloned: Token;
+      if (sourceSheet) {
+        const sheetClone: CharacterSheet = {
+          ...sourceSheet,
+          id: generateGuid(),
+          characterName: cloneName,
+          statusEffects: (sourceSheet.statusEffects || []).map((e) => ({ ...e })),
+          rollTemplates: (sourceSheet.rollTemplates || []).map((r) => ({ ...r })),
+        };
+        cloned = { ...cloneBase, sheetId: sheetClone.id };
+        nextSheets = { ...state.sheets, [sheetClone.id]: sheetClone };
+      } else {
+        const sheet = synthesizeSheetForToken(cloneBase, state.attributeSchema);
+        cloned = { ...cloneBase, sheetId: sheet.id };
+        nextSheets = { ...state.sheets, [sheet.id]: sheet };
+      }
 
       const nextMaps = fullMaps.map((m) => {
         if (m.id === found.map.id) {
@@ -725,12 +1232,12 @@ export function applyIntent(
         return m;
       });
 
-      const nextState: DndMapperState = { ...state, maps: nextMaps };
+      const nextState: DndMapperState = { ...state, maps: nextMaps, sheets: nextSheets };
       return {
         state: nextState,
         patch: {
-          kind: "token",
-          token: cloned,
+          kind: "full",
+          state: projectSnapshot(nextState),
         },
       };
     }
@@ -786,32 +1293,25 @@ export function applyIntent(
         typeof intent.name === "string" && intent.name.trim().length > 0
           ? intent.name.trim()
           : "Player";
-      const color = typeof intent.color === "string" ? intent.color : "#e8b849";
 
-      const newToken: Token = {
-        id: generateGuid(),
-        type: "PlayerToken",
+      // 1:1 binding: a player token always arrives with its character sheet,
+      // sharing name, color, and player assignation.
+      const paired = insertBoundPair(fullMaps, targetMap.id, {
+        name,
+        color: typeof intent.color === "string" ? intent.color : null,
         ownerUserId: intent.playerId,
         representsUserId: null,
-        name,
-        color,
+        type: "PlayerToken",
         iconKind: "Initial",
-        mapId: targetMap.id,
-        x: spawnPos.x,
-        y: spawnPos.y,
-        sheetId: null,
-        hidden: false,
-      };
-
-      const nextMaps = fullMaps.map((m) =>
-        m.id === targetMap.id ? { ...m, tokens: [...m.tokens, newToken] } : m,
-      );
-      const nextState: DndMapperState = { ...state, maps: nextMaps };
+      }, state.attributeSchema, spawnPos);
+      if (!paired) return null;
+      const nextSheets = { ...state.sheets, [paired.sheet.id]: paired.sheet };
+      const nextState: DndMapperState = { ...state, maps: paired.maps, sheets: nextSheets };
       return {
         state: nextState,
         patch: {
-          kind: "token",
-          token: newToken,
+          kind: "full",
+          state: projectSnapshot(nextState),
         },
       };
     }
@@ -825,12 +1325,23 @@ export function applyIntent(
       const found = findTokenById(fullMaps, intent.tokenId);
       if (!found) return null;
 
-      const updatedToken: Token = {
-        ...found.token,
-        type: newOwner !== null ? "PlayerToken" : "NPCToken",
-        ownerUserId: newOwner,
-        representsUserId: newOwner !== null ? null : found.token.representsUserId,
-      };
+      // Ownership moves both halves; name/color always mirror the sheet.
+      const sheetForToken =
+        found.token.sheetId && state.sheets[found.token.sheetId]
+          ? state.sheets[found.token.sheetId]
+          : undefined;
+      const updatedToken: Token = sheetForToken
+        ? mirrorSheetToToken(found.token, {
+            ...sheetForToken,
+            ownerUserId: newOwner,
+            representsUserId: newOwner !== null ? null : sheetForToken.representsUserId,
+          })
+        : {
+            ...found.token,
+            type: newOwner !== null ? "PlayerToken" : "NPCToken",
+            ownerUserId: newOwner,
+            representsUserId: newOwner !== null ? null : found.token.representsUserId,
+          };
 
       const nextMaps = fullMaps.map((m) => {
         if (m.id === found.map.id) {
@@ -1351,20 +1862,28 @@ export function applyIntent(
 
       const header = pending.campaign;
       const activeMapId = header.activeMapId ?? allMaps[0]?.id ?? null;
+      // 1:1 binding: imported campaigns may predate pairing — repair orphans
+      // on both sides and normalize color flags before going live.
+      const repaired = ensureBoundPairs(
+        allMaps,
+        header.sheets ?? {},
+        activeMapId,
+        header.attributeSchema ?? state.attributeSchema,
+      );
       const nextState: DndMapperState = {
         ...state,
         phase: "Playing",
         settings: header.settings ?? state.settings,
         attributeSchema: header.attributeSchema ?? state.attributeSchema,
         activeMapId,
-        sheets: header.sheets ?? {},
+        sheets: repaired.sheets,
         customTemplates: header.customTemplates ?? {},
         globalRollTemplates: header.globalRollTemplates ?? [],
         activeSchemaTemplateId: header.activeSchemaTemplateId ?? null,
         initiativeAttributeName: header.initiativeAttributeName ?? null,
         activeCombat: header.activeCombat ?? null,
         loadedDiceRules: header.loadedDiceRules ?? [],
-        maps: allMaps,
+        maps: repaired.maps,
       };
 
       return {
@@ -1404,32 +1923,43 @@ export function applyIntent(
             x: Math.floor(targetMap.grid.widthCells / 2) + 0.5,
             y: Math.floor(targetMap.grid.heightCells / 2) + 0.5,
           };
-          const newTokens: Token[] = [];
+          // 1:1 binding: each auto-spawned player token arrives with its
+          // character sheet, color seeded from the player's display name.
+          let nextSheets: Record<string, CharacterSheet> = { ...state.sheets };
           for (const player of roster) {
             if (player.id === state.dmPlayerId) continue;
-            const hasToken = targetMap.tokens.some((t) => t.ownerUserId === player.id);
+            const currentTarget = nextMaps.filter(isFullMap).find((m) => m.id === targetMap.id);
+            const hasToken = currentTarget?.tokens.some((t) => t.ownerUserId === player.id);
             if (!hasToken) {
-              newTokens.push({
-                id: generateGuid(),
-                type: "PlayerToken",
+              const paired = insertBoundPair(nextMaps.filter(isFullMap), targetMap.id, {
+                name: player.displayName || "Player",
+                color: null,
                 ownerUserId: player.id,
                 representsUserId: null,
-                name: player.displayName || "Player",
-                color: "#e8b849",
+                type: "PlayerToken",
                 iconKind: "Initial",
-                mapId: targetMap.id,
-                x: spawnPos.x,
-                y: spawnPos.y,
-                sheetId: null,
-                hidden: false,
-              });
+              }, state.attributeSchema, spawnPos);
+              if (!paired) continue;
+              nextMaps = paired.maps;
+              nextSheets = { ...nextSheets, [paired.sheet.id]: paired.sheet };
               spawnedTokensCount++;
             }
           }
-          if (newTokens.length > 0) {
-            nextMaps = fullMaps.map((m) =>
-              m.id === targetMap.id ? { ...m, tokens: [...m.tokens, ...newTokens] } : m,
-            );
+          if (spawnedTokensCount > 0) {
+            const nextStateWithPairs: DndMapperState = {
+              ...state,
+              phase: "Playing",
+              maps: nextMaps,
+              activeMapId: nextActiveMapId,
+              sheets: nextSheets,
+            };
+            return {
+              state: nextStateWithPairs,
+              patch: {
+                kind: "full",
+                state: projectSnapshot(nextStateWithPairs),
+              },
+            };
           }
         }
       }
@@ -1441,7 +1971,7 @@ export function applyIntent(
         activeMapId: nextActiveMapId,
       };
 
-      if (newMapCreated || spawnedTokensCount > 0) {
+      if (newMapCreated) {
         return {
           state: nextState,
           patch: {
@@ -1478,29 +2008,57 @@ export function applyIntent(
         if (alreadyOwns) return null;
       }
 
-      const newId = generateGuid();
-      const initialValues: Record<string, AttributeValue> = {};
-      for (const row of state.attributeSchema.rows) {
-        initialValues[row.name] = row.default;
+      // 1:1 binding: a sheet always arrives with its token on the active map.
+      // An explicit color marks the pair as manually overridden; otherwise the
+      // color is seeded from the sheet name.
+      const explicitColor =
+        typeof intent.color === "string" && intent.color.trim().length > 0
+          ? intent.color
+          : null;
+      const fullMaps = state.maps.filter(isFullMap);
+      const pairMap = pickPairMap(fullMaps, state.activeMapId);
+      if (pairMap) {
+        const paired = insertBoundPair(fullMaps, pairMap.id, {
+          name,
+          color: explicitColor,
+          ownerUserId,
+          representsUserId: null,
+          type: ownerUserId !== null ? "PlayerToken" : "NPCToken",
+          iconKind: "Initial",
+          scopedMapId: typeof intent.scopedMapId === "string" ? intent.scopedMapId : null,
+        }, state.attributeSchema);
+        if (!paired) return null;
+        const nextSheets = { ...state.sheets, [paired.sheet.id]: paired.sheet };
+        const nextState: DndMapperState = { ...state, maps: paired.maps, sheets: nextSheets };
+        return {
+          state: nextState,
+          patch: {
+            kind: "full",
+            state: projectSnapshot(nextState),
+          },
+        };
       }
 
+      // No map exists yet: the sheet starts orphaned and gains its token via
+      // the createMap backfill.
       const sheet: CharacterSheet = {
-        id: newId,
+        id: generateGuid(),
         ownerUserId,
         representsUserId: null,
         characterName: name,
-        values: initialValues,
+        values: defaultSheetValues(state.attributeSchema),
         notes: "",
         hp: null,
         maxHp: null,
         armorClass: null,
-        color: "#4a90e2",
+        color: explicitColor ?? seedColorForName(name),
+        colorOverridden: explicitColor !== null,
         scopedMapId: typeof intent.scopedMapId === "string" ? intent.scopedMapId : null,
         statusEffects: [],
         rollTemplates: [],
       };
 
-      const nextSheets = { ...state.sheets, [newId]: sheet };
+      const nextSheets = { ...state.sheets, [sheet.id]: sheet };
       const nextState: DndMapperState = { ...state, sheets: nextSheets };
       return {
         state: nextState,
@@ -1520,41 +2078,56 @@ export function applyIntent(
       const nextName = typeof patch.characterName === "string" && patch.characterName.trim().length > 0
         ? patch.characterName.trim()
         : sheet.characterName;
-      const nextColor = typeof patch.color === "string" ? patch.color : sheet.color;
       const nextNotes = typeof patch.notes === "string" ? patch.notes : sheet.notes;
       const nextScope = patch.scopedMapId !== undefined
         ? (typeof patch.scopedMapId === "string" ? patch.scopedMapId : null)
         : sheet.scopedMapId;
 
+      // Color: an explicit pick freezes the pair's color identifier, while a
+      // rename re-seeds it from the new name until manually overridden.
+      let nextColor = sheet.color;
+      let nextOverridden = sheet.colorOverridden ?? false;
+      if (typeof patch.color === "string" && patch.color !== sheet.color) {
+        nextColor = patch.color;
+        nextOverridden = true;
+      } else if (nextName !== sheet.characterName && !nextOverridden) {
+        nextColor = seedColorForName(nextName);
+      }
+
       const updatedSheet: CharacterSheet = {
         ...sheet,
         characterName: nextName,
         color: nextColor,
+        colorOverridden: nextOverridden,
         notes: nextNotes,
         scopedMapId: nextScope,
       };
 
-      let nextMaps = state.maps;
-      if (nextName !== sheet.characterName) {
-        nextMaps = state.maps.map((m) => {
-          if (!isFullMap(m)) return m;
-          let changed = false;
-          const nextTokens = m.tokens.map((t) => {
-            if (t.sheetId === sheet.id && t.name !== nextName) {
-              changed = true;
-              return { ...t, name: nextName };
-            }
-            return t;
-          });
-          return changed ? { ...m, tokens: nextTokens } : m;
-        });
+      // The bound token mirrors the sheet's name, color, and assignation.
+      const fullMaps = state.maps.filter(isFullMap);
+      const bound = findBoundToken(fullMaps, sheet.id);
+      if (!bound) {
+        const nextSheets = { ...state.sheets, [sheet.id]: updatedSheet };
+        const nextState: DndMapperState = { ...state, sheets: nextSheets };
+        return {
+          state: nextState,
+          patch: { kind: "sheet", sheet: updatedSheet },
+        };
       }
+      const mirrored = mirrorSheetToToken(bound.token, updatedSheet);
+      const nextMaps = state.maps.map((m) => {
+        if (!isFullMap(m) || m.id !== bound.map.id) return m;
+        return { ...m, tokens: m.tokens.map((t) => (t.id === mirrored.id ? mirrored : t)) };
+      });
 
       const nextSheets = { ...state.sheets, [sheet.id]: updatedSheet };
       const nextState: DndMapperState = { ...state, sheets: nextSheets, maps: nextMaps };
       return {
         state: nextState,
-        patch: { kind: "sheet", sheet: updatedSheet },
+        patch: {
+          kind: "full",
+          state: projectSnapshot(nextState),
+        },
       };
     }
 
@@ -1564,22 +2137,39 @@ export function applyIntent(
       const sheet = state.sheets[intent.sheetId];
       if (!sheet) return null;
 
+      // 1:1 binding: deleting a sheet deletes its token (and combat seat) too.
+      const removedTokenIds = new Set<string>();
       const nextMaps = state.maps.map((m) => {
         if (!isFullMap(m)) return m;
-        let changed = false;
-        const nextTokens = m.tokens.map((t) => {
+        const remaining = m.tokens.filter((t) => {
           if (t.sheetId === intent.sheetId) {
-            changed = true;
-            return { ...t, sheetId: null };
+            removedTokenIds.add(t.id);
+            return false;
           }
-          return t;
+          return true;
         });
-        return changed ? { ...m, tokens: nextTokens } : m;
+        return remaining.length === m.tokens.length ? m : { ...m, tokens: remaining };
       });
+
+      const nextCombat = stripCombatantsByTokenIds(state.activeCombat, removedTokenIds);
 
       const nextSheets = { ...state.sheets };
       delete nextSheets[intent.sheetId];
-      const nextState: DndMapperState = { ...state, sheets: nextSheets, maps: nextMaps };
+      const nextState: DndMapperState = {
+        ...state,
+        sheets: nextSheets,
+        maps: nextMaps,
+        activeCombat: nextCombat,
+      };
+      if (removedTokenIds.size > 0 || nextCombat !== state.activeCombat) {
+        return {
+          state: nextState,
+          patch: {
+            kind: "full",
+            state: projectSnapshot(nextState),
+          },
+        };
+      }
       return {
         state: nextState,
         patch: { kind: "sheetRemoved", sheetId: intent.sheetId },
@@ -1592,22 +2182,72 @@ export function applyIntent(
       const sheet = state.sheets[intent.sheetId];
       if (!sheet) return null;
 
+      // 1:1 binding: the clone gets its own token — never shared.
       const newId = generateGuid();
+      const cloneName = `${sheet.characterName} (copy)`;
       const clone: CharacterSheet = {
         ...sheet,
         id: newId,
-        characterName: `${sheet.characterName} (copy)`,
+        characterName: cloneName,
         ownerUserId: null,
         representsUserId: null,
         statusEffects: (sheet.statusEffects || []).map((e) => ({ ...e })),
         rollTemplates: (sheet.rollTemplates || []).map((r) => ({ ...r })),
       };
 
+      const fullMaps = state.maps.filter(isFullMap);
+      const bound = findBoundToken(fullMaps, sheet.id);
+      let nextMaps = state.maps;
+      if (bound) {
+        const clonedToken: Token = {
+          ...bound.token,
+          id: generateGuid(),
+          name: cloneName,
+          color: clone.color,
+          ownerUserId: null,
+          representsUserId: null,
+          type: "NPCToken" as const,
+          x: bound.token.x + 1,
+          y: bound.token.y + 1,
+          sheetId: newId,
+        };
+        nextMaps = state.maps.map((m) => {
+          if (!isFullMap(m) || m.id !== bound.map.id) return m;
+          return { ...m, tokens: [...m.tokens, clonedToken] };
+        });
+      } else {
+        const pairMap = pickPairMap(fullMaps, state.activeMapId);
+        if (pairMap) {
+          const pos = spawnPositionForMap(pairMap);
+          const token: Token = {
+            id: generateGuid(),
+            type: "NPCToken",
+            ownerUserId: null,
+            representsUserId: null,
+            name: cloneName,
+            color: clone.color,
+            iconKind: "Initial",
+            mapId: pairMap.id,
+            x: pos.x,
+            y: pos.y,
+            sheetId: newId,
+            hidden: false,
+          };
+          nextMaps = state.maps.map((m) => {
+            if (!isFullMap(m) || m.id !== pairMap.id) return m;
+            return { ...m, tokens: [...m.tokens, token] };
+          });
+        }
+      }
+
       const nextSheets = { ...state.sheets, [newId]: clone };
-      const nextState: DndMapperState = { ...state, sheets: nextSheets };
+      const nextState: DndMapperState = { ...state, sheets: nextSheets, maps: nextMaps };
       return {
         state: nextState,
-        patch: { kind: "sheet", sheet: clone },
+        patch: {
+          kind: "full",
+          state: projectSnapshot(nextState),
+        },
       };
     }
 
@@ -1631,6 +2271,8 @@ export function applyIntent(
         representsUserId: nextOwner !== null ? null : sheet.representsUserId,
       };
 
+      // The bound token takes the sheet's owner AND its name/color, so the
+      // pair keeps one shared player assignation and one shared identity.
       let tokenUpdated = false;
       const nextMaps = state.maps.map((m) => {
         if (!isFullMap(m)) return m;
@@ -1639,12 +2281,9 @@ export function applyIntent(
           if (t.sheetId === sheet.id) {
             changed = true;
             tokenUpdated = true;
-            return {
-              ...t,
-              ownerUserId: nextOwner,
-              representsUserId: nextOwner !== null ? null : t.representsUserId,
-              type: nextOwner ? ("PlayerToken" as const) : ("NPCToken" as const),
-            };
+            // Pass the original token so the type flips exactly when the
+            // owner actually changed hands.
+            return mirrorSheetToToken(t, updatedSheet);
           }
           return t;
         });
@@ -2104,6 +2743,52 @@ export function applyIntent(
         }
       }
 
+      // 1:1 binding: a templated sheet arrives with its token. The template
+      // color counts as an explicit pick, so it never reseeds on rename.
+      const fullMaps = state.maps.filter(isFullMap);
+      const pairMap = pickPairMap(fullMaps, state.activeMapId);
+      if (pairMap) {
+        const paired = insertBoundPair(fullMaps, pairMap.id, {
+          name,
+          color: template.color || null,
+          ownerUserId: null,
+          representsUserId: null,
+          type: "NPCToken",
+          iconKind: "Initial",
+          scopedMapId: typeof intent.scopedMapId === "string" ? intent.scopedMapId : null,
+        }, state.attributeSchema);
+        if (!paired) return null;
+        const templatedSheet: CharacterSheet = {
+          ...paired.sheet,
+          values: sheetValues,
+          notes: template.notes,
+          hp: template.maxHp,
+          maxHp: template.maxHp,
+          armorClass: template.armorClass,
+          statusEffects: [],
+          rollTemplates: Array.isArray(template.rollTemplates) ? [...template.rollTemplates] : [],
+        };
+        const mirroredToken: Token = {
+          ...paired.token,
+          name: templatedSheet.characterName,
+          color: templatedSheet.color,
+        };
+        const pairedMaps = paired.maps.map((m) =>
+          m.id === pairMap.id
+            ? { ...m, tokens: m.tokens.map((t) => (t.id === mirroredToken.id ? mirroredToken : t)) }
+            : m,
+        );
+        const nextSheets = { ...state.sheets, [templatedSheet.id]: templatedSheet };
+        const nextState: DndMapperState = { ...state, sheets: nextSheets, maps: pairedMaps };
+        return {
+          state: nextState,
+          patch: {
+            kind: "full",
+            state: projectSnapshot(nextState),
+          },
+        };
+      }
+
       const newSheet: CharacterSheet = {
         id: newId,
         ownerUserId: null,
@@ -2114,7 +2799,8 @@ export function applyIntent(
         hp: template.maxHp,
         maxHp: template.maxHp,
         armorClass: template.armorClass,
-        color: template.color || "#4a90e2",
+        color: template.color || seedColorForName(name),
+        colorOverridden: Boolean(template.color),
         scopedMapId: typeof intent.scopedMapId === "string" ? intent.scopedMapId : null,
         statusEffects: [],
         rollTemplates: Array.isArray(template.rollTemplates) ? [...template.rollTemplates] : [],

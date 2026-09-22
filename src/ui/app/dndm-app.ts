@@ -721,7 +721,7 @@ export class DndmApp extends GameElement {
       if (isVisible) {
         const diceColor = roll.tokenId
           ? resolveDiceColorForToken(state, roll.tokenId)
-          : resolveDiceColor(state, roll.rollerUserId);
+          : resolveDiceColor(state, roll.rollerUserId, this.roster);
         const fontColor = getReadableTextColor(diceColor);
 
         diceOverlay.roll(roll, diceColor, fontColor).catch((err) => {

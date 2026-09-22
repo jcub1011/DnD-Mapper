@@ -149,18 +149,66 @@ export function fallbackColorForHash(hash: number): string {
   return hslToHex(hue, 0.55, 0.55);
 }
 
-export function resolveDiceColor(state: DndMapperState, userId: string): string {
+/**
+ * Seeds a deterministic color identifier from a character/sheet name.
+ * Used for fresh sheets (and their bound tokens) until a user manually
+ * picks a color, which sets `colorOverridden` and freezes the value.
+ */
+export function seedColorForName(name: string): string {
+  const normalized = (name ?? "").trim().toLowerCase();
+  return fallbackColorForHash(stringHashCode(normalized));
+}
+
+export interface DiceColorRosterEntry {
+  readonly id: string;
+  readonly displayName?: string;
+  readonly name?: string;
+}
+
+/**
+ * Resolves the dice color for a player: the color of their associated
+ * character sheet (via ownership or via a token bound to the sheet),
+ * falling back to a hash of the player's display name when they have no
+ * character. The DM always rolls gold.
+ */
+export function resolveDiceColor(
+  state: DndMapperState,
+  userId: string,
+  roster?: readonly DiceColorRosterEntry[],
+): string {
   if (!userId) return fallbackColorForHash(0);
   if (state.dmPlayerId === userId) return HOST_GOLD;
 
+  // 1. Directly owned sheet wins — the player's associated character.
+  for (const sheet of Object.values(state.sheets)) {
+    if (sheet.ownerUserId === userId && parseHexColor(sheet.color)) {
+      return sheet.color;
+    }
+  }
+
+  // 2. Token owned by (or representing) the player that is bound to a sheet:
+  // use the bound sheet's color so token and sheet stay visually identical.
   for (const map of state.maps) {
     if ("tokens" in map) {
       for (const token of map.tokens) {
-        if (token.ownerUserId === userId && parseHexColor(token.color)) {
-          return token.color;
+        if (token.ownerUserId === userId || token.representsUserId === userId) {
+          if (token.sheetId && state.sheets[token.sheetId]) {
+            const sheetColor = state.sheets[token.sheetId].color;
+            if (parseHexColor(sheetColor)) return sheetColor;
+          }
+          if (parseHexColor(token.color)) {
+            return token.color;
+          }
         }
       }
     }
+  }
+
+  // 3. No character: fall back to a hash of the player's display name.
+  const entry = roster?.find((p) => p.id === userId);
+  const displayName = entry?.displayName ?? entry?.name;
+  if (displayName && displayName.trim().length > 0) {
+    return fallbackColorForHash(stringHashCode(displayName.trim()));
   }
 
   return fallbackColorForHash(stringHashCode(userId));
