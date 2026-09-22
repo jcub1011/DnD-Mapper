@@ -158,14 +158,20 @@ export class DndmSheetSettingsModal extends GameElement {
                       <select
                         class="dndm-select"
                         style="width: 100%; margin-top: 4px;"
-                        .value=${this.ownerUserId ?? ""}
                         @change=${(e: Event) => {
                         const val = (e.target as HTMLSelectElement).value;
                         this.ownerUserId = val ? val : null;
                       }}
                       >
-                        <option value="">Unassigned (NPC / DM Controlled)</option>
-                        ${assignableRoster.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
+                        <option value="" ?selected=${(this.ownerUserId ?? "") === ""}>
+                          Unassigned (NPC / DM Controlled)
+                        </option>
+                        ${assignableRoster.map(
+                          (p) =>
+                            html`<option value=${p.id} ?selected=${(this.ownerUserId ?? "") === p.id}>
+                              ${p.name}
+                            </option>`,
+                        )}
                       </select>
                     </label>
 
@@ -174,14 +180,23 @@ export class DndmSheetSettingsModal extends GameElement {
                       <select
                         class="dndm-select"
                         style="width: 100%; margin-top: 4px;"
-                        .value=${this.representsUserId ?? ""}
                         @change=${(e: Event) => {
                         const val = (e.target as HTMLSelectElement).value;
                         this.representsUserId = val ? val : null;
                       }}
                       >
-                        <option value="">None</option>
-                        ${assignableRoster.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
+                        <option value="" ?selected=${(this.representsUserId ?? "") === ""}>
+                          None
+                        </option>
+                        ${assignableRoster.map(
+                          (p) =>
+                            html`<option
+                              value=${p.id}
+                              ?selected=${(this.representsUserId ?? "") === p.id}
+                            >
+                              ${p.name}
+                            </option>`,
+                        )}
                       </select>
                     </label>
 
@@ -190,14 +205,20 @@ export class DndmSheetSettingsModal extends GameElement {
                       <select
                         class="dndm-select"
                         style="width: 100%; margin-top: 4px;"
-                        .value=${this.scopedMapId ?? ""}
                         @change=${(e: Event) => {
                         const val = (e.target as HTMLSelectElement).value;
                         this.scopedMapId = val ? val : null;
                       }}
                       >
-                        <option value="">Global (All Maps)</option>
-                        ${this.maps.map((m) => html`<option value=${m.id}>${m.name}</option>`)}
+                        <option value="" ?selected=${(this.scopedMapId ?? "") === ""}>
+                          Global (All Maps)
+                        </option>
+                        ${this.maps.map(
+                          (m) =>
+                            html`<option value=${m.id} ?selected=${(this.scopedMapId ?? "") === m.id}>
+                              ${m.name}
+                            </option>`,
+                        )}
                       </select>
                     </label>
                   `

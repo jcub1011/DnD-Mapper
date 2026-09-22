@@ -53,12 +53,47 @@ export class DndmTokenDetailsModal extends GameElement {
   @state() private color = "#e8b849";
   @state() private iconKind: "Initial" | "Solid" = "Initial";
   @state() private confirmDelete = false;
+  // Optimistic sheet choice, retained across close so a quick
+  // close → reopen before the server echo still shows the intent.
+  @state() private pendingSheetId: string | null | undefined = undefined;
+  @state() private pendingTokenId: string | null = null;
+  private openedTokenId: string | null = null;
+  private openedSheetId: string | null = null;
 
-  override willUpdate(changedProperties: Map<string, unknown>): void {
-    if ((changedProperties.has("token") || changedProperties.has("isOpen")) && this.token) {
-      this.name = this.token.name;
-      this.color = this.token.color;
-      this.iconKind = this.token.iconKind;
+  override willUpdate(): void {
+    if (this.token && this.isOpen) {
+      if (this.openedTokenId !== this.token.id) {
+        // New session: snapshot staged edits and the sheet link at open.
+        // A retained pending choice for this token survives (echo may still
+        // be in flight); pending for any other token is dropped.
+        this.name = this.token.name;
+        this.color = this.token.color;
+        this.iconKind = this.token.iconKind;
+        this.openedTokenId = this.token.id;
+        this.openedSheetId = this.token.sheetId ?? null;
+        this.confirmDelete = false;
+        if (this.pendingTokenId !== this.token.id) {
+          this.pendingSheetId = undefined;
+          this.pendingTokenId = null;
+        } else if (this.pendingSheetId !== undefined && this.pendingSheetId === this.openedSheetId) {
+          // Pending already confirmed by the server while closed.
+          this.pendingSheetId = undefined;
+          this.pendingTokenId = null;
+        }
+      } else if (
+        this.pendingSheetId !== undefined &&
+        this.pendingTokenId === this.token.id &&
+        (this.token.sheetId ?? null) === this.pendingSheetId
+      ) {
+        // Same session: server echo confirms our optimistic choice. Adopt
+        // the server value but leave staged name/color/iconKind alone.
+        this.pendingSheetId = undefined;
+        this.pendingTokenId = null;
+      }
+    } else if (!this.isOpen && this.openedTokenId !== null) {
+      // Closed: end the session but keep any unconfirmed pending choice so
+      // reopening the same token still shows the user's intent.
+      this.openedTokenId = null;
       this.confirmDelete = false;
     }
   }
@@ -75,21 +110,51 @@ export class DndmTokenDetailsModal extends GameElement {
 
   private handleSave = (): void => {
     if (!this.token) return;
+    const tokenId = this.token.id;
+    const currentSheet = this.token.sheetId ?? null;
+    // Effective sheet: optimistic choice wins while unconfirmed. Re-send if
+    // the server still shows something else (immediate send may have been
+    // rejected or is still in flight) — the intent is idempotent.
+    const effectiveSheet =
+      this.pendingTokenId === tokenId && this.pendingSheetId !== undefined
+        ? this.pendingSheetId
+        : currentSheet;
+    if (effectiveSheet !== currentSheet) {
+      this.dispatchEvent(
+        new CustomEvent<{ tokenId: string; sheetId: string | null }>(
+          "reassign-token-sheet",
+          {
+            bubbles: true,
+            composed: true,
+            detail: { tokenId, sheetId: effectiveSheet },
+          }),
+      );
+      this.onReassignTokenSheet?.(tokenId, effectiveSheet);
+    }
     const patch: { name?: string; color?: string; iconKind?: "Initial" | "Solid" } = {};
-    const trimmed = this.name.trim();
-    if (trimmed && trimmed !== this.token.name) patch.name = trimmed;
-    if (this.color !== this.token.color) patch.color = this.color;
+    // When the sheet link changed during this session the sheet is the
+    // source of truth for name/color — drop those so a stale local name
+    // can't rename the sheet via mirrorTokenToSheet. Icon style is
+    // token-local, always safe.
+    const sheetChanged = effectiveSheet !== (this.openedSheetId ?? null);
+    if (!sheetChanged) {
+      const trimmed = this.name.trim();
+      if (trimmed && trimmed !== this.token.name) patch.name = trimmed;
+      if (this.color !== this.token.color) patch.color = this.color;
+    }
     if (this.iconKind !== this.token.iconKind) patch.iconKind = this.iconKind;
     if (Object.keys(patch).length > 0) {
       this.dispatchEvent(
         new CustomEvent<{ tokenId: string; patch: typeof patch }>("save-token", {
           bubbles: true,
           composed: true,
-          detail: { tokenId: this.token.id, patch },
+          detail: { tokenId, patch },
         }),
       );
-      this.onUpdateToken?.(this.token.id, patch);
+      this.onUpdateToken?.(tokenId, patch);
     }
+    this.pendingSheetId = undefined;
+    this.pendingTokenId = null;
     this.handleClose();
   };
 
@@ -123,6 +188,11 @@ export class DndmTokenDetailsModal extends GameElement {
     e.stopPropagation();
     const val = (e.target as HTMLSelectElement).value;
     const next = val ? val : null;
+    // Optimistic display + immediate apply (fire-and-forget): the choice
+    // survives close/reopen even before the server echo, and Save re-sends
+    // it if the server still shows something else.
+    this.pendingSheetId = next;
+    this.pendingTokenId = this.token.id;
     this.dispatchEvent(
       new CustomEvent<{ tokenId: string; sheetId: string | null }>(
         "reassign-token-sheet",
@@ -153,6 +223,15 @@ export class DndmTokenDetailsModal extends GameElement {
     const ownerName = t?.ownerUserId
       ? (this.roster.find((p) => p.id === t.ownerUserId)?.name ?? t.ownerUserId)
       : null;
+    // Effective sheet for the dropdown: optimistic choice wins while
+    // unconfirmed. Compared per-option via ?selected (not select .value):
+    // the select is recreated on every open while its options stamp
+    // dynamically, so a .value binding applies before the options exist
+    // and always falls back to "Unassigned".
+    const effectiveSheetId =
+      t && this.pendingTokenId === t.id && this.pendingSheetId !== undefined
+        ? (this.pendingSheetId ?? "")
+        : (t?.sheetId ?? "");
 
     return html`
       <dndm-modal
@@ -236,13 +315,24 @@ export class DndmTokenDetailsModal extends GameElement {
                         <select
                           class="dndm-select"
                           style="width: 100%; margin-top: 4px;"
-                          .value=${t.sheetId ?? ""}
                           @change=${this.handleReassign}
                         >
-                          <option value="">Unassigned (NPC / DM Controlled)</option>
+                          <option value="" ?selected=${effectiveSheetId === ""}>
+                            Unassigned (NPC / DM Controlled)
+                          </option>
                           ${Object.values(this.sheets).map(
-                            (s) => html`<option value=${s.id}>${s.characterName}</option>`,
+                            (s) =>
+                              html`<option value=${s.id} ?selected=${effectiveSheetId === s.id}>
+                                ${s.characterName}
+                              </option>`,
                           )}
+                          ${t.sheetId &&
+                          !this.sheets[t.sheetId] &&
+                          (this.pendingTokenId !== t.id || this.pendingSheetId === undefined)
+                            ? html`<option value=${t.sheetId} ?selected=${true}>
+                                Unknown sheet (${t.sheetId})
+                              </option>`
+                            : nothing}
                         </select>
                       </label>
                     `

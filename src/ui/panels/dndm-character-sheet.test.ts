@@ -224,4 +224,32 @@ describe("<dndm-character-sheet>", () => {
     await el.updateComplete;
     expect(el.querySelector(".dndm-sheet-name-input")).not.toBeNull();
   });
+
+  it("lists player names (not blank entries) in the Assign Owner dropdown", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin", null);
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+    el.dmPlayerId = "dm-1";
+    // Roster as the app provides it: lobby players mapped to display entries.
+    el.roster = [
+      { id: "dm-1", name: "Dungeon Master" },
+      { id: "player-1", name: "Alice" },
+      { id: "player-2", name: "Bob" },
+    ];
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    const select = el.querySelector('select[title="Assign Owner"]') as HTMLSelectElement;
+    expect(select).not.toBeNull();
+    const options = Array.from(select.querySelectorAll("option")).map((o) => o.textContent?.trim());
+    expect(options).toContain("Alice");
+    expect(options).toContain("Bob");
+    expect(options).not.toContain("Dungeon Master");
+    for (const text of options) {
+      expect(text).not.toBe("");
+    }
+  });
 });

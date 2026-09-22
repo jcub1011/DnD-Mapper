@@ -1317,17 +1317,14 @@ export function applyIntent(
       // untouched, and no sheet is modified.
       let updatedToken: Token;
       if (sheetId === null) {
-        // Unassign: the token stays linked but becomes a DM-controlled NPC
-        // recording who it represents (same convention as handlePlayerLeft).
-        const oldSheet =
-          found.token.sheetId && state.sheets[found.token.sheetId]
-            ? state.sheets[found.token.sheetId]
-            : undefined;
+        // Unassign: fully unlink the token. It becomes a DM-controlled NPC
+        // with no sheet link and no ownership.
         updatedToken = {
           ...found.token,
           type: "NPCToken",
           ownerUserId: null,
-          representsUserId: oldSheet?.ownerUserId ?? found.token.representsUserId,
+          representsUserId: null,
+          sheetId: null,
         };
       } else {
         const target = state.sheets[sheetId];

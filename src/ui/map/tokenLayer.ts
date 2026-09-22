@@ -295,16 +295,18 @@ export class TokenLayer {
     circle.strokeCircle(0, 0, radius);
     container.add(circle);
 
-    // 3. Label text (initial)
-    const initial = token.name.trim().length > 0 ? token.name.trim()[0].toUpperCase() : "?";
-    const textColor = getReadableTextColor(effectiveColor);
-    const text = this.scene.add.text(0, 0, initial, {
-      fontSize: `${Math.round(0.42 * CELL)}px`,
-      fontFamily: '"Cormorant Garamond", Georgia, serif',
-      color: textColor,
-    });
-    text.setOrigin(0.5, 0.5);
-    container.add(text);
+    // 3. Label text (initial) — Solid style hides the letter.
+    if (token.iconKind !== "Solid") {
+      const initial = token.name.trim().length > 0 ? token.name.trim()[0].toUpperCase() : "?";
+      const textColor = getReadableTextColor(effectiveColor);
+      const text = this.scene.add.text(0, 0, initial, {
+        fontSize: `${Math.round(0.42 * CELL)}px`,
+        fontFamily: '"Cormorant Garamond", Georgia, serif',
+        color: textColor,
+      });
+      text.setOrigin(0.5, 0.5);
+      container.add(text);
+    }
 
     // Hit Area & Interactivity. Stacked tops and tokens the viewer may not
     // move are click-only (open popover / sheet); singles the viewer may move
@@ -500,15 +502,18 @@ export class TokenLayer {
       g.strokeCircle(0, 0, chipRadius);
       chipContainer.add(g);
 
-      const initial = t.name.trim().length > 0 ? t.name.trim()[0].toUpperCase() : "?";
-      const textColor = getReadableTextColor(chipColor);
-      const txt = this.scene.add.text(0, 0, initial, {
-        fontSize: `${Math.round(0.35 * CELL)}px`,
-        fontFamily: '"Cormorant Garamond", Georgia, serif',
-        color: textColor,
-      });
-      txt.setOrigin(0.5, 0.5);
-      chipContainer.add(txt);
+      // Solid style hides the letter.
+      if (t.iconKind !== "Solid") {
+        const initial = t.name.trim().length > 0 ? t.name.trim()[0].toUpperCase() : "?";
+        const textColor = getReadableTextColor(chipColor);
+        const txt = this.scene.add.text(0, 0, initial, {
+          fontSize: `${Math.round(0.35 * CELL)}px`,
+          fontFamily: '"Cormorant Garamond", Georgia, serif',
+          color: textColor,
+        });
+        txt.setOrigin(0.5, 0.5);
+        chipContainer.add(txt);
+      }
 
       const movable = this.canMoveToken(t);
       if (!movable) chipContainer.setAlpha(0.65);

@@ -720,7 +720,8 @@ describe("Character Sheet Domain & Rules (Phase 6)", () => {
         .tokens.find((t) => t.id === ariaTokens[0].id)!;
       expect(unassigned.ownerUserId).toBeNull();
       expect(unassigned.type).toBe("NPCToken");
-      expect(unassigned.representsUserId).toBe("player-1");
+      expect(unassigned.sheetId).toBeNull();
+      expect(unassigned.representsUserId).toBeNull();
       // Sheet and sibling untouched.
       expect(state.sheets[sheetId].ownerUserId).toBe("player-1");
       const sibling = state.maps

@@ -33,6 +33,7 @@ import { fx } from "../fx/fx";
 import { fullscreenExitIcon, fullscreenIcon, gearIcon, lockIcon } from "../icons";
 import type { MapScene, ToolMode } from "../map/MapScene";
 import { CELL } from "../map/viewport";
+import { toDisplayRoster } from "../roster";
 import { toastService } from "../toast/toastService";
 import { GameElement } from "./GameElement";
 
@@ -773,6 +774,16 @@ export class DndmApp extends GameElement {
     return this.activeMap.images.find((img) => img.id === this.selectedImageId) ?? null;
   }
 
+  /**
+   * Roster for the sheet/token components, which render `{ id, name }`
+   * entries. The lobby roster is `KBPlayer` (`{ id, displayName }`), so it
+   * must be mapped — passing it through leaves `name` undefined and every
+   * assignment dropdown renders blank entries.
+   */
+  public get displayRoster(): readonly { id: string; name: string }[] {
+    return toDisplayRoster(this.roster);
+  }
+
   private send(intent: Intent): void {
     this.controller?.sendIntent(intent);
   }
@@ -1191,7 +1202,7 @@ export class DndmApp extends GameElement {
                 <dndm-token-rail
                   .tokens=${active.tokens}
                   .sheets=${this.match.sheets}
-                  .roster=${this.roster}
+                  .roster=${this.displayRoster}
                   .dmPlayerId=${this.match.dmPlayerId}
                   .currentUserId=${this.controller?.playerId ?? null}
                   .isDm=${this.isDm}
@@ -1346,7 +1357,7 @@ export class DndmApp extends GameElement {
               .settings=${this.match.settings}
               .isDm=${this.isDm}
               .currentUserId=${this.controller?.playerId ?? null}
-              .roster=${this.roster}
+              .roster=${this.displayRoster}
               .dmPlayerId=${this.match.dmPlayerId}
               .maps=${this.match.maps}
               .onSelectSheet=${(id: string | null) => {

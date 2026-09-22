@@ -338,7 +338,11 @@ export class DndmTokenRail extends GameElement {
                     this.showHover(t, e.currentTarget as HTMLElement)}
                   @blur=${() => this.hideHover()}
                 >
-                  <span class="dndm-token-rail-initial" aria-hidden="true">${initial}</span>
+                  ${t.iconKind !== "Solid"
+                    ? html`<span class="dndm-token-rail-initial" aria-hidden="true"
+                        >${initial}</span
+                      >`
+                    : nothing}
                   <span
                     class="dndm-token-rail-corner ${isPlayer ? "is-player" : "is-npc"}"
                     title=${isPlayer ? "Player" : "NPC"}
