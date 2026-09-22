@@ -231,12 +231,17 @@ dndm-app {
 .dndm-canvas-toolbar {
   position: absolute;
   top: 0.75rem;
-  left: 50%;
-  transform: translateX(-50%);
+  left: calc(var(--dndm-rail-pad-left, 0px) + 12px);
+  right: calc(var(--dndm-rail-pad-right, 0px) + 12px);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: center;
   gap: 0.25rem;
+  row-gap: 0.35rem;
   padding: 0.35rem 0.5rem;
+  box-sizing: border-box;
+  overflow: visible;
   background: rgba(20, 17, 14, 0.86);
   border: 1px solid var(--dndm-border-accent);
   border-radius: 4px;
@@ -246,6 +251,23 @@ dndm-app {
   z-index: 6;
   pointer-events: auto;
   user-select: none;
+}
+
+.dndm-canvas-toolbar > * {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.dndm-canvas-toolbar .dndm-zoom-readout {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 900px) {
+  .dndm-canvas-toolbar {
+    gap: 0.2rem;
+    row-gap: 0.3rem;
+    padding: 0.3rem 0.4rem;
+  }
 }
 
 .dndm-grid-toggle {
