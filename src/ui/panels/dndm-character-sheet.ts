@@ -27,6 +27,7 @@ import {
   mayViewSheetNotesAndHp,
 } from "../../game/rules";
 import { GameElement } from "../app/GameElement";
+import { gearIcon } from "../icons";
 import { toSafeHtml } from "./markdown";
 import "./dndm-status-effects";
 import "./dndm-collapsible-panel";
@@ -1050,14 +1051,16 @@ export class DndmCharacterSheet extends GameElement {
       <!-- Title Bar -->
       <div class="dndm-sheet-header-title-bar">
         <button
-          class="dndm-btn dndm-btn--subtle"
+          class="dndm-btn dndm-btn--subtle dndm-btn--icon"
+          type="button"
           title="Sheet Settings"
-          style="padding: 2px 6px; font-size: 1rem; line-height: 1; color: ${sheet.color || "#4a90e2"};"
+          aria-label="Sheet Settings"
+          style="color: ${sheet.color || "#4a90e2"};"
           @click=${() => {
             this.settingsModalOpen = true;
           }}
         >
-          ⚙
+          ${gearIcon()}
         </button>
         <input
           type="text"
