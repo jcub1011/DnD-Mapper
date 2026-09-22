@@ -136,7 +136,7 @@ describe("Auto-Spawn on Session Start", () => {
     // Spawned at defaultSpawnPosition, snapped to the cell centre
     expect(bobToken!.x).toBe(10.5);
     expect(bobToken!.y).toBe(10.5);
-    // 1:1 binding: the auto-spawned token arrives with its character sheet.
+    // N:1 binding: the auto-spawned token arrives with its character sheet.
     const bobSheet = bobToken!.sheetId ? nextState.sheets[bobToken!.sheetId] : undefined;
     expect(bobSheet).toBeDefined();
     expect(bobSheet!.characterName).toBe("Bob");
@@ -257,19 +257,26 @@ describe("handlePlayerLeft (Abandonment & Lifecycle)", () => {
 });
 
 describe("DM Reassignment Actions", () => {
-  it("allows DM to reassign abandoned token via reassignTokenOwner", () => {
+  it("allows DM to reassign an abandoned token to another sheet", () => {
     const { state, roster } = makeLifecycleState();
     // Simulate Alice having left
     const { state: abandonedState } = handlePlayerLeft(state, "user-alice", roster);
 
-    // DM reassigns token to Bob
-    const result = applyIntent(
+    // DM creates Bob's sheet, then moves Alice's old token onto it
+    const created = applyIntent(
       abandonedState,
       "user-dm",
+      { kind: "createSheet", characterName: "Bob", ownerUserId: "user-bob" },
+      Date.now(),
+    )!;
+    const bobSheetId = Object.keys(created.state.sheets).find((id) => id !== "sheet-alice")!;
+    const result = applyIntent(
+      created.state,
+      "user-dm",
       {
-        kind: "reassignTokenOwner",
+        kind: "reassignTokenSheet",
         tokenId: "tok-alice",
-        newOwnerUserId: "user-bob",
+        sheetId: bobSheetId,
       },
       Date.now(),
     );
@@ -278,14 +285,16 @@ describe("DM Reassignment Actions", () => {
     const updatedMap = result!.state.maps[0] as GameMap;
     const token = updatedMap.tokens.find((t) => t.id === "tok-alice")!;
 
+    expect(token.sheetId).toBe(bobSheetId);
     expect(token.type).toBe("PlayerToken");
     expect(token.ownerUserId).toBe("user-bob");
     expect(token.representsUserId).toBeNull();
+    expect(token.name).toBe("Bob");
 
-    // Linked character sheet should also update
-    const sheet = result!.state.sheets["sheet-alice"];
-    expect(sheet.ownerUserId).toBe("user-bob");
-    expect(sheet.representsUserId).toBeNull();
+    // Alice's abandoned sheet is untouched.
+    const oldSheet = result!.state.sheets["sheet-alice"];
+    expect(oldSheet.ownerUserId).toBeNull();
+    expect(oldSheet.representsUserId).toBe("user-alice");
   });
 
   it("allows DM to reassign abandoned sheet via assignCharacterToPlayer", () => {
@@ -316,7 +325,7 @@ describe("DM Reassignment Actions", () => {
     expect(token.representsUserId).toBeNull();
   });
 
-  it("rejects reassignTokenOwner if issued by non-DM", () => {
+  it("rejects reassignTokenSheet if issued by non-DM", () => {
     const { state, roster } = makeLifecycleState();
     const { state: abandonedState } = handlePlayerLeft(state, "user-alice", roster);
 
@@ -324,9 +333,9 @@ describe("DM Reassignment Actions", () => {
       abandonedState,
       "user-bob", // Not DM
       {
-        kind: "reassignTokenOwner",
+        kind: "reassignTokenSheet",
         tokenId: "tok-alice",
-        newOwnerUserId: "user-bob",
+        sheetId: "sheet-alice",
       },
       Date.now(),
     );

@@ -168,13 +168,48 @@ describe("Character Sheet Domain & Rules (Phase 6)", () => {
       // Color is seeded from the sheet name until manually overridden.
       expect(sheet!.colorOverridden).toBe(false);
       expect(sheet!.color).toBe(seedColorForName("Valeros"));
-      // 1:1 binding: the sheet arrives with its token, sharing name/color.
-      if (res!.patch?.kind !== "full") throw new Error("expected full patch");
+      // N:1 binding: sheets are created tokenless — no token spawns alongside.
+      if (res!.patch?.kind !== "sheet") throw new Error("expected sheet patch");
       const map = res!.state.maps.filter(isFullMap).find((m) => m.id === res!.state.activeMapId)!;
-      const token = map.tokens.find((t) => t.sheetId === sheet!.id);
-      expect(token).toBeDefined();
-      expect(token!.name).toBe("Valeros");
-      expect(token!.color).toBe(sheet!.color);
+      expect(map.tokens.filter((t) => t.sheetId === sheet!.id)).toHaveLength(0);
+    });
+
+    it("places a token for the sheet via spawnToken with its sheetId", () => {
+      let state = setupMatch();
+      const mapId = state.activeMapId!;
+      state = applyIntent(
+        state,
+        "dm-1",
+        { kind: "createSheet", characterName: "Valeros" },
+        1000,
+      )!.state;
+      const sheetId = Object.keys(state.sheets)[0];
+      state = applyIntent(
+        state,
+        "dm-1",
+        {
+          kind: "spawnToken",
+          mapId,
+          token: {
+            type: "NPCToken",
+            name: "ignored",
+            color: "#000000",
+            iconKind: "Initial",
+            x: 3,
+            y: 3,
+            sheetId,
+            hidden: false,
+          },
+        },
+        1001,
+      )!.state;
+      const token = state.maps
+        .filter(isFullMap)
+        .find((m) => m.id === mapId)!
+        .tokens.find((t) => t.sheetId === sheetId)!;
+      // The placed token inherits the sheet's identity.
+      expect(token.name).toBe("Valeros");
+      expect(token.color).toBe(state.sheets[sheetId].color);
     });
   });
 
@@ -336,10 +371,38 @@ describe("Character Sheet Domain & Rules (Phase 6)", () => {
   });
 
   describe("deleteSheet Intent", () => {
-    it("removes sheet and deletes its bound token (1:1 binding)", () => {
+    function placeToken(
+      state: DndMapperState,
+      mapId: string,
+      sheetId: string,
+      x = 2,
+      y = 2,
+    ): DndMapperState {
+      return applyIntent(
+        state,
+        "dm-1",
+        {
+          kind: "spawnToken",
+          mapId,
+          token: {
+            type: "NPCToken",
+            name: "x",
+            color: "#000000",
+            iconKind: "Initial",
+            x,
+            y,
+            sheetId,
+            hidden: false,
+          },
+        },
+        1001,
+      )!.state;
+    }
+
+    it("removes sheet and deletes ALL of its tokens across maps (N:1 binding)", () => {
       let state = setupMatch();
       const mapId = state.activeMapId!;
-      // Create sheet — its bound token spawns alongside it.
+      // Create sheet, then place two tokens for it on two maps.
       state = applyIntent(
         state,
         "dm-1",
@@ -347,47 +410,67 @@ describe("Character Sheet Domain & Rules (Phase 6)", () => {
         1000,
       )!.state;
       const sheetId = Object.keys(state.sheets)[0];
+      state = placeToken(state, mapId, sheetId, 2, 2);
+      state = applyIntent(state, "dm-1", { kind: "createMap", name: "Second" }, 1002)!.state;
+      const secondMapId = state.maps.filter(isFullMap).find((m) => m.name === "Second")!.id;
+      state = placeToken(state, secondMapId, sheetId, 4, 4);
 
-      const activeMap = state.maps.filter(isFullMap).find((m) => m.id === mapId)!;
-      const token = activeMap.tokens.find((t) => t.sheetId === sheetId);
-      expect(token).toBeDefined();
+      for (const id of [mapId, secondMapId]) {
+        const m = state.maps.filter(isFullMap).find((m) => m.id === id)!;
+        expect(m.tokens.filter((t) => t.sheetId === sheetId)).toHaveLength(1);
+      }
 
       // Delete sheet
-      const delRes = applyIntent(state, "dm-1", { kind: "deleteSheet", sheetId }, 1002);
+      const delRes = applyIntent(state, "dm-1", { kind: "deleteSheet", sheetId }, 1003);
       expect(delRes).not.toBeNull();
       state = delRes!.state;
 
       expect(state.sheets[sheetId]).toBeUndefined();
-      const updatedMap = state.maps.filter(isFullMap).find((m) => m.id === mapId)!;
-      expect(updatedMap.tokens.find((t) => t.id === token!.id)).toBeUndefined();
+      for (const id of [mapId, secondMapId]) {
+        const m = state.maps.filter(isFullMap).find((m) => m.id === id)!;
+        expect(m.tokens.filter((t) => t.sheetId === sheetId)).toHaveLength(0);
+      }
     });
 
-    it("removes the bound sheet when its token is deleted", () => {
+    it("keeps the sheet when one of its tokens is deleted", () => {
       let state = setupMatch();
       const mapId = state.activeMapId!;
       state = applyIntent(
         state,
         "dm-1",
-        { kind: "createSheet", characterName: "Doomed" },
+        { kind: "createSheet", characterName: "Survivor" },
         1000,
       )!.state;
       const sheetId = Object.keys(state.sheets)[0];
-      const token = state.maps
+      state = placeToken(state, mapId, sheetId, 2, 2);
+      state = placeToken(state, mapId, sheetId, 5, 5);
+      const tokens = state.maps
         .filter(isFullMap)
         .find((m) => m.id === mapId)!
-        .tokens.find((t) => t.sheetId === sheetId)!;
+        .tokens.filter((t) => t.sheetId === sheetId);
+      expect(tokens).toHaveLength(2);
 
-      const delRes = applyIntent(state, "dm-1", { kind: "deleteToken", tokenId: token.id }, 1001);
+      const delRes = applyIntent(
+        state,
+        "dm-1",
+        { kind: "deleteToken", tokenId: tokens[0].id },
+        1002,
+      );
       expect(delRes).not.toBeNull();
       state = delRes!.state;
 
-      expect(state.sheets[sheetId]).toBeUndefined();
-      const updatedMap = state.maps.filter(isFullMap).find((m) => m.id === mapId)!;
-      expect(updatedMap.tokens.find((t) => t.id === token.id)).toBeUndefined();
+      // The sheet and the sibling token survive.
+      expect(state.sheets[sheetId]).toBeDefined();
+      const remaining = state.maps
+        .filter(isFullMap)
+        .find((m) => m.id === mapId)!
+        .tokens.filter((t) => t.sheetId === sheetId);
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0].id).toBe(tokens[1].id);
     });
   });
 
-  describe("Token ↔ Sheet 1:1 Binding", () => {
+  describe("Token ↔ Sheet N:1 Binding", () => {
     function setupPaired(characterName = "Aria"): {
       state: DndMapperState;
       sheetId: string;
@@ -398,6 +481,25 @@ describe("Character Sheet Domain & Rules (Phase 6)", () => {
       const mapId = state.activeMapId!;
       state = applyIntent(state, "dm-1", { kind: "createSheet", characterName }, 1000)!.state;
       const sheetId = Object.keys(state.sheets)[0];
+      state = applyIntent(
+        state,
+        "dm-1",
+        {
+          kind: "spawnToken",
+          mapId,
+          token: {
+            type: "NPCToken",
+            name: "x",
+            color: "#000000",
+            iconKind: "Initial",
+            x: 2,
+            y: 2,
+            sheetId,
+            hidden: false,
+          },
+        },
+        1001,
+      )!.state;
       const token = state.maps
         .filter(isFullMap)
         .find((m) => m.id === mapId)!
@@ -412,7 +514,42 @@ describe("Character Sheet Domain & Rules (Phase 6)", () => {
         .tokens.find((t) => t.sheetId === sheetId)!;
     }
 
-    it("seeds the pair color from the sheet name", () => {
+    function boundTokens(state: DndMapperState, sheetId: string) {
+      return state.maps
+        .filter(isFullMap)
+        .flatMap((m) => m.tokens)
+        .filter((t) => t.sheetId === sheetId);
+    }
+
+    function placeToken(
+      state: DndMapperState,
+      mapId: string,
+      sheetId: string,
+      x = 6,
+      y = 6,
+    ): DndMapperState {
+      return applyIntent(
+        state,
+        "dm-1",
+        {
+          kind: "spawnToken",
+          mapId,
+          token: {
+            type: "NPCToken",
+            name: "x",
+            color: "#000000",
+            iconKind: "Initial",
+            x,
+            y,
+            sheetId,
+            hidden: false,
+          },
+        },
+        1001,
+      )!.state;
+    }
+
+    it("seeds the sheet color from the sheet name; placed tokens inherit it", () => {
       const { state, sheetId, mapId } = setupPaired("Aria");
       const sheet = state.sheets[sheetId];
       expect(sheet.colorOverridden).toBe(false);
@@ -420,24 +557,26 @@ describe("Character Sheet Domain & Rules (Phase 6)", () => {
       expect(boundToken(state, mapId, sheetId).color).toBe(sheet.color);
     });
 
-    it("propagates sheet rename to the token and reseeds color while not overridden", () => {
+    it("propagates sheet rename to ALL tokens and reseeds color while not overridden", () => {
       const bindingSetup = setupPaired("Aria");
       const { sheetId, mapId } = bindingSetup;
-      let state = bindingSetup.state;
+      let state = placeToken(bindingSetup.state, mapId, sheetId, 7, 7);
+      expect(boundTokens(state, sheetId)).toHaveLength(2);
       state = applyIntent(
         state,
         "dm-1",
         { kind: "updateSheet", sheetId, patch: { characterName: "Borin" } },
-        1001,
+        1002,
       )!.state;
 
       const sheet = state.sheets[sheetId];
       expect(sheet.characterName).toBe("Borin");
       expect(sheet.colorOverridden).toBe(false);
       expect(sheet.color).toBe(seedColorForName("Borin"));
-      const token = boundToken(state, mapId, sheetId);
-      expect(token.name).toBe("Borin");
-      expect(token.color).toBe(sheet.color);
+      for (const token of boundTokens(state, sheetId)) {
+        expect(token.name).toBe("Borin");
+        expect(token.color).toBe(sheet.color);
+      }
     });
 
     it("freezes the color on explicit pick; later renames keep the manual color", () => {
@@ -466,85 +605,175 @@ describe("Character Sheet Domain & Rules (Phase 6)", () => {
       expect(token.color).toBe("#112233");
     });
 
-    it("mirrors token name/color edits onto the sheet", () => {
+    it("mirrors token name/color edits onto the sheet and all sibling tokens", () => {
       const bindingSetup = setupPaired("Aria");
       const { sheetId, mapId, tokenId } = bindingSetup;
-      let state = bindingSetup.state;
+      let state = placeToken(bindingSetup.state, mapId, sheetId, 7, 7);
       state = applyIntent(
         state,
         "dm-1",
         { kind: "updateToken", tokenId, patch: { name: "Aria the Bold", color: "#445566" } },
-        1001,
+        1002,
       )!.state;
 
       const sheet = state.sheets[sheetId];
       expect(sheet.characterName).toBe("Aria the Bold");
       expect(sheet.color).toBe("#445566");
       expect(sheet.colorOverridden).toBe(true);
-      expect(boundToken(state, mapId, sheetId).name).toBe("Aria the Bold");
+      for (const token of boundTokens(state, sheetId)) {
+        expect(token.name).toBe("Aria the Bold");
+        expect(token.color).toBe("#445566");
+      }
     });
 
-    it("shares player assignation both ways, including unassign", () => {
+    it("assigning the sheet cascades ownership to ALL of its tokens", () => {
       const bindingSetup = setupPaired("Aria");
       const { sheetId, mapId } = bindingSetup;
-      let state = bindingSetup.state;
+      let state = placeToken(bindingSetup.state, mapId, sheetId, 7, 7);
 
-      // Assign the sheet → the token follows (and becomes a player token).
+      // Assign the sheet → every token follows (and becomes a player token).
       state = applyIntent(
         state,
         "dm-1",
         { kind: "assignCharacterToPlayer", sheetId, playerId: "player-1" },
-        1001,
+        1002,
       )!.state;
       expect(state.sheets[sheetId].ownerUserId).toBe("player-1");
-      let token = boundToken(state, mapId, sheetId);
-      expect(token.ownerUserId).toBe("player-1");
-      expect(token.type).toBe("PlayerToken");
+      for (const token of boundTokens(state, sheetId)) {
+        expect(token.ownerUserId).toBe("player-1");
+        expect(token.type).toBe("PlayerToken");
+      }
+    });
 
-      // Unassign the token → the sheet follows (and the token becomes an NPC).
+    it("reassigning one token re-links ONLY that token to the target sheet", () => {
+      const bindingSetup = setupPaired("Aria");
+      const { sheetId, mapId } = bindingSetup;
+      let state = placeToken(bindingSetup.state, mapId, sheetId, 7, 7);
+      // Aria's sheet owns two tokens; give both to player-1 via the sheet.
       state = applyIntent(
         state,
         "dm-1",
-        { kind: "reassignTokenOwner", tokenId: token.id, newOwnerUserId: null },
+        { kind: "assignCharacterToPlayer", sheetId, playerId: "player-1" },
         1002,
       )!.state;
-      expect(state.sheets[sheetId].ownerUserId).toBeNull();
-      token = boundToken(state, mapId, sheetId);
-      expect(token.ownerUserId).toBeNull();
-      expect(token.type).toBe("NPCToken");
+      // Create Bob's sheet (player-2 owns it via DM assign).
+      state = applyIntent(state, "dm-1", { kind: "createSheet", characterName: "Bob" }, 1003)!.state;
+      const bobSheetId = Object.keys(state.sheets).find((id) => id !== sheetId)!;
+      state = applyIntent(
+        state,
+        "dm-1",
+        { kind: "assignCharacterToPlayer", sheetId: bobSheetId, playerId: "player-2" },
+        1004,
+      )!.state;
+
+      const ariaTokens = boundTokens(state, sheetId);
+      expect(ariaTokens).toHaveLength(2);
+      // Move exactly one of Aria's tokens to Bob's sheet.
+      state = applyIntent(
+        state,
+        "dm-1",
+        { kind: "reassignTokenSheet", tokenId: ariaTokens[0].id, sheetId: bobSheetId },
+        1005,
+      )!.state;
+
+      const moved = state.maps
+        .filter(isFullMap)
+        .find((m) => m.id === mapId)!
+        .tokens.find((t) => t.id === ariaTokens[0].id)!;
+      expect(moved.sheetId).toBe(bobSheetId);
+      expect(moved.ownerUserId).toBe("player-2");
+      expect(moved.type).toBe("PlayerToken");
+      expect(moved.name).toBe("Bob");
+      // The sibling stays on Aria's sheet, untouched.
+      const stayed = state.maps
+        .filter(isFullMap)
+        .find((m) => m.id === mapId)!
+        .tokens.find((t) => t.id === ariaTokens[1].id)!;
+      expect(stayed.sheetId).toBe(sheetId);
+      expect(stayed.ownerUserId).toBe("player-1");
+      expect(stayed.name).toBe("Aria");
+      // Neither sheet changed owners.
+      expect(state.sheets[sheetId].ownerUserId).toBe("player-1");
+      expect(state.sheets[bobSheetId].ownerUserId).toBe("player-2");
     });
 
-    it("duplicateSheet clones the pair with fresh ids", () => {
+    it("unassigning one token keeps the sheet and siblings intact", () => {
+      const bindingSetup = setupPaired("Aria");
+      const { sheetId, mapId } = bindingSetup;
+      let state = placeToken(bindingSetup.state, mapId, sheetId, 7, 7);
+      state = applyIntent(
+        state,
+        "dm-1",
+        { kind: "assignCharacterToPlayer", sheetId, playerId: "player-1" },
+        1002,
+      )!.state;
+      const ariaTokens = boundTokens(state, sheetId);
+      state = applyIntent(
+        state,
+        "dm-1",
+        { kind: "reassignTokenSheet", tokenId: ariaTokens[0].id, sheetId: null },
+        1003,
+      )!.state;
+      const unassigned = state.maps
+        .filter(isFullMap)
+        .find((m) => m.id === mapId)!
+        .tokens.find((t) => t.id === ariaTokens[0].id)!;
+      expect(unassigned.ownerUserId).toBeNull();
+      expect(unassigned.type).toBe("NPCToken");
+      expect(unassigned.representsUserId).toBe("player-1");
+      // Sheet and sibling untouched.
+      expect(state.sheets[sheetId].ownerUserId).toBe("player-1");
+      const sibling = state.maps
+        .filter(isFullMap)
+        .find((m) => m.id === mapId)!
+        .tokens.find((t) => t.id === ariaTokens[1].id)!;
+      expect(sibling.ownerUserId).toBe("player-1");
+      expect(sibling.type).toBe("PlayerToken");
+    });
+
+    it("rejects reassigning to an unknown sheet", () => {
+      const { state, tokenId } = setupPaired("Aria");
+      const res = applyIntent(
+        state,
+        "dm-1",
+        { kind: "reassignTokenSheet", tokenId, sheetId: "sheet-missing" },
+        1002,
+      );
+      expect(res).toBeNull();
+    });
+
+    it("duplicateSheet clones the sheet without spawning a token", () => {
       const bindingSetup = setupPaired("Aria");
       const { sheetId, mapId } = bindingSetup;
       let state = bindingSetup.state;
-      state = applyIntent(state, "dm-1", { kind: "duplicateSheet", sheetId }, 1001)!.state;
+      state = applyIntent(state, "dm-1", { kind: "duplicateSheet", sheetId }, 1002)!.state;
 
       const ids = Object.keys(state.sheets);
       expect(ids).toHaveLength(2);
       const cloneId = ids.find((id) => id !== sheetId)!;
       expect(state.sheets[cloneId].characterName).toBe("Aria (copy)");
-      const cloneToken = boundToken(state, mapId, cloneId);
-      expect(cloneToken.name).toBe("Aria (copy)");
-      expect(cloneToken.color).toBe(state.sheets[cloneId].color);
-      // Original pair untouched.
+      // No token for the clone; original pair untouched.
+      expect(boundTokens(state, cloneId)).toHaveLength(0);
       expect(boundToken(state, mapId, sheetId).name).toBe("Aria");
     });
 
-    it("duplicateToken clones the pair with fresh ids", () => {
+    it("duplicateToken clones the token for the SAME sheet", () => {
       const bindingSetup = setupPaired("Aria");
       const { sheetId, mapId, tokenId } = bindingSetup;
       let state = bindingSetup.state;
-      state = applyIntent(state, "dm-1", { kind: "duplicateToken", tokenId }, 1001)!.state;
+      state = applyIntent(state, "dm-1", { kind: "duplicateToken", tokenId }, 1002)!.state;
 
-      const ids = Object.keys(state.sheets);
-      expect(ids).toHaveLength(2);
-      const cloneId = ids.find((id) => id !== sheetId)!;
-      expect(state.sheets[cloneId].characterName).toBe("Aria (copy)");
-      expect(boundToken(state, mapId, cloneId).name).toBe("Aria (copy)");
+      // No new sheet — the clone shares Aria's sheet.
+      expect(Object.keys(state.sheets)).toHaveLength(1);
+      const tokens = boundTokens(state, sheetId);
+      expect(tokens).toHaveLength(2);
+      const clone = tokens.find((t) => t.id !== tokenId)!;
+      expect(clone.name).toBe("Aria");
+      expect(clone.color).toBe(state.sheets[sheetId].color);
+      expect(clone.x).not.toBe(boundToken(state, mapId, sheetId).x);
     });
 
-    it("spawnToken creates the counterpart sheet", () => {
+    it("spawnToken without a sheet creates the counterpart sheet", () => {
       let state = setupMatch();
       const mapId = state.activeMapId!;
       state = applyIntent(

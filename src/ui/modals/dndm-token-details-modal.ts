@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { Token } from "../../game/domain";
+import type { CharacterSheet, Token } from "../../game/domain";
 import { GameElement } from "../app/GameElement";
 import "./dndm-confirm";
 import "./dndm-modal";
@@ -15,6 +15,9 @@ export class DndmTokenDetailsModal extends GameElement {
 
   @property({ attribute: false })
   roster: readonly { id: string; name: string }[] = [];
+
+  @property({ attribute: false })
+  sheets: Readonly<Record<string, CharacterSheet>> = {};
 
   @property({ type: String })
   dmPlayerId: string | null = null;
@@ -32,7 +35,7 @@ export class DndmTokenDetailsModal extends GameElement {
   onToggleHidden?: (tokenId: string, hidden: boolean) => void;
 
   @property({ attribute: false })
-  onReassignOwner?: (tokenId: string, newOwnerUserId: string | null) => void;
+  onReassignTokenSheet?: (tokenId: string, sheetId: string | null) => void;
 
   @property({ attribute: false })
   onDeleteToken?: (tokenId: string) => void;
@@ -121,16 +124,15 @@ export class DndmTokenDetailsModal extends GameElement {
     const val = (e.target as HTMLSelectElement).value;
     const next = val ? val : null;
     this.dispatchEvent(
-      new CustomEvent<{ tokenId: string; newOwnerUserId: string | null }>(
-        "reassign-token-owner",
+      new CustomEvent<{ tokenId: string; sheetId: string | null }>(
+        "reassign-token-sheet",
         {
           bubbles: true,
           composed: true,
-          detail: { tokenId: this.token.id, newOwnerUserId: next },
-        },
-      ),
+          detail: { tokenId: this.token.id, sheetId: next },
+        }),
     );
-    this.onReassignOwner?.(this.token.id, next);
+    this.onReassignTokenSheet?.(this.token.id, next);
   };
 
   private handleDelete = (): void => {
@@ -147,13 +149,10 @@ export class DndmTokenDetailsModal extends GameElement {
   override render(): TemplateResult {
     const t = this.token;
     const isPlayer = t?.type === "PlayerToken";
+    const linkedSheet = t?.sheetId ? (this.sheets[t.sheetId] ?? null) : null;
     const ownerName = t?.ownerUserId
       ? (this.roster.find((p) => p.id === t.ownerUserId)?.name ?? t.ownerUserId)
       : null;
-    // The host is not a player, so it is never an assignable owner. Name
-    // lookups above intentionally keep the full roster for legacy tokens.
-    const assignableRoster =
-      this.dmPlayerId === null ? this.roster : this.roster.filter((p) => p.id !== this.dmPlayerId);
 
     return html`
       <dndm-modal
@@ -233,21 +232,27 @@ export class DndmTokenDetailsModal extends GameElement {
                       </label>
 
                       <label class="dndm-label">
-                        Owner
+                        Character sheet
                         <select
                           class="dndm-select"
                           style="width: 100%; margin-top: 4px;"
-                          .value=${t.ownerUserId ?? ""}
+                          .value=${t.sheetId ?? ""}
                           @change=${this.handleReassign}
                         >
                           <option value="">Unassigned (NPC / DM Controlled)</option>
-                          ${assignableRoster.map(
-                            (p) => html`<option value=${p.id}>${p.name}</option>`,
+                          ${Object.values(this.sheets).map(
+                            (s) => html`<option value=${s.id}>${s.characterName}</option>`,
                           )}
                         </select>
                       </label>
                     `
                   : html`
+                      <div class="dndm-label">
+                        Character sheet
+                        <div style="margin-top: 4px; color: var(--dndm-text-dim);">
+                          ${linkedSheet?.characterName ?? "Unassigned (NPC / DM Controlled)"}
+                        </div>
+                      </div>
                       <div class="dndm-label">
                         Owner
                         <div style="margin-top: 4px; color: var(--dndm-text-dim);">
@@ -336,7 +341,7 @@ export class DndmTokenDetailsModal extends GameElement {
       <dndm-confirm
         .isOpen=${this.confirmDelete}
         modalTitle="Delete token?"
-        message=${`This removes "${t?.name}" from the map. Its linked character sheet will also be deleted.`}
+        message=${`This removes "${t?.name}" from the map. Its character sheet will be kept.`}
         confirmText="Delete"
         @confirm=${this.handleDelete}
         @cancel=${() => {

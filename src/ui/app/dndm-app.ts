@@ -1205,8 +1205,8 @@ export class DndmApp extends GameElement {
                   .onToggleHidden=${(id: string, hidden: boolean) =>
                     this.send({ kind: "setTokenHidden", tokenId: id, hidden })}
                   .onDeleteToken=${(id: string) => this.send({ kind: "removeToken", tokenId: id })}
-                  .onReassignOwner=${(tokenId: string, newOwnerUserId: string | null) =>
-                    this.send({ kind: "reassignTokenOwner", tokenId, newOwnerUserId })}
+                  .onReassignTokenSheet=${(tokenId: string, sheetId: string | null) =>
+                    this.send({ kind: "reassignTokenSheet", tokenId, sheetId })}
                 ></dndm-token-rail>
               `
             : nothing}
@@ -1371,6 +1371,29 @@ export class DndmApp extends GameElement {
               .onDeleteSheet=${(sheetId: string) => this.send({ kind: "deleteSheet", sheetId })}
               .onDuplicateSheet=${(sheetId: string) =>
                 this.send({ kind: "duplicateSheet", sheetId })}
+              .onPlaceToken=${(sheetId: string) => {
+                const map = this.activeMap;
+                const sheet = this.match.sheets[sheetId];
+                if (!map || !sheet) return;
+                const spawn = map.defaultSpawnPosition ?? {
+                  x: Math.floor(map.grid.widthCells / 2) + 0.5,
+                  y: Math.floor(map.grid.heightCells / 2) + 0.5,
+                };
+                this.send({
+                  kind: "spawnToken",
+                  mapId: map.id,
+                  token: {
+                    type: sheet.ownerUserId !== null ? "PlayerToken" : "NPCToken",
+                    name: sheet.characterName,
+                    color: sheet.color,
+                    iconKind: "Initial",
+                    x: spawn.x,
+                    y: spawn.y,
+                    sheetId,
+                    hidden: false,
+                  },
+                });
+              }}
               .onUpdateAttributeValues=${(
                 sheetId: string,
                 values: Readonly<Record<string, AttributeValue>>,

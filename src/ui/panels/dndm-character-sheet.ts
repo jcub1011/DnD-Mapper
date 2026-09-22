@@ -123,6 +123,9 @@ export class DndmCharacterSheet extends GameElement {
   onDuplicateSheet?: (sheetId: string) => void;
 
   @property({ attribute: false })
+  onPlaceToken?: (sheetId: string) => void;
+
+  @property({ attribute: false })
   onUpdateAttributeValues?: (sheetId: string, values: Readonly<Record<string, AttributeValue>>) => void;
 
   @property({ attribute: false })
@@ -248,6 +251,17 @@ export class DndmCharacterSheet extends GameElement {
       }),
     );
     this.onDuplicateSheet?.(sheetId);
+  }
+
+  private handlePlaceToken(sheetId: string): void {
+    this.dispatchEvent(
+      new CustomEvent<{ sheetId: string }>("place-token", {
+        bubbles: true,
+        composed: true,
+        detail: { sheetId },
+      }),
+    );
+    this.onPlaceToken?.(sheetId);
   }
 
   private handleDeleteSheet(sheetId: string): void {
@@ -424,7 +438,13 @@ export class DndmCharacterSheet extends GameElement {
 
     const activeSheet = this.selectedSheetId ? this.sheets[this.selectedSheetId] : null;
     const canViewActive = activeSheet ? mayViewSheet(state, userId, activeSheet) : false;
-    const selectedSheet = canViewActive ? activeSheet : null;
+    // The open sheet must stay a member of the roster list: a sheet filtered
+    // out by scope or search is not shown open (the selection id is retained,
+    // so it reopens when the filter changes back).
+    const selectedSheet =
+      canViewActive && activeSheet && filteredSheets.some((s) => s.id === activeSheet.id)
+        ? activeSheet
+        : null;
 
     return html`
       <div class="dndm-sheet-panel">
@@ -648,6 +668,15 @@ export class DndmCharacterSheet extends GameElement {
           : nothing}
         ${this.isDm
           ? html`
+              <button
+                class="dndm-btn dndm-btn--subtle"
+                title="Place a token for this sheet on the active map"
+                style="padding: 2px 6px; font-size: 0.8rem;"
+                ?disabled=${!this.activeMapId}
+                @click=${() => this.handlePlaceToken(sheet.id)}
+              >
+                Place token
+              </button>
               <button
                 class="dndm-btn dndm-btn--subtle"
                 title="Duplicate Sheet"

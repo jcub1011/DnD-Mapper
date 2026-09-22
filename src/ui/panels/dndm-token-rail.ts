@@ -52,7 +52,7 @@ export class DndmTokenRail extends GameElement {
   onUpdateToken?: (tokenId: string, patch: { name?: string; color?: string; iconKind?: "Initial" | "Solid" }) => void;
 
   @property({ attribute: false })
-  onReassignOwner?: (tokenId: string, newOwnerUserId: string | null) => void;
+  onReassignTokenSheet?: (tokenId: string, sheetId: string | null) => void;
 
   @property({ attribute: false })
   onDeleteToken?: (tokenId: string) => void;
@@ -394,12 +394,13 @@ export class DndmTokenRail extends GameElement {
       <dndm-token-details-modal
         ?isOpen=${this.selectedToken !== null}
         .token=${this.selectedToken}
+        .sheets=${this.sheets}
         .roster=${this.roster}
         .dmPlayerId=${this.dmPlayerId}
         .isDm=${this.isDm}
         .onUpdateToken=${this.onUpdateToken}
         .onToggleHidden=${this.onToggleHidden}
-        .onReassignOwner=${this.onReassignOwner}
+        .onReassignTokenSheet=${this.onReassignTokenSheet}
         .onDeleteToken=${this.onDeleteToken}
         .onCenterOnToken=${this.onCenterOnToken}
         .onClose=${() => this.closeDetails()}

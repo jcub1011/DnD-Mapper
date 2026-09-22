@@ -272,15 +272,16 @@ describe("applyIntent — maps & tokens", () => {
     expect(moved.x).toBe(10.5);
     expect(moved.y).toBe(15.5);
 
-    // Remove token — the 1:1 binding deletes the bound sheet as well.
+    // Remove token — the N:1 binding keeps the sheet; only the token goes,
+    // so the patch is the narrow `tokenRemoved`.
     const sheetId = token.sheetId!;
     const removeRes = applyIntent(state, "dm-1", { kind: "removeToken", tokenId: token.id }, 3200);
     expect(removeRes).not.toBeNull();
     state = removeRes!.state;
-    if (removeRes!.patch?.kind !== "full") throw new Error("expected full patch");
+    if (removeRes!.patch?.kind !== "tokenRemoved") throw new Error("expected tokenRemoved patch");
     const activeMap = state.maps.find((m) => m.id === mapId) as GameMap;
     expect(activeMap.tokens).toHaveLength(0);
-    expect(state.sheets[sheetId]).toBeUndefined();
+    expect(state.sheets[sheetId]).toBeDefined();
   });
 });
 
@@ -592,13 +593,14 @@ describe("Phase 9: Combat & Initiative Rules", () => {
     const playerToken = (state.maps.find((m) => m.id === mapId) as GameMap).tokens.find(
       (t) => t.name === "AliceHero",
     )!;
+    // Assign the spawned sheet to player-1 (cascades to its token).
     const upRes = applyIntent(
       state,
       "dm-1",
       {
-        kind: "updateToken",
-        tokenId: playerToken.id,
-        patch: { ownerUserId: "player-1" },
+        kind: "assignSheetOwner",
+        sheetId: playerToken.sheetId!,
+        ownerUserId: "player-1",
       },
       1050,
     );

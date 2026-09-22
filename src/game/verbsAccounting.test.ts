@@ -183,7 +183,7 @@ describe("84 Authority Verbs Complete Accounting", () => {
     { category: "Tokens", verb: "reorderTokens", makeIntent: () => ({ kind: "reorderTokens", mapId: "map-1", tokenIds: ["tok-1"] }) },
     { category: "Tokens", verb: "duplicateToken", makeIntent: () => ({ kind: "duplicateToken", tokenId: "tok-1" }) },
     { category: "Tokens", verb: "spawnPlayerToken", makeIntent: () => ({ kind: "spawnPlayerToken", playerId: "p-2", name: "Player 2" }) },
-    { category: "Tokens", verb: "reassignTokenOwner", makeIntent: () => ({ kind: "reassignTokenOwner", tokenId: "tok-1", newOwnerUserId: "p-2" }) },
+    { category: "Tokens", verb: "reassignTokenSheet", makeIntent: () => ({ kind: "reassignTokenSheet", tokenId: "tok-1", sheetId: "sheet-1" }) },
     { category: "Tokens", verb: "deleteToken", makeIntent: () => ({ kind: "deleteToken", tokenId: "tok-1" }) },
 
     // 4. Images (5)

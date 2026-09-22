@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { GameMap, Token } from "../../game/domain";
+import type { CharacterSheet, GameMap, Token } from "../../game/domain";
 import { GameElement } from "../app/GameElement";
 import { eyeIcon, glyphIcon, trashIcon } from "../icons";
 import "../modals/dndm-confirm";
@@ -18,6 +18,9 @@ export class DndmTokenPanel extends GameElement {
   @property({ attribute: false })
   roster: readonly { id: string; name: string }[] = [];
 
+  @property({ attribute: false })
+  sheets: Readonly<Record<string, CharacterSheet>> = {};
+
   @property({ type: String })
   dmPlayerId: string | null = null;
 
@@ -34,7 +37,7 @@ export class DndmTokenPanel extends GameElement {
   onDeleteToken?: (tokenId: string) => void;
 
   @property({ attribute: false })
-  onReassignOwner?: (tokenId: string, newOwnerUserId: string | null) => void;
+  onReassignTokenSheet?: (tokenId: string, sheetId: string | null) => void;
 
   @state() private pendingDeleteToken: Token | null = null;
 
@@ -94,23 +97,20 @@ export class DndmTokenPanel extends GameElement {
     this.onDeleteToken?.(id);
   }
 
-  private handleReassignOwner(tokenId: string, newOwnerUserId: string | null): void {
+  private handleReassignSheet(tokenId: string, sheetId: string | null): void {
     this.dispatchEvent(
-      new CustomEvent<{ tokenId: string; newOwnerUserId: string | null }>("reassign-token-owner", {
+      new CustomEvent<{ tokenId: string; sheetId: string | null }>("reassign-token-sheet", {
         bubbles: true,
         composed: true,
-        detail: { tokenId, newOwnerUserId },
+        detail: { tokenId, sheetId },
       }),
     );
-    this.onReassignOwner?.(tokenId, newOwnerUserId);
+    this.onReassignTokenSheet?.(tokenId, sheetId);
   }
 
   override render(): TemplateResult {
     const tokens = this.activeMap?.tokens ?? [];
-    // The host is not a player, so it is never an assignable owner. Name
-    // lookups below intentionally keep the full roster for legacy tokens.
-    const assignableRoster =
-      this.dmPlayerId === null ? this.roster : this.roster.filter((p) => p.id !== this.dmPlayerId);
+    const sheetList = Object.values(this.sheets);
 
     return html`
       <dndm-collapsible-panel
@@ -147,22 +147,22 @@ export class DndmTokenPanel extends GameElement {
                         : nothing}
                     </div>
                     <span class="dndm-tokenp-tag">${isPlayer ? "Player" : "NPC"}</span>
-                    ${this.isDm && t.ownerUserId === null
+                    ${this.isDm
                       ? html`
                           <select
                             class="dndm-select dndm-select--small"
                             style="font-size: 0.75rem; padding: 1px 4px; max-width: 90px;"
-                            title="Assign Owner"
+                            title="Reassign to a character sheet (moves only this token)"
                             @click=${(e: Event) => e.stopPropagation()}
                             @change=${(e: Event) => {
                               e.stopPropagation();
                               const val = (e.target as HTMLSelectElement).value;
-                              this.handleReassignOwner(t.id, val || null);
+                              this.handleReassignSheet(t.id, val || null);
                             }}
                           >
                             <option value="">Assign...</option>
-                            ${assignableRoster.map(
-                              (p) => html`<option value=${p.id}>${p.name}</option>`,
+                            ${sheetList.map(
+                              (s) => html`<option value=${s.id}>${s.characterName}</option>`,
                             )}
                           </select>
                         `
@@ -206,7 +206,7 @@ export class DndmTokenPanel extends GameElement {
       <dndm-confirm
         ?isOpen=${this.pendingDeleteToken !== null}
         modalTitle="Delete token?"
-        message=${`This removes "${this.pendingDeleteToken?.name}" from the map. Its linked character sheet will also be deleted.`}
+        message=${`This removes "${this.pendingDeleteToken?.name}" from the map. Its character sheet will be kept.`}
         confirmText="Delete"
         .onConfirm=${() => this.confirmDelete()}
         .onCancel=${() => {

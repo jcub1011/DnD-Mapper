@@ -176,4 +176,52 @@ describe("<dndm-character-sheet>", () => {
     // Player 1 cannot see NPC Goblin chip
     expect(el.textContent).not.toContain("Goblin");
   });
+
+  it("closes the open sheet when map scope filters it out of the list", async () => {
+    const scoped = { ...makeSheet("sheet-scoped", "Shopkeep"), scopedMapId: "map-a" };
+    el.sheets = { "sheet-scoped": scoped };
+    el.selectedSheetId = "sheet-scoped";
+    el.activeMapId = "map-b";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    // Scoped to another map: no chip, no open body — but selection retained.
+    expect(el.textContent).not.toContain("Shopkeep");
+    expect(el.querySelector(".dndm-sheet-name-input")).toBeNull();
+    expect(el.selectedSheetId).toBe("sheet-scoped");
+
+    // Returning to the scoped map restores the open sheet.
+    el.activeMapId = "map-a";
+    await el.updateComplete;
+    const nameInput = el.querySelector(".dndm-sheet-name-input") as HTMLInputElement;
+    expect(nameInput).not.toBeNull();
+    expect(nameInput.value).toBe("Shopkeep");
+  });
+
+  it("closes the open sheet while the search query excludes it", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin");
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+    expect(el.querySelector(".dndm-sheet-name-input")).not.toBeNull();
+
+    const search = el.querySelector(".dndm-sheet-search") as HTMLInputElement;
+    search.value = "zzz-no-match";
+    search.dispatchEvent(new Event("input"));
+    await el.updateComplete;
+    expect(el.querySelector(".dndm-sheet-name-input")).toBeNull();
+    expect(el.selectedSheetId).toBe("sheet-1");
+
+    search.value = "";
+    search.dispatchEvent(new Event("input"));
+    await el.updateComplete;
+    expect(el.querySelector(".dndm-sheet-name-input")).not.toBeNull();
+  });
 });

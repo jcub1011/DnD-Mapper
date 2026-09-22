@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import "fake-indexeddb/auto";
 import { describe, expect, it, vi } from "vitest";
-import type { GameMap, MapImage, Token } from "../../game/domain";
+import type { CharacterSheet, GameMap, MapImage, Token } from "../../game/domain";
 import "../canvas/dndm-toolbar";
 import type { DndmToolbar } from "../canvas/dndm-toolbar";
 import "../canvas/dndm-image-inspector";
@@ -220,7 +220,7 @@ describe("UI Panels and Canvas Controls (07 — UI Shell)", () => {
       el.remove();
     });
 
-    it("excludes the host from assignable owners", async () => {
+    it("lists character sheets for token reassignment", async () => {
       const el = document.createElement("dndm-token-panel") as DndmTokenPanel;
       const token1: Token = {
         id: "t1",
@@ -239,11 +239,10 @@ describe("UI Panels and Canvas Controls (07 — UI Shell)", () => {
 
       el.activeMap = makeMap("m1", "Dungeon", [token1]);
       el.isDm = true;
-      el.dmPlayerId = "dm-user";
-      el.roster = [
-        { id: "dm-user", name: "Dungeon Master" },
-        { id: "u1", name: "Gimli" },
-      ];
+      el.sheets = {
+        "s1": { id: "s1", characterName: "Aria" } as unknown as CharacterSheet,
+        "s2": { id: "s2", characterName: "Bob" } as unknown as CharacterSheet,
+      };
 
       document.body.appendChild(el);
       await el.updateComplete;
@@ -251,8 +250,8 @@ describe("UI Panels and Canvas Controls (07 — UI Shell)", () => {
       const select = el.querySelector("select") as HTMLSelectElement;
       expect(select).not.toBeNull();
       const options = Array.from(select.querySelectorAll("option")).map((o) => o.textContent);
-      expect(options).toContain("Gimli");
-      expect(options).not.toContain("Dungeon Master");
+      expect(options).toContain("Aria");
+      expect(options).toContain("Bob");
 
       el.remove();
     });

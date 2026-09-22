@@ -239,7 +239,7 @@ export class DndmSheetSettingsModal extends GameElement {
       <dndm-confirm
         .isOpen=${this.confirmDelete}
         modalTitle="Delete Character Sheet"
-        message="Are you sure you want to delete '${this.sheet?.characterName}'? Its linked token will also be deleted."
+        message=${`Are you sure you want to delete '${this.sheet?.characterName}'? All tokens linked to it, on every map, will also be deleted.`}
         confirmText="Delete"
         @confirm=${this.handleDelete}
         @cancel=${() => {

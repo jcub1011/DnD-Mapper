@@ -79,7 +79,7 @@ export type Intent =
   | { readonly kind: "reorderTokens"; readonly mapId: string; readonly tokenIds: readonly string[] }
   | { readonly kind: "duplicateToken"; readonly tokenId: string }
   | { readonly kind: "spawnPlayerToken"; readonly playerId: string; readonly mapId?: string; readonly name?: string; readonly color?: string }
-  | { readonly kind: "reassignTokenOwner"; readonly tokenId: string; readonly newOwnerUserId: string | null }
+  | { readonly kind: "reassignTokenSheet"; readonly tokenId: string; readonly sheetId: string | null }
   | { readonly kind: "setTokenHidden"; readonly tokenId: string; readonly hidden: boolean }
   // images
   | {

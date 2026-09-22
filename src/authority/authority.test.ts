@@ -226,7 +226,7 @@ describe("snapshot-size budget test (worst-case campaign)", () => {
       maps.push(buildHeavyMap(`heavy-map-${i}`, `Massive Dungeon Level ${i}`));
     }
 
-    // 1:1 binding: every token ships its character sheet, so the commit
+    // N:1 binding: every token ships its character sheet, so the commit
     // backfill synthesizes nothing and the frame stays small.
     const sheets: Record<string, CharacterSheet> = {};
     for (const map of maps) {
