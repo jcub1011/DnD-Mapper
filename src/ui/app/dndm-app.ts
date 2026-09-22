@@ -53,7 +53,7 @@ import "../panels/dndm-host-initiative";
 import "../panels/dndm-initiative-banner";
 import "../panels/dndm-quick-roll-footer";
 import "../panels/dndm-saves-panel";
-import "../panels/dndm-token-panel";
+import "../panels/dndm-token-rail";
 import "../toast/dndm-toast";
 import "../upload/dndm-image-upload";
 import "../markup/dndm-markup-overlay";
@@ -838,23 +838,6 @@ export class DndmApp extends GameElement {
                       this.send({ kind: "updateGrid", mapId: id, grid })}
                     ></dndm-map-list>
 
-                    <dndm-token-panel
-                      .activeMap=${active}
-                      .isDm=${this.isDm}
-                      .roster=${this.roster}
-                      .onCenterOnToken=${(x: number, y: number) => {
-                      fx.map()?.centerOn(x, y);
-                    }}
-                      .onToggleIcon=${(id: string, iconKind: "Initial" | "Solid") =>
-                      this.send({ kind: "updateToken", tokenId: id, patch: { iconKind } })}
-                      .onToggleHidden=${(id: string, hidden: boolean) =>
-                      this.send({ kind: "setTokenHidden", tokenId: id, hidden })}
-                      .onDeleteToken=${(id: string) =>
-                      this.send({ kind: "removeToken", tokenId: id })}
-                      .onReassignOwner=${(tokenId: string, newOwnerUserId: string | null) =>
-                      this.send({ kind: "reassignTokenOwner", tokenId, newOwnerUserId })}
-                    ></dndm-token-panel>
-
                     <dndm-layer-panel
                       .activeMap=${active}
                       .selectedImageId=${this.selectedImageId}
@@ -1173,6 +1156,30 @@ export class DndmApp extends GameElement {
                 }
                 `
           }
+
+          ${active
+            ? html`
+                <dndm-token-rail
+                  .tokens=${active.tokens}
+                  .sheets=${this.match.sheets}
+                  .roster=${this.roster}
+                  .currentUserId=${this.controller?.playerId ?? null}
+                  .isDm=${this.isDm}
+                  .onCenterOnToken=${(x: number, y: number) => {
+                    fx.map()?.centerOn(x, y);
+                  }}
+                  .onUpdateToken=${(
+                    id: string,
+                    patch: { name?: string; color?: string; iconKind?: "Initial" | "Solid" },
+                  ) => this.send({ kind: "updateToken", tokenId: id, patch })}
+                  .onToggleHidden=${(id: string, hidden: boolean) =>
+                    this.send({ kind: "setTokenHidden", tokenId: id, hidden })}
+                  .onDeleteToken=${(id: string) => this.send({ kind: "removeToken", tokenId: id })}
+                  .onReassignOwner=${(tokenId: string, newOwnerUserId: string | null) =>
+                    this.send({ kind: "reassignTokenOwner", tokenId, newOwnerUserId })}
+                ></dndm-token-rail>
+              `
+            : nothing}
 
           <dndm-quick-roll-footer
             .state=${this.match}
