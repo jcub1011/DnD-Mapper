@@ -254,7 +254,9 @@ export class TokenLayer {
     const radius = TOKEN_RADIUS * CELL;
     const sheet = token.sheetId ? this.sheets[token.sheetId] : null;
     const effectiveColor = sheet?.color && sheet.color.trim().length > 0 ? sheet.color : token.color;
-    const colorInt = parseInt(effectiveColor.replace("#", ""), 16) || 0x888888;
+    // NaN check (not `||`): black (0x000000) is a valid token color.
+    const parsedTokenColor = parseInt(effectiveColor.replace("#", ""), 16);
+    const colorInt = Number.isNaN(parsedTokenColor) ? 0x888888 : parsedTokenColor;
 
     // 1. Owner Halo
     if (token.ownerUserId) {
@@ -487,7 +489,9 @@ export class TokenLayer {
       const chipContainer = this.scene.add.container(chip.x * CELL, chip.y * CELL);
       const chipSheet = t.sheetId ? this.sheets[t.sheetId] : null;
       const chipColor = chipSheet?.color && chipSheet.color.trim().length > 0 ? chipSheet.color : t.color;
-      const colorInt = parseInt(chipColor.replace("#", ""), 16) || 0x888888;
+      // NaN check (not `||`): black (0x000000) is a valid token color.
+      const parsedChipColor = parseInt(chipColor.replace("#", ""), 16);
+      const colorInt = Number.isNaN(parsedChipColor) ? 0x888888 : parsedChipColor;
 
       const g = this.scene.add.graphics();
       g.fillStyle(colorInt, 1);

@@ -1,17 +1,25 @@
-/* Freehand vector markup canvas & palette */
+/* Freehand vector markup canvas & palette.
+   The overlay host and wrapper are display:contents so the palette flows
+   as an in-flow item of .dndm-canvas-top-stack (below the header toolbar,
+   shifting when the header wraps), while the drawing surface stays
+   fullscreen behind the stack. */
+
+dndm-markup-overlay {
+  display: contents;
+}
 
 .dndm-markup-overlay {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 70;
+  display: contents;
 }
 
 .dndm-markup-canvas {
-  position: absolute;
+  /* Fixed (not absolute): display:contents ancestors provide no containing
+     block, so absolute inset:0 would size to the top-stack. The canvas area
+     is viewport-full, so fixed inset:0 keeps the drawing surface fullscreen. */
+  position: fixed;
   inset: 0;
   cursor: crosshair;
-  z-index: 70;
+  z-index: 1;
   touch-action: none;
   pointer-events: auto;
   width: 100%;
@@ -22,21 +30,35 @@
   pointer-events: none !important;
 }
 
+.dndm-markup-canvas--mmb-pan {
+  cursor: grabbing;
+}
+
 .dndm-markup-palette {
-  position: absolute;
-  top: var(--dndm-spacing-md, 12px);
-  left: 50%;
-  transform: translateX(-50%);
+  position: relative;
+  /* Center the pill in the space left of the token rail instead of the full
+     stack width: shifting a centered item left by R/2 (with max-width reduced
+     by R) keeps its right edge exactly R clear of the rail. R comes from
+     --dndm-token-rail-reserve on .dndm-canvas-top-stack. */
+  left: calc(var(--dndm-token-rail-reserve, 48px) / -2);
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   align-items: center;
-  gap: var(--dndm-spacing-xs, 6px);
-  background: var(--dndm-color-surface-translucent, rgba(16, 14, 23, 0.85));
+  gap: 0.25rem;
+  row-gap: 0.35rem;
+  max-width: calc(100% - var(--dndm-token-rail-reserve, 48px));
+  box-sizing: border-box;
+  padding: 0.35rem 0.5rem;
+  /* Toolbar-like chrome (cf. .dndm-canvas-toolbar in shell.css); the ember
+     control accents below stay as the markup color scheme. */
+  background: rgba(20, 17, 14, 0.86);
+  border: 1px solid var(--dndm-border-accent);
+  border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(8px);
-  padding: var(--dndm-spacing-xs, 6px) var(--dndm-spacing-sm, 10px);
-  border-radius: var(--dndm-radius-pill, 9999px);
-  border: 1px solid var(--dndm-color-border, rgba(232, 144, 85, 0.25));
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
-  z-index: 100;
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 2;
   pointer-events: auto;
   user-select: none;
 }
@@ -72,6 +94,10 @@
 .dndm-markup-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+}
+
+.dndm-markup-btn svg {
+  display: block;
 }
 
 .dndm-markup-sep {

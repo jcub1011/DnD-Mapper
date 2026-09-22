@@ -226,12 +226,40 @@ dndm-app {
   pointer-events: auto;
 }
 
-/* ─── Toolbar ───────────────────────────────────────────────── */
-.dndm-canvas-toolbar {
+/* ─── Canvas Top Stack ────────────────────────────────────────
+   Single in-flow column holding the header toolbar plus the markup
+   palette. The palette sits below the header and shifts down
+   automatically when the header wraps to 2+ lines. The markup drawing
+   surface is positioned fullscreen behind (see markup.css) and does not
+   participate in flow. */
+.dndm-canvas-top-stack {
   position: absolute;
   top: 0.75rem;
   left: calc(var(--dndm-rail-pad-left, 0px) + 12px);
   right: calc(var(--dndm-rail-pad-right, 0px) + 12px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  z-index: 6;
+  pointer-events: none;
+  /* Horizontal space kept clear of the floating token rail pinned to the
+     right of the canvas area (40px rail + 8px gap). The markup palette
+     consumes this via markup.css so its centered pill never slides under
+     the rail. */
+  --dndm-token-rail-reserve: 48px;
+}
+
+/* Pass toolbar markup straight through to the stack so the inner
+   .dndm-canvas-toolbar (width: 100%) is the actual flex item. */
+dndm-toolbar {
+  display: contents;
+}
+
+/* ─── Toolbar ───────────────────────────────────────────────── */
+.dndm-canvas-toolbar {
+  position: relative;
+  width: 100%;
   display: flex;
   flex-wrap: wrap;
   align-items: center;

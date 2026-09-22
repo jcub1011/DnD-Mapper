@@ -47,9 +47,10 @@ describe("<dndm-markup-overlay> Component", () => {
     await el.updateComplete;
 
     const eraserBtn = Array.from(el.querySelectorAll(".dndm-markup-btn")).find(
-      (b) => b.textContent?.trim() === "⌫",
+      (b) => b.getAttribute("title")?.startsWith("Eraser"),
     ) as HTMLButtonElement;
     expect(eraserBtn).toBeDefined();
+    expect(eraserBtn.querySelector("svg")).not.toBeNull();
 
     eraserBtn.click();
     await el.updateComplete;

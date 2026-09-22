@@ -298,6 +298,42 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
     expect(wp.y).toBeCloseTo(10 * CELL, 1);
   });
 
+  it("zooms cursor-anchored for DOM overlay surfaces", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    cam.preRender();
+
+    const sx = 400;
+    const sy = 300;
+    const before = cam.getWorldPoint(sx, sy);
+
+    scene.zoomAtScreenPoint(2.0, sx, sy);
+    expect(cam.zoom).toBeCloseTo(2.0, 4);
+
+    // The world point under the cursor must not move.
+    const after = cam.getWorldPoint(sx, sy);
+    expect(after.x).toBeCloseTo(before.x, 1);
+    expect(after.y).toBeCloseTo(before.y, 1);
+  });
+
+  it("pans by screen-pixel deltas for DOM overlay gestures", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    cam.setZoom(2.0);
+    cam.preRender();
+
+    const sx = 100;
+    const sy = 200;
+    const before = cam.getWorldPoint(sx, sy);
+
+    scene.panByScreenDelta(100, 50);
+
+    // The content follows the drag: the old world point now sits one delta away.
+    const after = cam.getWorldPoint(sx + 100, sy + 50);
+    expect(after.x).toBeCloseTo(before.x, 1);
+    expect(after.y).toBeCloseTo(before.y, 1);
+  });
+
   it("gates token dragging by move policy and keeps stacked tops click-only", () => {
     const tokens: Token[] = [
       {

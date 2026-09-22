@@ -1042,22 +1042,6 @@ export class DndmApp extends GameElement {
           ></dndm-initiative-banner>
 
           ${
-            this.isDm && this.toolMode === "markup" && active
-              ? html`
-                  <dndm-markup-overlay
-                    .activeMap=${active}
-                    .onCommitMarkup=${(svg: string | null) => {
-                    this.send({ kind: "updateMarkup", mapId: active.id, markupSvg: svg });
-                  }}
-                    .onClose=${() => {
-                    this.toolMode = "none";
-                    fx.map()?.setToolMode("none");
-                  }}
-                  ></dndm-markup-overlay>
-                `
-              : nothing
-          }
-          ${
             !active
               ? html`
                   <div class="dndm-empty">
@@ -1071,7 +1055,8 @@ export class DndmApp extends GameElement {
                   </div>
                 `
               : html`
-                  <dndm-toolbar
+                  <div class="dndm-canvas-top-stack">
+                    <dndm-toolbar
                     .isDm=${this.isDm}
                     .zoom=${this.currentZoom}
                     .showGridLines=${active.grid.showGridLines}
@@ -1120,6 +1105,21 @@ export class DndmApp extends GameElement {
                     }
                   }}
                   ></dndm-toolbar>
+                    ${this.isDm && this.toolMode === "markup"
+                      ? html`
+                          <dndm-markup-overlay
+                            .activeMap=${active}
+                            .onCommitMarkup=${(svg: string | null) => {
+                            this.send({ kind: "updateMarkup", mapId: active.id, markupSvg: svg });
+                          }}
+                            .onClose=${() => {
+                            this.toolMode = "none";
+                            fx.map()?.setToolMode("none");
+                          }}
+                          ></dndm-markup-overlay>
+                        `
+                      : nothing}
+                  </div>
 
                   ${
                   this.isDm && this.selectedImage
@@ -1316,7 +1316,7 @@ export class DndmApp extends GameElement {
                       .onFocusToken=${(tokenId: string) => {
                       const tok = active?.tokens.find((t) => t.id === tokenId);
                       if (tok) {
-                        fx.map()?.panToWorld(tok.x * 50, tok.y * 50);
+                        fx.map()?.panToWorld(tok.x * CELL, tok.y * CELL);
                       }
                     }}
                       .onSetSheetHp=${(sheetId: string, hp: number | null) =>

@@ -9,6 +9,20 @@ import { DEPTH } from "./depth";
 import { CELL } from "./viewport";
 import { parseSvgToStrokes, type MarkupStroke } from "../markup/bezier";
 
+export const FALLBACK_MARKUP_COLOR = 0xc0392b;
+
+/**
+ * Parse a `#rrggbb` stroke color into a Phaser color int. Black (0x000000)
+ * is a valid color — only genuinely unparseable input falls back.
+ * (parseInt yields NaN for those; a plain `|| fallback` would also clobber
+ * black since 0 is falsy.)
+ */
+export function parseMarkupColor(cssColor: string | null | undefined): number {
+  if (!cssColor) return FALLBACK_MARKUP_COLOR;
+  const parsed = parseInt(cssColor.replace("#", ""), 16);
+  return Number.isNaN(parsed) ? FALLBACK_MARKUP_COLOR : parsed;
+}
+
 export class MarkupLayer {
   private gfx: Phaser.GameObjects.Graphics;
   private currentSvg: string | null = null;
@@ -36,7 +50,7 @@ export class MarkupLayer {
   }
 
   private renderStroke(stroke: MarkupStroke): void {
-    const colorNum = parseInt(stroke.color.replace("#", ""), 16) || 0xc0392b;
+    const colorNum = parseMarkupColor(stroke.color);
     const strokeWidthPx = Math.max(1, stroke.width * CELL);
 
     this.gfx.lineStyle(strokeWidthPx, colorNum, 1.0);

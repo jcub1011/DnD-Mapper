@@ -13,8 +13,10 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { GameElement } from "../app/GameElement";
+import { eraserIcon } from "../icons";
 import type { GameMap } from "../../game/domain";
 import { fx } from "../fx/fx";
+import { CELL, WHEEL_FACTOR } from "../map/viewport";
 import {
   isStrokeHit,
   parseSvgToStrokes,
@@ -23,6 +25,52 @@ import {
   type MarkupStroke,
   type Point,
 } from "./bezier";
+
+/** Minimal camera snapshot needed for screen projection. */
+export interface PreviewCamera {
+  readonly scrollX: number;
+  readonly scrollY: number;
+  readonly zoom: number;
+  /** Camera viewport size in screen px — Phaser zooms about the viewport
+   *  midpoint, so this is required for exact mapping at zoom != 1. */
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * Project a cell-unit point into overlay-surface pixel space for the live
+ * preview. Inverts Phaser's zoom-about-midpoint camera:
+ * `screen = (cell * CELL - scroll) * zoom + (size / 2) * (1 - zoom)
+ *          + canvas-to-surface offset`.
+ * Pure function so the camera mapping is unit-testable.
+ */
+export function cellPointToScreenPoint(
+  cell: Point,
+  cam: PreviewCamera,
+  canvasRect: { left: number; top: number },
+  surfaceRect: { left: number; top: number },
+): Point {
+  return {
+    x:
+      (cell.x * CELL - cam.scrollX) * cam.zoom +
+      (cam.width / 2) * (1 - cam.zoom) +
+      (canvasRect.left - surfaceRect.left),
+    y:
+      (cell.y * CELL - cam.scrollY) * cam.zoom +
+      (cam.height / 2) * (1 - cam.zoom) +
+      (canvasRect.top - surfaceRect.top),
+  };
+}
+
+/** Project a whole in-progress stroke into preview pixel space. */
+export function projectCellPointsToScreen(
+  cells: readonly Point[],
+  cam: PreviewCamera,
+  canvasRect: { left: number; top: number },
+  surfaceRect: { left: number; top: number },
+): Point[] {
+  return cells.map((c) => cellPointToScreenPoint(c, cam, canvasRect, surfaceRect));
+}
 
 const PALETTE_COLORS = [
   { name: "Copper", hex: "#d35400" },
@@ -58,6 +106,11 @@ export class DndmMarkupOverlay extends GameElement {
   @state() private isDrawing = false;
   @state() private currentStrokePoints: Point[] = [];
   @state() private isPanningWithSpace = false;
+  @state() private isMmbPanning = false;
+
+  /** Last client coords of an in-progress middle-drag pan. */
+  private mmbLastX = 0;
+  private mmbLastY = 0;
 
   private undoStack: MarkupStroke[][] = [];
   private redoStack: MarkupStroke[][] = [];
@@ -128,17 +181,62 @@ export class DndmMarkupOverlay extends GameElement {
       const screenX = e.clientX - rect.left;
       const screenY = e.clientY - rect.top;
       const worldPoint = cam.getWorldPoint(screenX, screenY);
-      return { x: worldPoint.x / 50, y: worldPoint.y / 50 };
+      return { x: worldPoint.x / CELL, y: worldPoint.y / CELL };
     }
 
-    const rect = this.getBoundingClientRect();
+    const surface = this.querySelector(".dndm-markup-canvas");
+    const rect = surface?.getBoundingClientRect() ?? this.getBoundingClientRect();
     return {
-      x: (e.clientX - rect.left) / 50,
-      y: (e.clientY - rect.top) / 50,
+      x: (e.clientX - rect.left) / CELL,
+      y: (e.clientY - rect.top) / CELL,
+    };
+  }
+
+  /** Live preview path in overlay-surface pixels (screen space, no SVG transform). */
+  private getPreviewScreenD(): { d: string; strokeWidthPx: number } {
+    if (this.activeTool !== "pen" || this.currentStrokePoints.length === 0) {
+      return { d: "", strokeWidthPx: 0 };
+    }
+    const cam = fx.map()?.cameras.main;
+    const canvas = fx.map()?.game?.canvas;
+    if (!cam || !canvas) {
+      // Headless/test fallback: world scale at zoom 1, zero scroll.
+      const pts = this.currentStrokePoints.map((p) => ({ x: p.x * CELL, y: p.y * CELL }));
+      return { d: pointsToQuadraticBezier(pts), strokeWidthPx: Math.max(1, this.activeWidth * CELL) };
+    }
+    const surface = this.querySelector(".dndm-markup-canvas");
+    const surfaceRect = surface?.getBoundingClientRect() ?? this.getBoundingClientRect();
+    const canvasRect = canvas.getBoundingClientRect();
+    const screenPts = projectCellPointsToScreen(
+      this.currentStrokePoints,
+      {
+        scrollX: cam.scrollX,
+        scrollY: cam.scrollY,
+        zoom: cam.zoom,
+        width: cam.width,
+        height: cam.height,
+      },
+      canvasRect,
+      surfaceRect,
+    );
+    return {
+      d: pointsToQuadraticBezier(screenPts),
+      strokeWidthPx: Math.max(1, this.activeWidth * CELL * cam.zoom),
     };
   }
 
   private onPointerDown(e: PointerEvent): void {
+    // Middle-drag ALWAYS pans, mirroring MapScene (the overlay sits above
+    // the Phaser canvas, so Phaser never sees the gesture).
+    if (e.button === 1) {
+      e.preventDefault();
+      if (!fx.map()) return;
+      (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+      this.isMmbPanning = true;
+      this.mmbLastX = e.clientX;
+      this.mmbLastY = e.clientY;
+      return;
+    }
     if (e.button !== 0 || this.isPanningWithSpace) return;
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
 
@@ -153,6 +251,16 @@ export class DndmMarkupOverlay extends GameElement {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    if (this.isMmbPanning) {
+      const dx = e.clientX - this.mmbLastX;
+      const dy = e.clientY - this.mmbLastY;
+      this.mmbLastX = e.clientX;
+      this.mmbLastY = e.clientY;
+      fx.map()?.panByScreenDelta(dx, dy);
+      // Re-render so an in-progress preview stays glued to the new camera.
+      this.requestUpdate();
+      return;
+    }
     if (!this.isDrawing || this.isPanningWithSpace) return;
 
     const pt = this.getPointerCellPoint(e);
@@ -165,6 +273,10 @@ export class DndmMarkupOverlay extends GameElement {
   }
 
   private onPointerUp(_e: PointerEvent): void {
+    if (this.isMmbPanning) {
+      this.isMmbPanning = false;
+      return;
+    }
     if (!this.isDrawing) return;
     this.isDrawing = false;
 
@@ -189,8 +301,33 @@ export class DndmMarkupOverlay extends GameElement {
     }
   }
 
+  /**
+   * Wheel zoom over the overlay. The drawing surface sits above the Phaser
+   * canvas, so Phaser's own POINTER_WHEEL handler never fires — mirror it
+   * here, cursor-anchored, via MapScene.
+   */
+  private onWheel(e: WheelEvent): void {
+    const map = fx.map();
+    const canvas = map?.game?.canvas;
+    if (!map || !canvas) return;
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const factor = e.deltaY < 0 ? WHEEL_FACTOR : 1 / WHEEL_FACTOR;
+    map.zoomAtScreenPoint(factor, e.clientX - rect.left, e.clientY - rect.top);
+    // Keep an in-progress preview glued to the new camera.
+    this.requestUpdate();
+  }
+
+  /**
+   * Suppress middle-click autoscroll: pointerdown preventDefault does not
+   * cancel the mousedown default action that starts it.
+   */
+  private onMouseDown(e: MouseEvent): void {
+    if (e.button === 1) e.preventDefault();
+  }
+
   private eraseAtPoint(pt: Point): void {
-    const eraserRadius = 0.25; // in cells (~12.5px)
+    const eraserRadius = 0.25; // in cells (~16px at CELL=64)
     const hitIndex = this.strokes.findIndex((s) => isStrokeHit(s.points, pt, eraserRadius));
 
     if (hitIndex !== -1) {
@@ -245,17 +382,9 @@ export class DndmMarkupOverlay extends GameElement {
   }
 
   override render(): TemplateResult {
-    // Current in-progress stroke preview (in screen pixels or transformed)
-    const cam = fx.map()?.cameras.main;
-    const previewD =
-      this.activeTool === "pen" && this.currentStrokePoints.length > 0
-        ? pointsToQuadraticBezier(this.currentStrokePoints)
-        : "";
-
-    // Calculate preview SVG viewBox/transform matching Phaser camera
-    const zoom = cam?.zoom ?? 1.0;
-    const scrollX = cam?.worldView.x ?? 0;
-    const scrollY = cam?.worldView.y ?? 0;
+    // Current in-progress stroke preview, projected to screen pixels so it
+    // sits exactly where the committed Phaser render will land.
+    const { d: previewD, strokeWidthPx: previewWidthPx } = this.getPreviewScreenD();
 
     return html`
       <div class="dndm-markup-overlay">
@@ -279,7 +408,7 @@ export class DndmMarkupOverlay extends GameElement {
               this.activeTool = "eraser";
             }}
           >
-            ⌫
+            ${eraserIcon()}
           </button>
 
           <span class="dndm-markup-sep" aria-hidden="true"></span>
@@ -372,19 +501,20 @@ export class DndmMarkupOverlay extends GameElement {
         <div
           class="dndm-markup-canvas ${this.isPanningWithSpace
             ? "dndm-markup-canvas--panning"
-            : ""}"
+            : ""} ${this.isMmbPanning ? "dndm-markup-canvas--mmb-pan" : ""}"
           @pointerdown=${this.onPointerDown}
           @pointermove=${this.onPointerMove}
           @pointerup=${this.onPointerUp}
           @pointercancel=${this.onPointerUp}
+          @mousedown=${this.onMouseDown}
+          @wheel=${this.onWheel}
         >
           ${previewD
             ? html`
                 <svg class="dndm-markup-preview-svg">
                   <g
-                    transform="scale(${zoom}) translate(${-scrollX / 50}, ${-scrollY / 50}) scale(50)"
                     stroke="${this.activeColor}"
-                    stroke-width="${this.activeWidth}"
+                    stroke-width="${previewWidthPx}"
                     fill="none"
                     stroke-linecap="round"
                     stroke-linejoin="round"

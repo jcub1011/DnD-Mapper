@@ -165,7 +165,9 @@ export class MapScene extends Phaser.Scene {
     this.showGridLines = map.grid.showGridLines;
     this.snapToGrid = map.grid.snapToGrid;
     if (map.grid.lineColor) {
-      this.lineColor = parseInt(map.grid.lineColor.replace("#", ""), 16) || 0x3a2d23;
+      const parsedLineColor = parseInt(map.grid.lineColor.replace("#", ""), 16);
+      // NaN check (not `||`): black (0x000000) is a valid grid color.
+      this.lineColor = Number.isNaN(parsedLineColor) ? 0x3a2d23 : parsedLineColor;
     }
 
     this.drawBackground();
@@ -242,7 +244,9 @@ export class MapScene extends Phaser.Scene {
     this.showGridLines = grid.showGridLines;
     this.snapToGrid = grid.snapToGrid;
     if (grid.lineColor) {
-      this.lineColor = parseInt(grid.lineColor.replace("#", ""), 16) || 0x3a2d23;
+      const parsedLineColor = parseInt(grid.lineColor.replace("#", ""), 16);
+      // NaN check (not `||`): black (0x000000) is a valid grid color.
+      this.lineColor = Number.isNaN(parsedLineColor) ? 0x3a2d23 : parsedLineColor;
     }
 
     this.drawBackground();
@@ -403,6 +407,36 @@ export class MapScene extends Phaser.Scene {
     const cam = this.cameras.main;
     const anchor = this.visibleCenterPx();
     zoomAtAnchor(cam, 1 / factor, anchor.x, anchor.y);
+    this.redrawGrid();
+    this.rulerOverlay.redraw();
+    this.focusOverlay.redraw();
+    this.onViewportChanged?.(readViewport(cam, CELL));
+  }
+
+  /**
+   * Cursor-anchored zoom driven by a DOM overlay sitting above the canvas
+   * (which otherwise swallows the wheel). Mirrors the POINTER_WHEEL handler;
+   * sx/sy are screen px relative to the Phaser canvas.
+   */
+  zoomAtScreenPoint(factor: number, sx: number, sy: number): void {
+    const cam = this.cameras.main;
+    zoomAtAnchor(cam, factor, sx, sy);
+    this.redrawGrid();
+    this.rulerOverlay.redraw();
+    this.focusOverlay.redraw();
+    this.onViewportChanged?.(readViewport(cam, CELL));
+  }
+
+  /**
+   * Pan by a screen-pixel delta, driven by a DOM overlay gesture (e.g.
+   * middle-drag while a drawing tool is armed). Mirrors the POINTER_MOVE
+   * pan branch.
+   */
+  panByScreenDelta(dxPx: number, dyPx: number): void {
+    const cam = this.cameras.main;
+    cam.scrollX -= dxPx / cam.zoom;
+    cam.scrollY -= dyPx / cam.zoom;
+    cam.preRender();
     this.redrawGrid();
     this.rulerOverlay.redraw();
     this.focusOverlay.redraw();

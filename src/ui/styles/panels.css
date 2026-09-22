@@ -830,54 +830,9 @@ dialog.dndm-dialog:not([open]) {
   cursor: crosshair;
 }
 
-/* Floating markup toolbar — lives outside .dndm-canvas-transform so it stays
-   at viewport scale (the engine connects to the drawing surface inside the
-   transform via the shared svgId). Positioned absolutely against the
-   .dndm-canvas-frame, centred at the top of the map area. Z-index above the
-   map content but below modals. */
-.dndm-floating-markup-toolbar {
-  position: absolute;
-  top: 56px; /* clears the .dndm-canvas-toolbar zoom row */
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 50;
-  pointer-events: auto;
-  display: block;
-  /* Whatever the toolbar's natural content width is — never wider than the
-       map area. Without this, an absolutely-positioned wrapper would shrink
-       to content; combined with the toolbar's @container query at 540px it
-       would lock into the collapsed mobile layout. */
-  width: max-content;
-  max-width: calc(100% - 32px);
-}
-
-/* Opt the floating instance OUT of being a container-query container, so the
-   SvgDrawingToolbar's `@container (max-width: 540px)` mobile-collapse rules
-   don't match. Without this, an `position: absolute` wrapper sizes to its
-   content; in collapsed mode the content is tiny, locking the toolbar into
-   mobile mode permanently and hiding most of its buttons. */
-.dndm-floating-markup-toolbar .toolbar-container {
-  container-type: normal !important;
-}
-
-/* Force interactive cursor on every toolbar control inside the floating
-   mount; if any ancestor disables interaction, hovering would still show
-   the default arrow — useful as a visual sanity check. */
-.dndm-floating-markup-toolbar button,
-.dndm-floating-markup-toolbar input {
-  cursor: pointer;
-  pointer-events: auto;
-}
-
-/* Restyle the toolbar to fit the Forge & Ember palette so it doesn't fight
-   the panel chrome underneath. */
-.dndm-floating-markup-toolbar .svg-canvas-toolbar {
-  background: rgba(20, 17, 14, 0.86) !important;
-  border: 1px solid var(--dndm-border-accent) !important;
-  color: var(--dndm-text);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-}
+/* NOTE: the legacy .dndm-floating-markup-toolbar system was removed. The
+   markup palette now lives in .dndm-canvas-top-stack (see shell.css) and the
+   drawing surface in markup.css. */
 
 /* Rename icon — bold "R" followed by a static I-beam glyph. Used by any
    "rename" affordance button (saves panel, character-sheet dropdown, …). */
