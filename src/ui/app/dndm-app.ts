@@ -71,6 +71,8 @@ const MIN_RAIL_PX = 200;
 const MAX_RAIL_PX = 600;
 const CLICK_THRESHOLD_PX = 4;
 const COLLAPSE_THRESHOLD_PX = 140;
+// Width of a collapsed rail. Must stay in sync with --dndm-rail-collapsed in shell.css.
+const COLLAPSED_RAIL_PX = 28;
 const STORAGE_PREFIX = "dndm.rail.";
 const DICE_SCALE_STORAGE_KEY = "dndm.dice.scale";
 
@@ -302,8 +304,12 @@ export class DndmApp extends GameElement {
   }
 
   private updateRailCssVars(): void {
-    const leftPad = this.isDm && !this.leftCollapsed ? `${this.leftRailWidth}px` : "0px";
-    const rightPad = !this.rightCollapsed ? `${this.rightRailWidth}px` : "28px";
+    const leftPad = !this.isDm
+      ? "0px"
+      : !this.leftCollapsed
+        ? `${this.leftRailWidth}px`
+        : `${COLLAPSED_RAIL_PX}px`;
+    const rightPad = !this.rightCollapsed ? `${this.rightRailWidth}px` : `${COLLAPSED_RAIL_PX}px`;
 
     this.style.setProperty("--dndm-rail-w-left", `${this.leftRailWidth}px`);
     this.style.setProperty("--dndm-rail-w-right", `${this.rightRailWidth}px`);
@@ -322,8 +328,12 @@ export class DndmApp extends GameElement {
 
     const map = fx.map();
     if (map) {
-      const leftInset = this.isDm && !this.leftCollapsed ? this.leftRailWidth : 0;
-      const rightInset = !this.rightCollapsed ? this.rightRailWidth : 28;
+      const leftInset = !this.isDm
+        ? 0
+        : !this.leftCollapsed
+          ? this.leftRailWidth
+          : COLLAPSED_RAIL_PX;
+      const rightInset = !this.rightCollapsed ? this.rightRailWidth : COLLAPSED_RAIL_PX;
       map.setRailInsets(leftInset, rightInset);
     }
   }
