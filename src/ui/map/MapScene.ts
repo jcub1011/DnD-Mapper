@@ -208,17 +208,27 @@ export class MapScene extends Phaser.Scene {
     const centerY = (box.y + box.height / 2) * CELL;
     const worldW = Math.max(box.width * CELL, 1);
     const worldH = Math.max(box.height * CELL, 1);
+    // Use the visible canvas (minus rail insets) so framed content lands
+    // in the visible center rather than under a side rail.
+    const visibleW = Math.max(1, cam.width - this.railLeft - this.railRight);
+    const visibleH = Math.max(1, cam.height);
     const targetZoom = Math.max(
       0.01,
-      Math.min(10.0, Math.min(cam.width / worldW, cam.height / worldH) * 0.95),
+      Math.min(10.0, Math.min(visibleW / worldW, visibleH / worldH) * 0.95),
     );
+    // cam.pan() targets the physical center; offset so the box lands on the
+    // visible center instead (see panToWorld for derivation).
+    const panX = centerX + (this.railRight - this.railLeft) / (2 * targetZoom);
 
     if (duration > 0) {
-      cam.pan(centerX, centerY, duration, "Power2");
+      cam.pan(panX, centerY, duration, "Power2");
       cam.zoomTo(targetZoom, duration, "Power2");
     } else {
-      cam.centerOn(centerX, centerY);
       cam.setZoom(targetZoom);
+      const anchor = this.visibleCenterPx();
+      cam.scrollX = centerX - anchor.x / targetZoom;
+      cam.scrollY = centerY - anchor.y / targetZoom;
+      cam.preRender();
     }
     this.redrawGrid();
     this.rulerOverlay.redraw();
@@ -248,6 +258,10 @@ export class MapScene extends Phaser.Scene {
 
   updateTokens(tokens: readonly Token[]): void {
     this.tokenLayer.setTokens(tokens);
+  }
+
+  setTokenMovePolicy(fn: (token: Token) => boolean): void {
+    this.tokenLayer.setCanMoveToken(fn);
   }
 
   setActiveTurnTokenId(tokenId: string | null): void {
@@ -315,11 +329,48 @@ export class MapScene extends Phaser.Scene {
     this.tokenLayer.setInteractiveState(isNone);
   }
 
+  /** True when the pointer is over token-layer content (map token or popover chip). */
+  private isPointerOverToken(pointer: Phaser.Input.Pointer): boolean {
+    try {
+      const hits = this.input.hitTestPointer(pointer) as unknown[];
+      for (const h of hits) {
+        if (this.tokenLayer.isTokenObject(h)) return true;
+      }
+    } catch {
+      // Headless / unsupported environments: fall back to panning.
+    }
+    return false;
+  }
+
   // ── Camera Navigation ──────────────────────────────────────────────────────
+
+  /** Screen point (px) that content should center on: midpoint of the visible canvas between rails. */
+  private visibleCenterPx(): { x: number; y: number } {
+    const cam = this.cameras.main;
+    return {
+      x: (cam.width + this.railLeft - this.railRight) / 2,
+      y: cam.height / 2,
+    };
+  }
+
+  /** World coordinates currently at the visible center (between rails). */
+  getVisibleCenterWorld(): { x: number; y: number } {
+    const cam = this.cameras.main;
+    cam.preRender();
+    const anchor = this.visibleCenterPx();
+    const pt = cam.getWorldPoint(anchor.x, anchor.y);
+    return { x: pt.x, y: pt.y };
+  }
 
   centerOn(cellX: number, cellY: number): void {
     const cam = this.cameras.main;
-    cam.centerOn(cellX * CELL, cellY * CELL);
+    // Rail-aware: place the world point under the visible center, not the
+    // physical canvas midpoint (which may sit under a side rail).
+    // getWorldPoint(sx) = scrollX + sx / zoom  =>  scrollX = wx - sx / zoom.
+    const anchor = this.visibleCenterPx();
+    cam.scrollX = cellX * CELL - anchor.x / cam.zoom;
+    cam.scrollY = cellY * CELL - anchor.y / cam.zoom;
+    cam.preRender();
     this.redrawGrid();
     this.rulerOverlay.redraw();
     this.focusOverlay.redraw();
@@ -328,7 +379,10 @@ export class MapScene extends Phaser.Scene {
 
   panToWorld(worldX: number, worldY: number): void {
     const cam = this.cameras.main;
-    cam.pan(worldX, worldY, 300, "Power2");
+    // cam.pan() targets the physical center; shift the target so the point
+    // lands on the visible center: panX = wx + (railRight - railLeft) / (2*zoom).
+    const panX = worldX + (this.railRight - this.railLeft) / (2 * cam.zoom);
+    cam.pan(panX, worldY, 300, "Power2");
     this.redrawGrid();
     this.rulerOverlay.redraw();
     this.focusOverlay.redraw();
@@ -337,9 +391,8 @@ export class MapScene extends Phaser.Scene {
 
   zoomIn(factor = TOOLBAR_FACTOR): void {
     const cam = this.cameras.main;
-    const anchorX = (cam.width + this.railLeft - this.railRight) / 2;
-    const anchorY = cam.height / 2;
-    zoomAtAnchor(cam, factor, anchorX, anchorY);
+    const anchor = this.visibleCenterPx();
+    zoomAtAnchor(cam, factor, anchor.x, anchor.y);
     this.redrawGrid();
     this.rulerOverlay.redraw();
     this.focusOverlay.redraw();
@@ -348,9 +401,8 @@ export class MapScene extends Phaser.Scene {
 
   zoomOut(factor = TOOLBAR_FACTOR): void {
     const cam = this.cameras.main;
-    const anchorX = (cam.width + this.railLeft - this.railRight) / 2;
-    const anchorY = cam.height / 2;
-    zoomAtAnchor(cam, 1 / factor, anchorX, anchorY);
+    const anchor = this.visibleCenterPx();
+    zoomAtAnchor(cam, 1 / factor, anchor.x, anchor.y);
     this.redrawGrid();
     this.rulerOverlay.redraw();
     this.focusOverlay.redraw();
@@ -458,6 +510,9 @@ export class MapScene extends Phaser.Scene {
 
       // Middle-click ALWAYS pans from anywhere
       if (isMiddle || (isLeft && mode === "none")) {
+        // Don't steal the gesture from a token (or stack chip) drag: if the
+        // press began on token-layer content, the TokenLayer handlers own it.
+        if (isLeft && !isMiddle && this.isPointerOverToken(pointer)) return;
         this.isPanning = true;
         this.didMoveDuringPan = false;
         this.panStartX = pointer.x;

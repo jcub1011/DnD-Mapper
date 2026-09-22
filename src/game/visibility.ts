@@ -6,7 +6,8 @@
  *   2. Token movement respects DndMapperSettings.tokenMovement:
  *        - "HostOnly": only DM may move
  *        - "Anyone": any connected user may move
- *        - "OwnerOrHost": DM or token owner (ownerUserId / representsUserId)
+ *        - "OwnerOrHost": DM or token owner (ownerUserId)
+ *      (Mirrors rules.mayMoveToken — keep the two in sync.)
  *   3. Sheet edit respects DndMapperSettings.sheetEditByOthers:
  *        - "HostOnly": only DM may edit
  *        - "Anyone": any connected user may edit
@@ -25,7 +26,9 @@ export function isDm(state: DndMapperState, userId: string | null): boolean {
   return state.dmPlayerId === userId;
 }
 
-/** Determines if the caller has permission to move a given token. */
+/** Determines if the caller has permission to move a given token.
+ *  Mirrors the server's mayMoveToken decision (rules.ts) exactly so the
+ *  client-side drag gate predicts what the authority will accept. */
 export function canMoveToken(state: DndMapperState, userId: string | null, token: Token): boolean {
   if (isDm(state, userId)) return true;
   if (!userId) return false;
@@ -36,7 +39,7 @@ export function canMoveToken(state: DndMapperState, userId: string | null, token
     case "Anyone":
       return true;
     case "OwnerOrHost":
-      return token.ownerUserId === userId || token.representsUserId === userId;
+      return token.ownerUserId === userId;
   }
 }
 

@@ -31,7 +31,8 @@ import type { LaunchMode } from "../../net/launch";
 import { LibraryService } from "../../storage/libraryService";
 import { fx } from "../fx/fx";
 import { fullscreenExitIcon, fullscreenIcon, gearIcon, lockIcon } from "../icons";
-import type { ToolMode } from "../map/MapScene";
+import type { MapScene, ToolMode } from "../map/MapScene";
+import { CELL } from "../map/viewport";
 import { toastService } from "../toast/toastService";
 import { GameElement } from "./GameElement";
 
@@ -60,6 +61,7 @@ import "../markup/dndm-markup-overlay";
 import "../display/dndm-display-roll-ticker";
 import { filterDisplayImages, filterDisplayTokens } from "../display/displayProjection";
 import { resolveActiveTurnTokenId } from "../../game/combat";
+import { canMoveToken } from "../../game/visibility";
 import { getReadableTextColor, resolveDiceColor, resolveDiceColorForToken } from "../../game/color";
 import type { LoadedDiceRule, RollMode, RollResult, RollTemplate } from "../../game/domain";
 import { HostInputTracker } from "../../net/hostInput";
@@ -163,6 +165,10 @@ export class DndmApp extends GameElement {
 
   private seenRollIds = new Set<string>();
   private displaySyncChannel?: BroadcastChannel;
+  // MapScene instance the canvas callbacks are wired to. Phaser boots
+  // asynchronously, so attach() can run before fx.map() exists — wiring is
+  // (re)attempted on every state change and frame until it sticks.
+  private wiredMapScene: MapScene | null = null;
 
   // Drag resizing tracking
   private activeResizeSide: "left" | "right" | null = null;
@@ -535,7 +541,11 @@ export class DndmApp extends GameElement {
   // ── Map Scene Synchronization ──────────────────────────────────────────────
   private wireMapScene(): void {
     const map = fx.map();
-    if (!map) return;
+    // Phaser boots async: attach() usually runs before the MapScene exists.
+    // Remember which instance was wired so a later boot (or scene replacement)
+    // is picked up instead of silently dropping canvas intents forever.
+    if (!map || map === this.wiredMapScene) return;
+    this.wiredMapScene = map;
 
     map.onTokenMoveEnd = (e) => {
       this.send({ kind: "moveToken", tokenId: e.tokenId, x: e.x, y: e.y });
@@ -579,6 +589,7 @@ export class DndmApp extends GameElement {
 
     map.setDm(this.isDm);
     map.setAssetSource(this.assetSource);
+    this.updateTokenMovePolicy();
 
     const activeMap = this.activeMap;
     if (activeMap) {
@@ -602,6 +613,16 @@ export class DndmApp extends GameElement {
     this.updateRailCssVars();
   }
 
+  /** Push the client-side token drag gate so it mirrors the server's
+   *  mayMoveToken decision for the current user and settings. */
+  private updateTokenMovePolicy(): void {
+    const map = fx.map();
+    if (!map) return;
+    const state = this.match;
+    const me = this.controller?.playerId ?? null;
+    map.setTokenMovePolicy((token) => canMoveToken(state, me, token));
+  }
+
   private toggleProjectorMode(): void {
     this.projectorMode = !this.projectorMode;
     this.onStateChanged(this.match);
@@ -611,6 +632,10 @@ export class DndmApp extends GameElement {
     const prevRollLog = this.match?.rollLog ?? [];
     const prevMapId = this.match.activeMapId;
     this.match = state;
+
+    // Pick up a MapScene that booted after attach(), wiring canvas callbacks
+    // and pushing rail insets / policy before applying this state.
+    this.wireMapScene();
 
     if (this.displaySyncChannel && !this.projectorMode) {
       try {
@@ -682,6 +707,7 @@ export class DndmApp extends GameElement {
       }
       map.setActiveTurnTokenId(resolveActiveTurnTokenId(state.activeCombat));
       map.setFocusRect(state.focusRect);
+      this.updateTokenMovePolicy();
 
       if (
         !this.projectorMode &&
@@ -753,6 +779,9 @@ export class DndmApp extends GameElement {
 
   private readonly frame = (_ts: number): void => {
     this.rafId = requestAnimationFrame(this.frame);
+    // Covers the window where Phaser hasn't booted yet and no state change
+    // arrives to trigger onStateChanged — stops doing work once wired.
+    this.wireMapScene();
   };
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -1007,7 +1036,7 @@ export class DndmApp extends GameElement {
             .onFocusToken=${(tokenId: string) => {
               const tok = active?.tokens.find((t) => t.id === tokenId);
               if (tok) {
-                fx.map()?.panToWorld(tok.x * 50, tok.y * 50);
+                fx.map()?.panToWorld(tok.x * CELL, tok.y * CELL);
               }
             }}
           ></dndm-initiative-banner>
@@ -1078,14 +1107,14 @@ export class DndmApp extends GameElement {
                     .onClearFog=${() => this.send({ kind: "clearFog", mapId: active.id })}
                     .onClearFocusRect=${() => this.send({ kind: "setFocusRect", rect: null })}
                     .onCenterEveryone=${() => {
-                    const cam = fx.map()?.cameras.main;
-                    if (cam) {
-                      const world = cam.midPoint;
+                    const map = fx.map();
+                    if (map) {
+                      const world = map.getVisibleCenterWorld();
                       this.send({
                         kind: "centerViewport",
                         mapId: active.id,
-                        x: world.x / 50,
-                        y: world.y / 50,
+                        x: world.x / CELL,
+                        y: world.y / CELL,
                       });
                       toastService.info("Centered all players on current view");
                     }

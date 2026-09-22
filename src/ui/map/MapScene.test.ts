@@ -282,6 +282,139 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
     expect(cam.zoom).toBe(1.0);
   });
 
+  it("centers on the visible center between rails", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    scene.setRailInsets(300, 100);
+
+    scene.centerOn(15, 10);
+
+    // The token must land under the visible-center anchor (1060, 540),
+    // not under the physical canvas midpoint (960, 540).
+    const anchorX = (cam.width + scene.railLeft - scene.railRight) / 2;
+    const anchorY = cam.height / 2;
+    const wp = cam.getWorldPoint(anchorX, anchorY);
+    expect(wp.x).toBeCloseTo(15 * CELL, 1);
+    expect(wp.y).toBeCloseTo(10 * CELL, 1);
+  });
+
+  it("gates token dragging by move policy and keeps stacked tops click-only", () => {
+    const tokens: Token[] = [
+      {
+        id: "solo",
+        type: "PlayerToken",
+        ownerUserId: "u1",
+        representsUserId: null,
+        name: "Solo",
+        color: "#fff",
+        iconKind: "Initial",
+        mapId: "map1",
+        x: 2.5,
+        y: 2.5,
+        sheetId: null,
+        hidden: false,
+      },
+      {
+        id: "stack-top",
+        type: "PlayerToken",
+        ownerUserId: "u1",
+        representsUserId: null,
+        name: "Top",
+        color: "#fff",
+        iconKind: "Initial",
+        mapId: "map1",
+        x: 5.5,
+        y: 4.5,
+        sheetId: null,
+        hidden: false,
+      },
+      {
+        id: "stack-behind",
+        type: "PlayerToken",
+        ownerUserId: "u1",
+        representsUserId: null,
+        name: "Behind",
+        color: "#fff",
+        iconKind: "Initial",
+        mapId: "map1",
+        x: 5.5,
+        y: 4.5,
+        sheetId: null,
+        hidden: false,
+      },
+    ];
+    scene.updateTokens(tokens);
+
+    const tokenContainers = (
+      scene as unknown as {
+        tokenLayer: { tokenContainers: Map<string, Phaser.GameObjects.Container> };
+      }
+    ).tokenLayer.tokenContainers;
+
+    const solo = tokenContainers.get("solo")!;
+    const top = tokenContainers.get("stack-top")!;
+    const behind = tokenContainers.get("stack-behind")!;
+
+    // Default policy allows everything: single is draggable, stack top is
+    // click-only (moves via popover chips), behind is hidden.
+    expect((solo.input as unknown as { draggable: boolean }).draggable).toBe(true);
+    expect((top.input as unknown as { draggable: boolean }).draggable).toBe(false);
+    expect(behind.visible).toBe(false);
+
+    // Deny-all policy: even the single token becomes click-only.
+    scene.setTokenMovePolicy(() => false);
+    expect((solo.input as unknown as { draggable: boolean }).draggable).toBe(false);
+
+    // Re-allow: draggable again.
+    scene.setTokenMovePolicy(() => true);
+    expect((solo.input as unknown as { draggable: boolean }).draggable).toBe(true);
+  });
+
+  it("reveals the topmost visible token when the stack top is hidden", () => {
+    scene.setDm(false);
+    const tokens: Token[] = [
+      {
+        id: "hidden-top",
+        type: "PlayerToken",
+        ownerUserId: "u1",
+        representsUserId: null,
+        name: "Hidden",
+        color: "#fff",
+        iconKind: "Initial",
+        mapId: "map1",
+        x: 5.5,
+        y: 4.5,
+        sheetId: null,
+        hidden: true,
+      },
+      {
+        id: "visible-under",
+        type: "PlayerToken",
+        ownerUserId: "u1",
+        representsUserId: null,
+        name: "Seen",
+        color: "#fff",
+        iconKind: "Initial",
+        mapId: "map1",
+        x: 5.5,
+        y: 4.5,
+        sheetId: null,
+        hidden: false,
+      },
+    ];
+    scene.updateTokens(tokens);
+
+    const tokenContainers = (
+      scene as unknown as {
+        tokenLayer: { tokenContainers: Map<string, Phaser.GameObjects.Container> };
+      }
+    ).tokenLayer.tokenContainers;
+
+    // Players must still see the stack via the underlying visible token.
+    expect(tokenContainers.get("hidden-top")!.visible).toBe(false);
+    expect(tokenContainers.get("visible-under")!.visible).toBe(true);
+  });
+
   it("anchors zoom to the visible center between rails", () => {
     const cam = scene.cameras.main;
     scene.resetView();

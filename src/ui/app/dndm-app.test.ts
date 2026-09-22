@@ -8,6 +8,8 @@ import type { MatchState } from "../../game/types";
 import type { KBPlayer } from "../../../addons/knockbox/knockbox-phaser";
 import "./dndm-app";
 import type { DndmApp } from "./dndm-app";
+import { fx } from "../fx/fx";
+import type { MapScene } from "../map/MapScene";
 
 function createMockController(options: {
   playerId?: string;
@@ -438,6 +440,73 @@ describe("<dndm-app> Application Shell", () => {
       expect(uploadComponent).not.toBeNull();
       const uploadBtn = uploadComponent?.querySelector('label[aria-label="Upload images"]');
       expect(uploadBtn).not.toBeNull();
+    });
+  });
+
+  describe("Deferred MapScene wiring", () => {
+    function makeFakeMap(): MapScene & Record<string, unknown> {
+      return {
+        setDm: vi.fn(),
+        setAssetSource: vi.fn(),
+        setTokenMovePolicy: vi.fn(),
+        setMap: vi.fn(),
+        updateSheets: vi.fn(),
+        setActiveTurnTokenId: vi.fn(),
+        setFocusRect: vi.fn(),
+        setRailInsets: vi.fn(),
+        setProjectorMode: vi.fn(),
+        updateGrid: vi.fn(),
+        updateTokens: vi.fn(),
+        updateImages: vi.fn(),
+        updateFog: vi.fn(),
+        updateMarkup: vi.fn(),
+      } as unknown as MapScene & Record<string, unknown>;
+    }
+
+    it("wires canvas callbacks and pushes rail insets once the map boots after attach", async () => {
+      const mapSpy = vi.spyOn(fx, "map");
+      try {
+        // Phaser hasn't booted when attach() runs: wiring must not crash.
+        mapSpy.mockReturnValue(undefined);
+        const map1 = makeMap("map-1", "Dungeon");
+        const controller = createMockController({
+          playerId: "user-bob",
+          isOwner: false,
+          state: {
+            phase: "Playing",
+            maps: [map1],
+            activeMapId: "map-1",
+            dmPlayerId: "dm-user",
+          },
+        });
+        app.attach(controller);
+        await app.updateComplete;
+
+        // Map boots later; the next state change picks up the wiring.
+        const fakeMap = makeFakeMap();
+        mapSpy.mockReturnValue(fakeMap);
+        controller.events.emit("changed", { state: controller.view.state });
+        await app.updateComplete;
+
+        expect(typeof fakeMap.onTokenMoveEnd).toBe("function");
+        // Player has no left rail; right rail open at the default 320px.
+        expect(fakeMap.setRailInsets).toHaveBeenCalledWith(0, 320);
+
+        // A canvas drag now produces a moveToken intent for the authority.
+        (fakeMap.onTokenMoveEnd as (e: unknown) => void)({
+          tokenId: "tok-1",
+          x: 5.5,
+          y: 5.5,
+        });
+        expect(controller.mockSendIntent).toHaveBeenCalledWith({
+          kind: "moveToken",
+          tokenId: "tok-1",
+          x: 5.5,
+          y: 5.5,
+        });
+      } finally {
+        mapSpy.mockRestore();
+      }
     });
   });
 });

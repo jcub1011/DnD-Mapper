@@ -10,6 +10,7 @@ import { CELL } from "./viewport";
 import type { CharacterSheet, GridConfig, Token } from "../../game/domain";
 import { TOKEN_RADIUS, TOKEN_OWNER_HALO_RADIUS, TOKEN_STACK_CHIP_RADIUS } from "../../game/domain";
 import { snapToken } from "../../game/snapping";
+import { isTokenVisibleToPlayer } from "../../game/visibility";
 import {
   groupTokensIntoStacks,
   getStackChipPositions,
@@ -43,6 +44,10 @@ export class TokenLayer {
   private tweenMoves = false;
   private expandedStackCell: string | null = null;
   private activeTurnTokenId: string | null = null;
+  // Client-side move gate. Mirrors the server's mayMoveToken decision for the
+  // current user (wired from dndm-app via MapScene). Denied tokens render
+  // click-only and never emit onTokenMoveEnd.
+  private canMoveToken: (token: Token) => boolean = () => true;
 
   public onTokenMoveEnd?: (event: TokenDragEvent) => void;
   public onTokenDoubleClick?: (tokenId: string) => void;
@@ -63,8 +68,17 @@ export class TokenLayer {
   }
 
   setDm(isDm: boolean): void {
+    const changed = this.isDm !== isDm;
     this.isDm = isDm;
-    this.updateVisibility();
+    // DM toggle changes the visible set (hidden tokens), which changes stack
+    // badge bearers — rebuild rather than just updating visibility.
+    if (changed) this.rebuildTokens();
+    else this.updateVisibility();
+  }
+
+  setCanMoveToken(fn: (token: Token) => boolean): void {
+    this.canMoveToken = fn;
+    this.rebuildTokens();
   }
 
   setTweenMoves(enabled: boolean): void {
@@ -85,30 +99,72 @@ export class TokenLayer {
     this.rebuildTokens();
   }
 
-  private updateVisibility(): void {
-    const stacks = groupTokensIntoStacks(this.tokens);
-    const stackMap = new Map<string, TokenStack>();
+  /** Tokens the current viewer may see. Players exclude hidden tokens so a
+   *  hidden stack-top never masks the visible tokens beneath it. */
+  private visibleTokens(): readonly Token[] {
+    if (this.isDm) return this.tokens;
+    return this.tokens.filter((t) => isTokenVisibleToPlayer(t, false));
+  }
+
+  /** Stacks built from viewer-visible tokens only, plus a cell-key lookup. */
+  private stacksForViewer(): { stacks: TokenStack[]; byCell: Map<string, TokenStack> } {
+    const stacks = groupTokensIntoStacks(this.visibleTokens());
+    const byCell = new Map<string, TokenStack>();
     for (const s of stacks) {
-      stackMap.set(`${s.cell.cellX},${s.cell.cellY}`, s);
+      byCell.set(`${s.cell.cellX},${s.cell.cellY}`, s);
+    }
+    return { stacks, byCell };
+  }
+
+  /** Apply interactive + draggable state. Phaser's setInteractive() only acts
+   *  on truthy `draggable`, so force the flag explicitly to allow turning an
+   *  already-interactive container back to click-only. */
+  private applyDraggable(
+    container: Phaser.GameObjects.Container,
+    draggable: boolean,
+  ): void {
+    container.setInteractive({ draggable });
+    const input = container.input as unknown as { draggable: boolean } | null;
+    if (input) input.draggable = draggable;
+  }
+
+  private cellKeyOf(token: Token): string {
+    return `${Math.floor(token.x)},${Math.floor(token.y)}`;
+  }
+
+  /** Whether the map-level container for this token is directly draggable.
+   *  Stacked tokens move via popover chips only (click the stack first). */
+  private isDirectlyMovable(token: Token, stack: TokenStack | undefined): boolean {
+    if (!this.canMoveToken(token)) return false;
+    if (stack && stack.tokens.length > 1) return false;
+    return true;
+  }
+
+  private updateVisibility(): void {
+    const { byCell } = this.stacksForViewer();
+    // Topmost *visible* token per stack; hidden stack-tops must not mask it.
+    const topVisibleById = new Set<string>();
+    for (const s of byCell.values()) {
+      if (s.tokens.length > 0) topVisibleById.add(s.tokens[0].id);
     }
 
     for (const token of this.tokens) {
       const container = this.tokenContainers.get(token.id);
       if (!container) continue;
 
-      const cellKey = `${Math.floor(token.x)},${Math.floor(token.y)}`;
-      const stack = stackMap.get(cellKey);
-      const isStackedBehind = stack && stack.tokens.length > 1 && stack.tokens[0].id !== token.id;
+      const stack = byCell.get(this.cellKeyOf(token));
+      const isStackedBehind =
+        stack !== undefined && stack.tokens.length > 1 && stack.tokens[0].id !== token.id;
 
       if (isStackedBehind) {
         container.setVisible(false);
+      } else if (!topVisibleById.has(token.id)) {
+        // Hidden from this viewer (players only — DM sees everything).
+        container.setVisible(false);
       } else if (token.hidden) {
-        if (this.isDm) {
-          container.setVisible(true);
-          container.setAlpha(0.5);
-        } else {
-          container.setVisible(false);
-        }
+        // DM-only branch: DM sees hidden tokens ghosted.
+        container.setVisible(true);
+        container.setAlpha(0.5);
       } else {
         container.setVisible(true);
         container.setAlpha(1.0);
@@ -126,11 +182,7 @@ export class TokenLayer {
       }
     }
 
-    const stacks = groupTokensIntoStacks(this.tokens);
-    const stackMap = new Map<string, TokenStack>();
-    for (const s of stacks) {
-      stackMap.set(`${s.cell.cellX},${s.cell.cellY}`, s);
-    }
+    const { byCell: stackMap } = this.stacksForViewer();
 
     for (const token of this.tokens) {
       let container = this.tokenContainers.get(token.id);
@@ -144,6 +196,10 @@ export class TokenLayer {
         this.tokenContainers.set(token.id, container);
       } else {
         container!.removeAll(true);
+        // Drop stale input listeners from the previous build; otherwise every
+        // setTokens() accumulates duplicate DRAG_END handlers with stale
+        // closures that fight over the container position.
+        container!.removeAllListeners();
         if (
           this.tweenMoves &&
           this.scene.tweens &&
@@ -162,11 +218,13 @@ export class TokenLayer {
         }
       }
 
-      this.populateTokenContainer(container!, token);
-
-      // Add stack count badge if multiple tokens share this cell
-      const cellKey = `${Math.floor(token.x)},${Math.floor(token.y)}`;
+      const cellKey = this.cellKeyOf(token);
       const stack = stackMap.get(cellKey);
+      this.populateTokenContainer(container!, token, {
+        draggable: this.isDirectlyMovable(token, stack),
+      });
+
+      // Add stack count badge if multiple *visible* tokens share this cell
       if (stack && stack.tokens.length > 1 && stack.tokens[0].id === token.id) {
         this.addStackBadge(container!, stack.tokens.length);
       } else if (stack && stack.tokens.length > 1 && stack.tokens[0].id !== token.id) {
@@ -188,7 +246,11 @@ export class TokenLayer {
     }
   }
 
-  private populateTokenContainer(container: Phaser.GameObjects.Container, token: Token): void {
+  private populateTokenContainer(
+    container: Phaser.GameObjects.Container,
+    token: Token,
+    opts: { draggable: boolean },
+  ): void {
     const radius = TOKEN_RADIUS * CELL;
     const sheet = token.sheetId ? this.sheets[token.sheetId] : null;
     const effectiveColor = sheet?.color && sheet.color.trim().length > 0 ? sheet.color : token.color;
@@ -242,11 +304,13 @@ export class TokenLayer {
     text.setOrigin(0.5, 0.5);
     container.add(text);
 
-    // Hit Area & Interactivity
+    // Hit Area & Interactivity. Stacked tops and tokens the viewer may not
+    // move are click-only (open popover / sheet); singles the viewer may move
+    // are draggable.
     container.setSize(radius * 2, radius * 2);
-    container.setInteractive({ draggable: true });
+    this.applyDraggable(container, opts.draggable);
 
-    this.setupContainerInput(container, token);
+    this.setupContainerInput(container, token, opts);
   }
 
   private addStackBadge(container: Phaser.GameObjects.Container, count: number): void {
@@ -270,7 +334,72 @@ export class TokenLayer {
     container.add(badge);
   }
 
-  private setupContainerInput(container: Phaser.GameObjects.Container, token: Token): void {
+  /** Shared click behavior: toggle the stack popover for multi-token stacks. */
+  private handleTokenClick(token: Token): void {
+    const cellKey = this.cellKeyOf(token);
+    if (this.expandedStackCell === cellKey) {
+      this.closePopover();
+      return;
+    }
+    const { byCell } = this.stacksForViewer();
+    const stack = byCell.get(cellKey);
+    if (stack && stack.tokens.length > 1) {
+      this.openPopover(stack);
+    }
+  }
+
+  private openTokenSheet(tokenId: string, sheetId: string | null): void {
+    this.onTokenDoubleClick?.(tokenId);
+    if (sheetId) {
+      window.dispatchEvent(
+        new CustomEvent<{ sheetId: string }>("dndm-open-sheet", {
+          bubbles: true,
+          composed: true,
+          detail: { sheetId },
+        }),
+      );
+    }
+  }
+
+  /** Resolve a dropped container position to grid coords (snap unless Ctrl). */
+  private resolveDrop(
+    container: Phaser.GameObjects.Container,
+    pointer: Phaser.Input.Pointer,
+  ): { x: number; y: number } {
+    const rawCellX = container.x / CELL;
+    const rawCellY = container.y / CELL;
+    const ctrlHeld = pointer.event ? (pointer.event as MouseEvent).ctrlKey : false;
+
+    if (ctrlHeld || !this.grid.snapToGrid) {
+      return {
+        x: Phaser.Math.Clamp(rawCellX, 0, this.grid.widthCells),
+        y: Phaser.Math.Clamp(rawCellY, 0, this.grid.heightCells),
+      };
+    }
+    return snapToken(rawCellX, rawCellY, this.grid);
+  }
+
+  private setupContainerInput(
+    container: Phaser.GameObjects.Container,
+    token: Token,
+    opts: { draggable: boolean },
+  ): void {
+    if (!opts.draggable) {
+      // Click-only token (stack top or no move permission): single click
+      // toggles the stack popover, double-click opens the sheet.
+      let lastClickTime = 0;
+      container.on(Phaser.Input.Events.POINTER_UP, () => {
+        const now = Date.now();
+        if (now - lastClickTime < 350) {
+          this.openTokenSheet(token.id, token.sheetId);
+        } else {
+          this.handleTokenClick(token);
+        }
+        lastClickTime = now;
+      });
+      return;
+    }
+
     let lastClickTime = 0;
     let didDrag = false;
     let dragStartX = 0;
@@ -298,28 +427,9 @@ export class TokenLayer {
         // Handle click / stack toggle / double click
         const now = Date.now();
         if (now - lastClickTime < 350) {
-          this.onTokenDoubleClick?.(token.id);
-          if (token.sheetId) {
-            window.dispatchEvent(
-              new CustomEvent<{ sheetId: string }>("dndm-open-sheet", {
-                bubbles: true,
-                composed: true,
-                detail: { sheetId: token.sheetId },
-              }),
-            );
-          }
+          this.openTokenSheet(token.id, token.sheetId);
         } else {
-          // Check if this token belongs to a multi-token stack
-          const cellKey = `${Math.floor(token.x)},${Math.floor(token.y)}`;
-          if (this.expandedStackCell === cellKey) {
-            this.closePopover();
-          } else {
-            const stacks = groupTokensIntoStacks(this.tokens);
-            const stack = stacks.find((s) => `${s.cell.cellX},${s.cell.cellY}` === cellKey);
-            if (stack && stack.tokens.length > 1) {
-              this.openPopover(stack);
-            }
-          }
+          this.handleTokenClick(token);
         }
         lastClickTime = now;
         container.setPosition(token.x * CELL, token.y * CELL);
@@ -327,19 +437,7 @@ export class TokenLayer {
       }
 
       // Dropped after drag
-      const rawCellX = container.x / CELL;
-      const rawCellY = container.y / CELL;
-      const ctrlHeld = pointer.event ? (pointer.event as MouseEvent).ctrlKey : false;
-
-      let finalPos: { x: number; y: number };
-      if (ctrlHeld || !this.grid.snapToGrid) {
-        finalPos = {
-          x: Phaser.Math.Clamp(rawCellX, 0, this.grid.widthCells),
-          y: Phaser.Math.Clamp(rawCellY, 0, this.grid.heightCells),
-        };
-      } else {
-        finalPos = snapToken(rawCellX, rawCellY, this.grid);
-      }
+      const finalPos = this.resolveDrop(container, pointer);
 
       container.setPosition(finalPos.x * CELL, finalPos.y * CELL);
       this.onTokenMoveEnd?.({
@@ -379,7 +477,8 @@ export class TokenLayer {
       this.popoverGfx.lineBetween(anchorWorldX, anchorWorldY, chipWorldX, chipWorldY);
     }
 
-    // Create chip tokens
+    // Create chip tokens. Chips the viewer may move are draggable (this is
+    // how stacked tokens are moved); others are click-only.
     const chipRadius = TOKEN_STACK_CHIP_RADIUS * CELL;
     for (const chip of layout.chips) {
       const t = stack.tokens.find((item) => item.id === chip.tokenId);
@@ -407,23 +506,43 @@ export class TokenLayer {
       txt.setOrigin(0.5, 0.5);
       chipContainer.add(txt);
 
+      const movable = this.canMoveToken(t);
+      if (!movable) chipContainer.setAlpha(0.65);
       chipContainer.setSize(chipRadius * 2, chipRadius * 2);
-      chipContainer.setInteractive();
+      this.applyDraggable(chipContainer, movable);
+      chipContainer.setData("tokenChipId", t.id);
+
+      if (movable) {
+        let didChipDrag = false;
+        let chipStartX = 0;
+        let chipStartY = 0;
+        chipContainer.on(Phaser.Input.Events.DRAG_START, () => {
+          didChipDrag = false;
+          chipStartX = chipContainer.x;
+          chipStartY = chipContainer.y;
+        });
+        chipContainer.on(
+          Phaser.Input.Events.DRAG,
+          (_pointer: Phaser.Input.Pointer, dragX: number, dragY: number) => {
+            if (Math.hypot(dragX - chipStartX, dragY - chipStartY) > 3) {
+              didChipDrag = true;
+            }
+            chipContainer.setPosition(dragX, dragY);
+          },
+        );
+        chipContainer.on(Phaser.Input.Events.DRAG_END, (pointer: Phaser.Input.Pointer) => {
+          if (!didChipDrag) return;
+          const finalPos = this.resolveDrop(chipContainer, pointer);
+          this.onTokenMoveEnd?.({ tokenId: t.id, x: finalPos.x, y: finalPos.y });
+          this.closePopover();
+        });
+      }
 
       let lastChipClick = 0;
       chipContainer.on(Phaser.Input.Events.POINTER_UP, () => {
         const now = Date.now();
         if (now - lastChipClick < 350) {
-          this.onTokenDoubleClick?.(t.id);
-          if (t.sheetId) {
-            window.dispatchEvent(
-              new CustomEvent<{ sheetId: string }>("dndm-open-sheet", {
-                bubbles: true,
-                composed: true,
-                detail: { sheetId: t.sheetId },
-              }),
-            );
-          }
+          this.openTokenSheet(t.id, t.sheetId);
         }
         lastChipClick = now;
       });
@@ -433,16 +552,42 @@ export class TokenLayer {
   }
 
   setInteractiveState(enabled: boolean): void {
-    for (const container of this.tokenContainers.values()) {
-      if (enabled) {
-        container.setInteractive({ draggable: true });
-      } else {
+    if (!enabled) {
+      for (const container of this.tokenContainers.values()) {
         container.disableInteractive();
       }
-    }
-    if (!enabled) {
       this.closePopover();
+      return;
     }
+    // Re-apply the per-token policy (stack tops stay click-only).
+    const { byCell } = this.stacksForViewer();
+    const byId = new Map(this.tokens.map((t) => [t.id, t] as const));
+    for (const [id, container] of this.tokenContainers.entries()) {
+      const token = byId.get(id);
+      if (!token) {
+        container.disableInteractive();
+        continue;
+      }
+      this.applyDraggable(
+        container,
+        this.isDirectlyMovable(token, byCell.get(this.cellKeyOf(token))),
+      );
+    }
+  }
+
+  /** True when the game object belongs to this layer (map token or popover chip). */
+  isTokenObject(obj: unknown): boolean {
+    if (!(obj instanceof Phaser.GameObjects.Container)) return false;
+    for (const container of this.tokenContainers.values()) {
+      if (container === obj) return true;
+    }
+    if (obj.getData?.("tokenChipId") !== undefined) return true;
+    return (this.popoverContainer.getAll() as unknown[]).includes(obj);
+  }
+
+  /** Pass-through for the scene move gate. */
+  canMove(token: Token): boolean {
+    return this.canMoveToken(token);
   }
 
   destroy(): void {
