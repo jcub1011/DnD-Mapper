@@ -90,7 +90,7 @@
 }
 
 .dndm-sheet-name-input {
-  flex: 1;
+  width: 100%;
   font-size: 1.1rem;
   font-weight: bold;
   background: transparent;
@@ -346,4 +346,295 @@
 .dndm-sheet-notes-preview a {
   color: var(--dndm-ember-hi);
   text-decoration: underline;
+}
+
+.dndm-sheet-hp-bar--clickable {
+  cursor: pointer;
+  padding: 0;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+}
+
+.dndm-sheet-hp-bar--clickable:hover {
+  border-color: var(--dndm-color-accent);
+}
+
+.dndm-sheet-hp-bar--clickable:focus-visible {
+  outline: 2px solid var(--dndm-color-accent);
+  outline-offset: 1px;
+}
+
+/* Click-to-edit numeric value buttons (replace inline number inputs) */
+.dndm-sheet-value-btn {
+  background: var(--dndm-color-surface-sunken);
+  border: 1px solid var(--dndm-color-border);
+  color: var(--dndm-color-text);
+  border-radius: var(--dndm-radius-sm);
+  padding: 2px 10px;
+  font-size: 0.9rem;
+  font-weight: bold;
+  cursor: pointer;
+  min-width: 44px;
+}
+
+.dndm-sheet-value-btn:hover {
+  border-color: var(--dndm-color-accent);
+}
+
+.dndm-sheet-value-btn:focus-visible {
+  outline: 2px solid var(--dndm-color-accent);
+  outline-offset: 1px;
+}
+
+.dndm-sheet-value-btn--score {
+  font-size: 1.1rem;
+  margin: 2px 0;
+  text-align: center;
+}
+
+.dndm-sheet-value-btn--ac {
+  font-size: 1rem;
+}
+
+/* Number popover (anchored editor for attributes, HP, AC) */
+.dndm-number-popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.dndm-number-popover {
+  position: fixed;
+  z-index: 91;
+  width: 232px;
+  box-sizing: border-box;
+  color: var(--dndm-text);
+  border: 1px solid var(--dndm-border);
+  border-radius: 8px;
+  padding: 12px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background-color: var(--dndm-bg-panel);
+  background-image: var(--dndm-noise), var(--dndm-panel-vignette), var(--dndm-panel-gradient);
+  background-position: center, center, center;
+  background-size:
+    240px 240px,
+    100% 100%,
+    100% 100%;
+  background-repeat: repeat, no-repeat, no-repeat;
+  box-shadow:
+    inset 0 1px 0 var(--dndm-highlight),
+    0 14px 38px rgba(0, 0, 0, 0.7),
+    0 0 0 1px var(--dndm-border-accent);
+  animation: dndm-popover-in 120ms ease-out;
+  transform-origin: top left;
+}
+
+@keyframes dndm-popover-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dndm-number-popover {
+    animation: none;
+  }
+}
+
+.dndm-number-popover-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 8px;
+}
+
+.dndm-number-popover-header::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--dndm-ember) 12%,
+    var(--dndm-ember) 88%,
+    transparent
+  );
+  opacity: 0.4;
+}
+
+.dndm-number-popover-title {
+  margin: 0;
+  font-family: var(--dndm-display);
+  font-style: italic;
+  font-size: 1.05rem;
+  font-weight: 500;
+  letter-spacing: 0.4px;
+  color: var(--dndm-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dndm-number-popover-close {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  color: var(--dndm-text-dim);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0;
+}
+
+.dndm-number-popover-close:hover {
+  color: var(--dndm-text);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--dndm-border);
+}
+
+/* Centered hero stepper for single values: [down] [ big number ] [up] */
+.dndm-number-popover-hero {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 2px 0;
+}
+
+.dndm-number-popover-hero .dndm-number-popover-input {
+  width: 76px;
+  font-size: 1.5rem;
+  padding: 6px 4px;
+}
+
+.dndm-number-popover-hero .dndm-number-popover-step {
+  width: 36px;
+  height: 36px;
+}
+
+/* Compact labeled rows for the HP popover */
+.dndm-number-popover-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dndm-number-popover-label {
+  font-size: 0.75rem;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--dndm-text-dim);
+}
+
+.dndm-number-popover-stepper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dndm-number-popover-stepper .dndm-number-popover-input {
+  width: 58px;
+  font-size: 1.1rem;
+  padding: 4px;
+}
+
+.dndm-number-popover-stepper .dndm-number-popover-step {
+  width: 30px;
+  height: 30px;
+}
+
+.dndm-number-popover-step {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--dndm-color-surface-sunken);
+  border: 1px solid var(--dndm-color-border);
+  border-radius: 50%;
+  color: var(--dndm-color-text);
+  cursor: pointer;
+  padding: 0;
+  transition: background 120ms ease, transform 80ms ease, border-color 120ms ease;
+}
+
+.dndm-number-popover-step:hover {
+  background: var(--dndm-color-accent);
+  border-color: var(--dndm-color-accent);
+  color: #ffffff;
+}
+
+.dndm-number-popover-step:active {
+  transform: scale(0.92);
+}
+
+.dndm-number-popover-step:focus-visible {
+  outline: 2px solid var(--dndm-color-accent);
+  outline-offset: 2px;
+}
+
+.dndm-number-popover-step svg {
+  display: block;
+}
+
+.dndm-number-popover-step--up svg {
+  transform: rotate(180deg);
+}
+
+.dndm-number-popover-input {
+  min-width: 0;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--dndm-color-border);
+  color: var(--dndm-color-text);
+  border-radius: var(--dndm-radius-sm);
+  font-weight: bold;
+  text-align: center;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.45);
+}
+
+/* Hide native spinners: the popover provides its own up/down buttons. */
+.dndm-number-popover-input::-webkit-outer-spin-button,
+.dndm-number-popover-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.dndm-number-popover-input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.dndm-number-popover-input:focus {
+  outline: none;
+  border-color: var(--dndm-color-accent);
+  box-shadow:
+    inset 0 2px 6px rgba(0, 0, 0, 0.45),
+    0 0 0 1px var(--dndm-color-accent);
+}
+
+.dndm-number-popover-hint {
+  font-size: 0.72rem;
+  font-style: italic;
+  text-align: center;
+  color: var(--dndm-text-dim);
 }

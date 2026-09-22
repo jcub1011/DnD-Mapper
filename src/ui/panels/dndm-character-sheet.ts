@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing, svg, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type {
   AttributePreset,
@@ -29,6 +29,7 @@ import {
 import { GameElement } from "../app/GameElement";
 import { toSafeHtml } from "./markdown";
 import "./dndm-status-effects";
+import "./dndm-collapsible-panel";
 import "../modals/dndm-sheet-settings-modal";
 import type { SheetSettingsPatch } from "../modals/dndm-sheet-settings-modal";
 import "../modals/dndm-schema-preset-modal";
@@ -152,6 +153,21 @@ export class DndmCharacterSheet extends GameElement {
   @state() private draftNotes: string | null = null;
   @state() private draftValues: Record<string, AttributeValue> | null = null;
 
+  // Click-to-edit number popover (attributes, HP, AC).
+  // Single-value popovers (attribute / AC) use popoverDraft;
+  // the HP popover edits current + max HP via popoverHpDraft / popoverMaxHpDraft.
+  @state() private numberPopover: {
+    kind: "attribute" | "hp" | "ac";
+    sheetId: string;
+    rowName?: string;
+    rowType?: "Score" | "Modifier";
+    anchorTop: number;
+    anchorLeft: number;
+  } | null = null;
+  @state() private popoverDraft: string | null = null;
+  @state() private popoverHpDraft: string | null = null;
+  @state() private popoverMaxHpDraft: string | null = null;
+
   private debounceTimers = new Map<string, number>();
 
   override disconnectedCallback(): void {
@@ -184,6 +200,7 @@ export class DndmCharacterSheet extends GameElement {
       this.draftName = null;
       this.draftNotes = null;
       this.draftValues = null;
+      this.closeNumberPopover(false);
     }
   }
 
@@ -330,35 +347,182 @@ export class DndmCharacterSheet extends GameElement {
   }
 
   // ── Immediate vital adjustments ─────────────────────────────────────────────
-  private adjustHp(sheet: CharacterSheet, delta: number): void {
-    const effectiveMax = resolveEffectiveMaxHp(sheet);
-    const currentHp = sheet.hp ?? 0;
-    let nextHp = currentHp + delta;
-    if (effectiveMax !== null) {
-      nextHp = Math.min(nextHp, effectiveMax);
-    }
-    nextHp = Math.max(0, nextHp);
+  private emitSetHp(sheetId: string, hp: number): void {
     this.dispatchEvent(
       new CustomEvent<{ sheetId: string; hp: number }>("set-sheet-hp", {
         bubbles: true,
         composed: true,
-        detail: { sheetId: sheet.id, hp: nextHp },
+        detail: { sheetId, hp },
       }),
     );
-    this.onSetSheetHp?.(sheet.id, nextHp);
+    this.onSetSheetHp?.(sheetId, hp);
   }
 
-  private adjustAc(sheet: CharacterSheet, delta: number): void {
-    const currentAc = sheet.armorClass ?? 10;
-    const nextAc = Math.max(0, currentAc + delta);
+  private emitSetMaxHp(sheetId: string, maxHp: number): void {
+    this.dispatchEvent(
+      new CustomEvent<{ sheetId: string; maxHp: number }>("set-sheet-max-hp", {
+        bubbles: true,
+        composed: true,
+        detail: { sheetId, maxHp },
+      }),
+    );
+    this.onSetSheetMaxHp?.(sheetId, maxHp);
+  }
+
+  private emitSetAc(sheetId: string, ac: number): void {
     this.dispatchEvent(
       new CustomEvent<{ sheetId: string; ac: number }>("set-sheet-ac", {
         bubbles: true,
         composed: true,
-        detail: { sheetId: sheet.id, ac: nextAc },
+        detail: { sheetId, ac },
       }),
     );
-    this.onSetSheetAc?.(sheet.id, nextAc);
+    this.onSetSheetAc?.(sheetId, ac);
+  }
+
+  private setHpAbsolute(sheet: CharacterSheet, raw: number): void {
+    if (!Number.isFinite(raw)) return;
+    const effectiveMax = resolveEffectiveMaxHp(sheet);
+    let nextHp = Math.round(raw);
+    if (effectiveMax !== null) {
+      nextHp = Math.min(nextHp, effectiveMax);
+    }
+    nextHp = Math.max(0, nextHp);
+    this.emitSetHp(sheet.id, nextHp);
+  }
+
+  private setMaxHpAbsolute(sheet: CharacterSheet, raw: number): void {
+    if (!Number.isFinite(raw)) return;
+    const nextMax = Math.max(0, Math.round(raw));
+    this.emitSetMaxHp(sheet.id, nextMax);
+  }
+
+  private setAcAbsolute(sheet: CharacterSheet, raw: number): void {
+    if (!Number.isFinite(raw)) return;
+    this.emitSetAc(sheet.id, Math.max(0, Math.round(raw)));
+  }
+
+  // ── Number popover (click-to-edit for attributes, HP, AC) ───────────────────
+  private openNumberPopover(
+    kind: "attribute" | "hp" | "ac",
+    sheetId: string,
+    anchor: HTMLElement,
+    extra?: { rowName?: string; rowType?: "Score" | "Modifier" },
+  ): void {
+    const rect = anchor.getBoundingClientRect();
+    const popoverWidth = 240;
+    const estimatedHeight = kind === "hp" ? 190 : 140;
+    let left = rect.left;
+    if (typeof window !== "undefined") {
+      left = Math.max(8, Math.min(rect.left, window.innerWidth - popoverWidth - 8));
+    }
+    let top = rect.bottom + 6;
+    if (typeof window !== "undefined" && top + estimatedHeight > window.innerHeight - 8) {
+      top = Math.max(8, rect.top - estimatedHeight - 6);
+    }
+    this.numberPopover = {
+      kind,
+      sheetId,
+      rowName: extra?.rowName,
+      rowType: extra?.rowType,
+      anchorTop: top,
+      anchorLeft: left,
+    };
+    this.popoverDraft = null;
+    this.popoverHpDraft = null;
+    this.popoverMaxHpDraft = null;
+  }
+
+  private commitPopoverDrafts(sheet: CharacterSheet): void {
+    const pop = this.numberPopover;
+    if (!pop || pop.sheetId !== sheet.id) return;
+    if (pop.kind === "attribute" && pop.rowName && pop.rowType) {
+      if (this.popoverDraft !== null) {
+        const n = parseInt(this.popoverDraft, 10);
+        if (!isNaN(n)) {
+          const row: AttributeRow = {
+            name: pop.rowName,
+            type: pop.rowType,
+            default:
+              pop.rowType === "Score"
+                ? { kind: "Score", value: 10 }
+                : { kind: "Modifier", value: 0 },
+          };
+          const fallback = pop.rowType === "Score" ? 10 : 0;
+          this.onAttributeInput(sheet, row, {
+            kind: pop.rowType,
+            value: isNaN(n) ? fallback : n,
+          } as AttributeValue);
+        }
+      }
+    } else if (pop.kind === "ac") {
+      if (this.popoverDraft !== null) {
+        const n = parseInt(this.popoverDraft, 10);
+        if (!isNaN(n)) this.setAcAbsolute(sheet, n);
+      }
+    } else if (pop.kind === "hp") {
+      if (this.popoverMaxHpDraft !== null) {
+        const n = parseInt(this.popoverMaxHpDraft, 10);
+        if (!isNaN(n)) this.setMaxHpAbsolute(sheet, n);
+      }
+      if (this.popoverHpDraft !== null) {
+        const n = parseInt(this.popoverHpDraft, 10);
+        if (!isNaN(n)) this.setHpAbsolute(sheet, n);
+      }
+    }
+  }
+
+  private closeNumberPopover(commit: boolean): void {
+    if (commit && this.numberPopover) {
+      const sheet = this.sheets[this.numberPopover.sheetId];
+      if (sheet) this.commitPopoverDrafts(sheet);
+    }
+    if (this.numberPopover !== null || this.popoverDraft !== null) {
+      this.numberPopover = null;
+      this.popoverDraft = null;
+      this.popoverHpDraft = null;
+      this.popoverMaxHpDraft = null;
+    }
+  }
+
+  private stepPopoverValue(sheet: CharacterSheet, delta: number): void {
+    const pop = this.numberPopover;
+    if (!pop) return;
+    if (pop.kind === "attribute" && pop.rowName && pop.rowType) {
+      const values = this.draftValues ?? sheet.values;
+      const current = values[pop.rowName];
+      const base =
+        current && current.kind === pop.rowType
+          ? (current.value as number)
+          : pop.rowType === "Score"
+            ? 10
+            : 0;
+      const draftNum =
+        this.popoverDraft !== null ? parseInt(this.popoverDraft, 10) : base;
+      const next = (isNaN(draftNum) ? base : draftNum) + delta;
+      this.popoverDraft = String(next);
+      const row: AttributeRow = {
+        name: pop.rowName,
+        type: pop.rowType,
+        default:
+          pop.rowType === "Score"
+            ? { kind: "Score", value: 10 }
+            : { kind: "Modifier", value: 0 },
+      };
+      this.onAttributeInput(sheet, row, {
+        kind: pop.rowType,
+        value: next,
+      } as AttributeValue);
+    } else if (pop.kind === "ac") {
+      const base = sheet.armorClass ?? 10;
+      const draftNum =
+        this.popoverDraft !== null ? parseInt(this.popoverDraft, 10) : base;
+      const next = Math.max(0, (isNaN(draftNum) ? base : draftNum) + delta);
+      this.popoverDraft = String(next);
+      this.setAcAbsolute(sheet, next);
+    } else if (pop.kind === "hp") {
+      // HP popover has separate steppers per field; this helper is unused.
+    }
   }
 
   // ── Preset switching with cascade prune warning ────────────────────────────
@@ -438,8 +602,17 @@ export class DndmCharacterSheet extends GameElement {
         : null;
 
     return html`
-      <div class="dndm-sheet-panel">
-        <!-- Roster / Selector Header -->
+      <dndm-collapsible-panel
+        panelTitle="Character Sheet"
+        panelClass="dndm-character-sheet-panel"
+        .onToggleCollapse=${() => {
+          // Collapsing with the number popover open would orphan it over the
+          // rail; commit any typed value like a backdrop click does.
+          if (this.numberPopover) this.closeNumberPopover(true);
+        }}
+        .content=${html`
+          <div class="dndm-sheet-panel">
+            <!-- Roster / Selector Header -->
         <div class="dndm-sheet-roster">
           <div class="dndm-sheet-roster-controls">
             <button
@@ -520,7 +693,9 @@ export class DndmCharacterSheet extends GameElement {
                 Select or create a character sheet to view details.
               </div>
             `}
-      </div>
+          </div>
+        `}
+      ></dndm-collapsible-panel>
 
       <!-- Modals -->
       <dndm-sheet-settings-modal
@@ -610,6 +785,241 @@ export class DndmCharacterSheet extends GameElement {
           this.pendingPreset = null;
         }}
       ></dndm-schema-cascade-warning>
+
+      ${this.renderNumberPopover()}
+    `;
+  }
+
+  private renderNumberPopover(): TemplateResult | typeof nothing {
+    const pop = this.numberPopover;
+    if (!pop) return nothing;
+    const sheet = this.sheets[pop.sheetId];
+    if (!sheet) return nothing;
+
+    const closeAndCommit = () => this.closeNumberPopover(true);
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        this.closeNumberPopover(false);
+      } else if (e.key === "Enter") {
+        e.stopPropagation();
+        this.closeNumberPopover(true);
+      }
+    };
+
+    // Note: the chevron is a static `svg` template (not nested `html`
+    // fragments) so the <path> lands in the SVG namespace. Bare <path>
+    // fragments stamped via `html` end up in the XHTML namespace and
+    // render as nothing. The "up" variant is the same icon rotated 180°.
+    const chevronIcon = svg`
+      <svg
+        viewBox="0 0 16 16"
+        width="15"
+        height="15"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M3 6l5 5 5-5" />
+      </svg>
+    `;
+
+    const stepButton = (
+      dir: -1 | 1,
+      titlePrefix: string,
+      onStep: (delta: number) => void,
+    ) => html`
+      <button
+        class="dndm-number-popover-step${dir === 1 ? " dndm-number-popover-step--up" : ""}"
+        title=${dir === 1 ? `Increase ${titlePrefix}` : `Decrease ${titlePrefix}`}
+        aria-label=${dir === 1 ? `Increase ${titlePrefix}` : `Decrease ${titlePrefix}`}
+        @click=${() => onStep(dir)}
+      >
+        ${chevronIcon}
+      </button>
+    `;
+
+    const numberField = (
+      label: string,
+      inputValue: string,
+      onDraft: (v: string) => void,
+      onCommit: () => void,
+    ) => html`
+      <input
+        type="number"
+        class="dndm-number-popover-input"
+        .value=${inputValue}
+        aria-label=${label}
+        @input=${(e: Event) => {
+          onDraft((e.target as HTMLInputElement).value);
+        }}
+        @change=${() => onCommit()}
+        @keydown=${handleKey}
+      />
+    `;
+
+    // Single value, centered hero stepper: [down] [ big number ] [up].
+    const heroStepper = (
+      label: string,
+      inputValue: string,
+      onDraft: (v: string) => void,
+      onStep: (delta: number) => void,
+      onCommit: () => void,
+      titlePrefix: string,
+    ) => html`
+      <div class="dndm-number-popover-hero">
+        ${stepButton(-1, titlePrefix, onStep)}
+        ${numberField(label, inputValue, onDraft, onCommit)}
+        ${stepButton(1, titlePrefix, onStep)}
+      </div>
+    `;
+
+    // Compact labeled row for the HP popover: label left, stepper right.
+    const compactRow = (
+      label: string,
+      inputValue: string,
+      onDraft: (v: string) => void,
+      onStep: (delta: number) => void,
+      onCommit: () => void,
+      titlePrefix: string,
+    ) => html`
+      <div class="dndm-number-popover-row">
+        <span class="dndm-number-popover-label">${label}</span>
+        <div class="dndm-number-popover-stepper">
+          ${stepButton(-1, titlePrefix, onStep)}
+          ${numberField(label, inputValue, onDraft, onCommit)}
+          ${stepButton(1, titlePrefix, onStep)}
+        </div>
+      </div>
+    `;
+    let title = "Edit value";
+    let body: TemplateResult = html``;
+    if (pop.kind === "attribute" && pop.rowName && pop.rowType) {
+      title = `Edit ${pop.rowName}`;
+      const values = this.draftValues ?? sheet.values;
+      const current = values[pop.rowName];
+      const base =
+        current && current.kind === pop.rowType
+          ? String(current.value as number)
+          : pop.rowType === "Score"
+            ? "10"
+            : "0";
+      const inputValue = this.popoverDraft ?? base;
+      body = heroStepper(
+        pop.rowName,
+        inputValue,
+        (v) => {
+          this.popoverDraft = v;
+        },
+        (d) => this.stepPopoverValue(sheet, d),
+        () => {
+          this.commitPopoverDrafts(sheet);
+          this.popoverDraft = null;
+        },
+        pop.rowName,
+      );
+    } else if (pop.kind === "ac") {
+      title = "Edit Armor Class";
+      const base = String(sheet.armorClass ?? 10);
+      const inputValue = this.popoverDraft ?? base;
+      body = heroStepper(
+        "AC",
+        inputValue,
+        (v) => {
+          this.popoverDraft = v;
+        },
+        (d) => this.stepPopoverValue(sheet, d),
+        () => {
+          this.commitPopoverDrafts(sheet);
+          this.popoverDraft = null;
+        },
+        "Armor Class",
+      );
+    } else if (pop.kind === "hp") {
+      title = "Edit Hit Points";
+      const hpInput = this.popoverHpDraft ?? String(sheet.hp ?? 0);
+      const maxInput = this.popoverMaxHpDraft ?? (sheet.maxHp !== null ? String(sheet.maxHp) : "");
+      const stepHp = (delta: number) => {
+        const draftNum = this.popoverHpDraft !== null ? parseInt(this.popoverHpDraft, 10) : (sheet.hp ?? 0);
+        const baseNum = isNaN(draftNum) ? (sheet.hp ?? 0) : draftNum;
+        let next = Math.max(0, baseNum + delta);
+        const effectiveMax = resolveEffectiveMaxHp(sheet);
+        if (effectiveMax !== null) next = Math.min(next, effectiveMax);
+        this.popoverHpDraft = String(next);
+        this.setHpAbsolute(sheet, next);
+      };
+      const stepMaxHp = (delta: number) => {
+        const draftNum =
+          this.popoverMaxHpDraft !== null && this.popoverMaxHpDraft !== ""
+            ? parseInt(this.popoverMaxHpDraft, 10)
+            : (sheet.maxHp ?? 0);
+        const baseNum = isNaN(draftNum) ? (sheet.maxHp ?? 0) : draftNum;
+        const next = Math.max(0, baseNum + delta);
+        this.popoverMaxHpDraft = String(next);
+        this.setMaxHpAbsolute(sheet, next);
+      };
+      body = html`
+        ${compactRow(
+          "Current",
+          hpInput,
+          (v) => {
+            this.popoverHpDraft = v;
+          },
+          stepHp,
+          () => {
+            this.commitPopoverDrafts(sheet);
+            this.popoverHpDraft = null;
+            this.popoverMaxHpDraft = null;
+          },
+          "HP",
+        )}
+        ${compactRow(
+          "Max",
+          maxInput,
+          (v) => {
+            this.popoverMaxHpDraft = v;
+          },
+          stepMaxHp,
+          () => {
+            this.commitPopoverDrafts(sheet);
+            this.popoverHpDraft = null;
+            this.popoverMaxHpDraft = null;
+          },
+          "max HP",
+        )}
+        <div class="dndm-number-popover-hint">Effective max includes status effects.</div>
+      `;
+    }
+
+    return html`
+      <div
+        class="dndm-number-popover-backdrop"
+        @click=${closeAndCommit}
+        @keydown=${handleKey}
+      ></div>
+      <div
+        class="dndm-number-popover"
+        role="dialog"
+        aria-label=${title}
+        style="top: ${pop.anchorTop}px; left: ${pop.anchorLeft}px;"
+        @click=${(e: Event) => e.stopPropagation()}
+      >
+        <div class="dndm-number-popover-header">
+          <span class="dndm-number-popover-title">${title}</span>
+          <button
+            class="dndm-number-popover-close"
+            title="Close"
+            aria-label="Close"
+            @click=${closeAndCommit}
+          >
+            ✕
+          </button>
+        </div>
+        ${body}
+      </div>
     `;
   }
 
@@ -673,87 +1083,81 @@ export class DndmCharacterSheet extends GameElement {
       ${canViewNotesAndHp
         ? html`
             <div class="dndm-sheet-vitals">
-              <!-- HP Bar -->
-              <div class="dndm-sheet-hp-bar">
-                <div
-                  class="dndm-sheet-hp-fill ${isDead ? "dndm-sheet-hp-fill--dead" : isBloodied ? "dndm-sheet-hp-fill--bloodied" : ""}"
-                  style="width: ${hpPercent}%;"
-                ></div>
-                <div class="dndm-sheet-hp-text">
-                  ${sheet.hp != null && effectiveMaxHp != null
-                    ? `${currentHp} / ${effectiveMaxHp} HP`
-                    : "HP Not Set"}
-                  ${isDead ? " (Dead)" : isBloodied ? " (Bloodied)" : ""}
-                </div>
-              </div>
+              <!-- HP Bar (click to edit HP / max HP) -->
+              ${editable
+                ? html`
+                    <button
+                      class="dndm-sheet-hp-bar dndm-sheet-hp-bar--clickable"
+                      title="Edit HP"
+                      @click=${(e: Event) => {
+                        this.openNumberPopover("hp", sheet.id, e.currentTarget as HTMLElement);
+                      }}
+                    >
+                      <div
+                        class="dndm-sheet-hp-fill ${isDead ? "dndm-sheet-hp-fill--dead" : isBloodied ? "dndm-sheet-hp-fill--bloodied" : ""}"
+                        style="width: ${hpPercent}%;"
+                      ></div>
+                      <div class="dndm-sheet-hp-text">
+                        ${sheet.hp != null && effectiveMaxHp != null
+                          ? `${currentHp} / ${effectiveMaxHp} HP`
+                          : "HP Not Set"}
+                        ${isDead ? " (Dead)" : isBloodied ? " (Bloodied)" : ""}
+                      </div>
+                    </button>
+                  `
+                : html`
+                    <div class="dndm-sheet-hp-bar">
+                      <div
+                        class="dndm-sheet-hp-fill ${isDead ? "dndm-sheet-hp-fill--dead" : isBloodied ? "dndm-sheet-hp-fill--bloodied" : ""}"
+                        style="width: ${hpPercent}%;"
+                      ></div>
+                      <div class="dndm-sheet-hp-text">
+                        ${sheet.hp != null && effectiveMaxHp != null
+                          ? `${currentHp} / ${effectiveMaxHp} HP`
+                          : "HP Not Set"}
+                        ${isDead ? " (Dead)" : isBloodied ? " (Bloodied)" : ""}
+                      </div>
+                    </div>
+                  `}
 
               <!-- Controls Row -->
               <div class="dndm-sheet-vitals-row">
-                <!-- HP Stepper -->
+                <!-- HP Value -->
                 <div class="dndm-sheet-stat-box">
                   <span style="font-size: 0.75rem; font-weight: bold;">HP:</span>
                   ${editable
                     ? html`
-                        <div class="dndm-sheet-stepper">
-                          <button
-                            class="dndm-sheet-step-btn"
-                            title="-5 HP"
-                            @click=${() => this.adjustHp(sheet, -5)}
-                          >
-                            -5
-                          </button>
-                          <button
-                            class="dndm-sheet-step-btn"
-                            title="-1 HP"
-                            @click=${() => this.adjustHp(sheet, -1)}
-                          >
-                            -1
-                          </button>
-                          <button
-                            class="dndm-sheet-step-btn"
-                            title="+1 HP"
-                            @click=${() => this.adjustHp(sheet, 1)}
-                          >
-                            +1
-                          </button>
-                          <button
-                            class="dndm-sheet-step-btn"
-                            title="+5 HP"
-                            @click=${() => this.adjustHp(sheet, 5)}
-                          >
-                            +5
-                          </button>
-                        </div>
+                        <button
+                          class="dndm-sheet-value-btn"
+                          title="Edit HP"
+                          @click=${(e: Event) => {
+                            this.openNumberPopover("hp", sheet.id, e.currentTarget as HTMLElement);
+                          }}
+                        >
+                          ${currentHp} / ${effectiveMaxHp ?? "—"}
+                        </button>
                       `
-                    : html`<span style="font-size: 0.85rem;">${currentHp}</span>`}
+                    : html`<span style="font-size: 0.85rem;">${currentHp} / ${effectiveMaxHp ?? "—"}</span>`}
                 </div>
 
-                <!-- AC Stepper -->
+                <!-- AC Value -->
                 <div class="dndm-sheet-stat-box">
                   <span style="font-size: 0.75rem; font-weight: bold;">AC:</span>
-                  <span style="font-size: 1rem; font-weight: bold; margin-right: 4px;">
-                    ${sheet.armorClass ?? 10}
-                  </span>
                   ${editable
                     ? html`
-                        <div class="dndm-sheet-stepper">
-                          <button
-                            class="dndm-sheet-step-btn"
-                            title="-1 AC"
-                            @click=${() => this.adjustAc(sheet, -1)}
-                          >
-                            -
-                          </button>
-                          <button
-                            class="dndm-sheet-step-btn"
-                            title="+1 AC"
-                            @click=${() => this.adjustAc(sheet, 1)}
-                          >
-                            +
-                          </button>
-                        </div>
+                        <button
+                          class="dndm-sheet-value-btn dndm-sheet-value-btn--ac"
+                          title="Edit Armor Class"
+                          @click=${(e: Event) => {
+                            this.openNumberPopover("ac", sheet.id, e.currentTarget as HTMLElement);
+                          }}
+                        >
+                          ${sheet.armorClass ?? 10}
+                        </button>
                       `
-                    : nothing}
+                    : html`<span style="font-size: 1rem; font-weight: bold; margin-right: 4px;">
+                        ${sheet.armorClass ?? 10}
+                      </span>`}
                 </div>
               </div>
             </div>
@@ -775,22 +1179,21 @@ export class DndmCharacterSheet extends GameElement {
 
                 return html`
                   <div class="dndm-score-card">
-                    <span class="dndm-score-label">${shortAbilityName(row.name)}</span>
+                    <span class="dndm-score-label" title=${row.name}>${shortAbilityName(row.name)}</span>
                     ${editable
                       ? html`
-                          <input
-                            type="number"
-                            class="dndm-sheet-attr-input"
-                            style="width: 46px; text-align: center; font-size: 1.1rem; font-weight: bold; margin: 2px 0;"
-                            .value=${String(rawNum)}
-                            @input=${(e: Event) => {
-                              const num = parseInt((e.target as HTMLInputElement).value, 10);
-                              this.onAttributeInput(sheet, row, {
-                                kind: "Score",
-                                value: isNaN(num) ? 10 : num,
+                          <button
+                            class="dndm-sheet-value-btn dndm-sheet-value-btn--score"
+                            title="Edit ${row.name}"
+                            @click=${(e: Event) => {
+                              this.openNumberPopover("attribute", sheet.id, e.currentTarget as HTMLElement, {
+                                rowName: row.name,
+                                rowType: "Score",
                               });
                             }}
-                          />
+                          >
+                            ${rawNum}
+                          </button>
                         `
                       : html`<span class="dndm-score-value">${effectiveNum}</span>`}
                     <span class="dndm-score-modifier">${modStr}</span>
@@ -813,7 +1216,7 @@ export class DndmCharacterSheet extends GameElement {
 
                   return html`
                     <div class="dndm-sheet-attr-row">
-                      <span>${row.name}</span>
+                      <span title=${row.name}>${row.name}</span>
                       ${this.renderAttributeValueEditor(sheet, row, val, editable)}
                     </div>
                   `;
@@ -914,34 +1317,44 @@ export class DndmCharacterSheet extends GameElement {
   ): TemplateResult {
     switch (row.type) {
       case "Score": {
-        const num = val.kind === "Score" ? val.value : 10;
+        const values = this.draftValues ?? sheet.values;
+        const current = values[row.name];
+        const num = current && current.kind === "Score" ? current.value : 10;
         return editable
           ? html`
-              <input
-                type="number"
-                class="dndm-sheet-attr-input"
-                .value=${String(num)}
-                @input=${(e: Event) => {
-                  const n = parseInt((e.target as HTMLInputElement).value, 10);
-                  this.onAttributeInput(sheet, row, { kind: "Score", value: isNaN(n) ? 10 : n });
+              <button
+                class="dndm-sheet-value-btn"
+                title="Edit ${row.name}"
+                @click=${(e: Event) => {
+                  this.openNumberPopover("attribute", sheet.id, e.currentTarget as HTMLElement, {
+                    rowName: row.name,
+                    rowType: "Score",
+                  });
                 }}
-              />
+              >
+                ${num}
+              </button>
             `
           : html`<span>${num}</span>`;
       }
       case "Modifier": {
-        const num = val.kind === "Modifier" ? val.value : 0;
+        const values = this.draftValues ?? sheet.values;
+        const current = values[row.name];
+        const num = current && current.kind === "Modifier" ? current.value : 0;
         return editable
           ? html`
-              <input
-                type="number"
-                class="dndm-sheet-attr-input"
-                .value=${String(num)}
-                @input=${(e: Event) => {
-                  const n = parseInt((e.target as HTMLInputElement).value, 10);
-                  this.onAttributeInput(sheet, row, { kind: "Modifier", value: isNaN(n) ? 0 : n });
+              <button
+                class="dndm-sheet-value-btn"
+                title="Edit ${row.name}"
+                @click=${(e: Event) => {
+                  this.openNumberPopover("attribute", sheet.id, e.currentTarget as HTMLElement, {
+                    rowName: row.name,
+                    rowType: "Modifier",
+                  });
                 }}
-              />
+              >
+                ${num >= 0 ? `+${num}` : num}
+              </button>
             `
           : html`<span>${num >= 0 ? `+${num}` : num}</span>`;
       }

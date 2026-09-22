@@ -92,6 +92,63 @@ describe("<dndm-character-sheet>", () => {
     expect(badge?.textContent).toContain("Blessed");
   });
 
+  it("wraps the sheet section in a collapsible side-rail panel", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin");
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+    el.currentUserId = "dm-1";
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    const panel = el.querySelector("dndm-collapsible-panel");
+    expect(panel).not.toBeNull();
+    await (panel as unknown as { updateComplete: Promise<unknown> }).updateComplete;
+
+    // Header shows the section title; sheet content lives in the panel body.
+    expect(panel?.querySelector(".dndm-panel-title-text")?.textContent).toContain(
+      "Character Sheet",
+    );
+    expect(el.querySelector(".dndm-sheet-name-input")).not.toBeNull();
+
+    // Clicking the header collapses the section.
+    const section = panel?.querySelector(".dndm-panel") as HTMLElement;
+    expect(section.classList.contains("dndm-panel--collapsed")).toBe(false);
+    const header = panel?.querySelector(".dndm-panel-header") as HTMLElement;
+    header.click();
+    await (panel as unknown as { updateComplete: Promise<unknown> }).updateComplete;
+    expect(section.classList.contains("dndm-panel--collapsed")).toBe(true);
+
+    // Clicking again expands it.
+    header.click();
+    await (panel as unknown as { updateComplete: Promise<unknown> }).updateComplete;
+    expect(section.classList.contains("dndm-panel--collapsed")).toBe(false);
+  });
+
+  it("shows full attribute names as tooltips on hover", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin");
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+    el.currentUserId = "dm-1";
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    // Ability cards abbreviate (STR) but expose the full name on hover.
+    const labels = Array.from(el.querySelectorAll(".dndm-score-label"));
+    expect(labels.length).toBe(6);
+    const strLabel = labels.find((l) => l.textContent?.trim() === "STR");
+    expect(strLabel?.getAttribute("title")).toBe("Strength");
+
+    // Attribute table rows expose their full name on hover as well.
+    const rowName = el.querySelector(".dndm-sheet-attr-row span");
+    expect(rowName?.getAttribute("title")).toBe(rowName?.textContent);
+  });
+
   it("debounces rapid typing in characterName by 300ms without saturating intents", async () => {
     const sheet1 = makeSheet("sheet-1", "Thorin");
     const onUpdateSheet = vi.fn();
@@ -135,7 +192,7 @@ describe("<dndm-character-sheet>", () => {
     expect(onUpdateSheet).toHaveBeenCalledWith("sheet-1", { characterName: "Thorin Oakenshield" });
   });
 
-  it("emits immediate intent when HP stepper buttons are clicked", async () => {
+  it("opens an HP popover from the vitals and steps +1 immediately", async () => {
     const sheet1 = makeSheet("sheet-1", "Thorin");
     const onSetSheetHp = vi.fn();
 
@@ -148,15 +205,163 @@ describe("<dndm-character-sheet>", () => {
     document.body.appendChild(el);
     await el.updateComplete;
 
-    // Click +1 HP button
-    const stepBtns = el.querySelectorAll(".dndm-sheet-step-btn");
-    const plusOneBtn = Array.from(stepBtns).find((b) => b.textContent?.trim() === "+1") as HTMLButtonElement;
-    expect(plusOneBtn).toBeDefined();
+    // No inline stepper buttons anymore; HP is edited via popover.
+    expect(el.querySelector(".dndm-sheet-step-btn")).toBeNull();
 
-    plusOneBtn.click();
+    // Click the HP value button to open the popover.
+    const hpBtn = Array.from(el.querySelectorAll(".dndm-sheet-value-btn")).find((b) =>
+      b.textContent?.includes("/"),
+    ) as HTMLButtonElement;
+    expect(hpBtn).toBeDefined();
+    hpBtn.click();
+    await el.updateComplete;
+
+    const popover = el.querySelector(".dndm-number-popover");
+    expect(popover).not.toBeNull();
+    expect(popover?.textContent).toContain("Current");
+    expect(popover?.textContent).toContain("Max");
+
+    // Step current HP up via the increase button in the Current row.
+    const rows = Array.from(popover!.querySelectorAll(".dndm-number-popover-row"));
+    const currentRow = rows.find((r) => r.textContent?.includes("Current"))!;
+    const upBtn = currentRow.querySelector(
+      'button[title="Increase HP"]',
+    ) as HTMLButtonElement;
+    expect(upBtn).not.toBeNull();
+    upBtn.click();
     // Immediate: called synchronously without waiting for debounce timer!
     expect(onSetSheetHp).toHaveBeenCalledTimes(1);
     expect(onSetSheetHp).toHaveBeenCalledWith("sheet-1", 25);
+  });
+
+  it("shows current and max HP to a viewer who cannot edit the sheet", async () => {
+    // Owner viewing their own sheet under the default HostOnly edit policy:
+    // can view HP but cannot edit it.
+    const sheet1 = makeSheet("sheet-1", "Thorin", "player-1");
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = false;
+    el.currentUserId = "player-1";
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    // Read-only: no edit popover buttons, but the HP stat still shows max.
+    expect(el.querySelector(".dndm-sheet-value-btn")).toBeNull();
+    expect(el.querySelector(".dndm-number-popover")).toBeNull();
+    const statBox = Array.from(el.querySelectorAll(".dndm-sheet-stat-box")).find((b) =>
+      b.textContent?.includes("HP:"),
+    );
+    expect(statBox).toBeDefined();
+    // 24 current / 35 effective max (30 base + 5 from Blessed).
+    expect(statBox?.textContent).toContain("24 / 35");
+    // No stray template characters leak into the read-only text.
+    expect(statBox?.textContent).not.toContain("}");
+  });
+
+  it("opens an AC popover and commits a typed custom number", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin");
+    const onSetSheetAc = vi.fn();
+
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+    el.onSetSheetAc = onSetSheetAc;
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    const acBtn = el.querySelector(".dndm-sheet-value-btn--ac") as HTMLButtonElement;
+    expect(acBtn).toBeDefined();
+    acBtn.click();
+    await el.updateComplete;
+
+    const popover = el.querySelector(".dndm-number-popover");
+    expect(popover).not.toBeNull();
+    const input = popover!.querySelector(".dndm-number-popover-input") as HTMLInputElement;
+    expect(input.value).toBe("16");
+
+    input.value = "18";
+    input.dispatchEvent(new Event("input"));
+    input.dispatchEvent(new Event("change"));
+    expect(onSetSheetAc).toHaveBeenCalledTimes(1);
+    expect(onSetSheetAc).toHaveBeenCalledWith("sheet-1", 18);
+  });
+
+  it("opens an attribute popover from an ability card and debounces typed input", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin");
+    const onUpdateAttributeValues = vi.fn();
+
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+    el.onUpdateAttributeValues = onUpdateAttributeValues;
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    // Ability cards render value buttons instead of inline number inputs.
+    expect(el.querySelector(".dndm-sheet-scores-grid input[type='number']")).toBeNull();
+    const scoreBtn = el.querySelector(
+      ".dndm-sheet-value-btn--score",
+    ) as HTMLButtonElement;
+    expect(scoreBtn).toBeDefined();
+    expect(scoreBtn.textContent?.trim()).toBe("16");
+    scoreBtn.click();
+    await el.updateComplete;
+
+    const popover = el.querySelector(".dndm-number-popover");
+    expect(popover).not.toBeNull();
+    const input = popover!.querySelector(".dndm-number-popover-input") as HTMLInputElement;
+    expect(input.value).toBe("16");
+
+    input.value = "18";
+    input.dispatchEvent(new Event("input"));
+    expect(onUpdateAttributeValues).not.toHaveBeenCalled();
+    input.dispatchEvent(new Event("change"));
+    await el.updateComplete;
+    expect(onUpdateAttributeValues).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(300);
+    expect(onUpdateAttributeValues).toHaveBeenCalledTimes(1);
+    expect(onUpdateAttributeValues).toHaveBeenCalledWith(
+      "sheet-1",
+      expect.objectContaining({ Strength: { kind: "Score", value: 18 } }),
+    );
+  });
+
+  it("commits max HP from the HP popover", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin");
+    const onSetSheetMaxHp = vi.fn();
+
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+    el.onSetSheetMaxHp = onSetSheetMaxHp;
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    const hpBtn = Array.from(el.querySelectorAll(".dndm-sheet-value-btn")).find((b) =>
+      b.textContent?.includes("/"),
+    ) as HTMLButtonElement;
+    hpBtn.click();
+    await el.updateComplete;
+
+    const popover = el.querySelector(".dndm-number-popover")!;
+    const rows = Array.from(popover.querySelectorAll(".dndm-number-popover-row"));
+    const maxRow = rows.find((r) => r.textContent?.includes("Max"))!;
+    const input = maxRow.querySelector(".dndm-number-popover-input") as HTMLInputElement;
+    expect(input.value).toBe("30");
+
+    input.value = "40";
+    input.dispatchEvent(new Event("input"));
+    input.dispatchEvent(new Event("change"));
+    expect(onSetSheetMaxHp).toHaveBeenCalledTimes(1);
+    expect(onSetSheetMaxHp).toHaveBeenCalledWith("sheet-1", 40);
   });
 
   it("hides unowned sheets and respects player visibility settings", async () => {
