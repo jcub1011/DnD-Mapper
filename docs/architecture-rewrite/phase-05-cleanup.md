@@ -2,6 +2,15 @@
 
 Goal: delete the server-authority apparatus; leave a single-app build.
 
+## Incoming from Phase 01 (do not forget)
+
+Phase 01 deliberately left `src/authority/` (`authority.ts`, `kb.ts`,
+`fakeKb.ts`), `vite.authority.config.ts`, `tsconfig.authority.json`, the
+`serverAuthority` manifest key, and the server-mode test scaffolding
+(`authority.test.ts`, `snapshotBudget.test.ts`, virtual-actor setup) in place
+so dev/prod kept working throughout the rewrite. THIS phase deletes them per
+Step 1–3 below.
+
 ## Steps
 
 1. Delete: `src/authority/` (`authority.ts`, `kb.ts`, `fakeKb.ts`),

@@ -1,11 +1,11 @@
 /*
  * Tier 2 of the KnockBox local dev loop: the whole networked path with no server.
  *
- * KnockBoxLocalPeer in `mode: 'process'` runs several peers in one JS realm, and
- * the `authority:` option runs this game's REAL authority module as a virtual
- * server actor over that transport — stamping its broadcasts `from: 'server'` and
- * telling every peer `isHost: false` / `authority: 'server'`, exactly as the real
- * server does. So these tests exercise the production code path, not a stand-in.
+ * KnockBoxLocalPeer in `mode: 'process'` runs several peers in one JS realm with
+ * NO virtual server actor — the first peer is the host (`isHost: true` /
+ * `authority: 'host'`), exactly as the relay reports live. The host peer's
+ * MatchView (host half) is the truth; guests adopt what it publishes. So these
+ * tests exercise the production code path, not a stand-in.
  *
  * IMPORT DISCIPLINE: only kb-authority.js and knockbox-local.js may be imported
  * here. `knockbox-plugin.js` throws at factory time without Phaser, so anything
@@ -17,7 +17,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import KBAuthority from "../../addons/knockbox/kb-authority.js";
 import KnockBoxLocal from "../../addons/knockbox/knockbox-local.js";
 import type { KnockBoxPlugin } from "../../addons/knockbox/knockbox-phaser";
-import { createAuthority } from "../authority/authority";
 import type { MatchState, Patch } from "../game/types";
 import { MatchView } from "../game/view";
 import { isFullMap } from "../game/domain";
@@ -37,15 +36,14 @@ afterEach(() => {
 });
 
 function makePeer(playerId: string): Peer {
-  // EVERY peer gets `authority:` — only the elected one instantiates the actor,
-  // but all of them must report authority:'server' so the sender-side relay rules
-  // and KBAuthority's `from !== 'server'` forgery check behave as they will live.
+  // TRUE host mode: no `authority:` option, so no virtual server actor. The
+  // first peer is elected host (isHost:true, authority:'host') and its
+  // MatchView host half is the truth — exactly as the relay reports live.
   const peer = new KnockBoxLocalPeer({
     mode: "process",
     channel: "test-lobby",
     playerId,
     displayName: playerId.toUpperCase(),
-    authority: createAuthority,
   });
   open.push(peer);
   return peer;
@@ -58,6 +56,20 @@ function asTransport(peer: Peer): KnockBoxTransport {
 function attachView(peer: Peer): MatchView {
   const view = new MatchView();
   new KBAuthority<MatchState, Patch>(peer as unknown as KnockBoxPlugin, view);
+  // Mirror what AuthorityController.emitRoster does: feed the host half its
+  // membership so DM-gated intents validate (and DM seeds to roster[0]).
+  const feedRoster = (): void => {
+    view.setRoster(
+      peer.players.map((p: { id: string; displayName: string }) => ({
+        id: p.id,
+        displayName: p.displayName,
+      })),
+    );
+  };
+  peer.events.on("ready", feedRoster);
+  peer.events.on("player-joined", feedRoster);
+  peer.events.on("player-left", feedRoster);
+  feedRoster();
   return view;
 }
 
@@ -72,17 +84,17 @@ function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 20));
 }
 
-describe("server-authority mode over the local transport", () => {
-  it("tells every peer it is NOT the host", async () => {
+describe("host-authority mode over the local transport", () => {
+  it("elects the first peer as host", async () => {
     const a = makePeer("a");
     const viewA = attachView(a);
     await startAndSettle(a, 1);
 
-    // The single most important difference from host-authoritative mode: nobody
-    // is host, not even the peer that created the lobby.
-    expect(a.isHost).toBe(false);
-    expect(a.authority).toBe("server");
-    // Lobby powers still belong to someone — the creator, until the module moves it.
+    // The single most important fact of host-authoritative mode: the lobby
+    // creator IS the host, and the relay reports authority:'host'.
+    expect(a.isHost).toBe(true);
+    expect(a.authority).toBe("host");
+    // Lobby powers belong to the host — the creator, until it moves them.
     expect(a.isOwner).toBe(true);
     expect(a.ownerId).toBe("a");
     expect(viewA.state.dmPlayerId).toBe("a");
@@ -99,6 +111,7 @@ describe("server-authority mode over the local transport", () => {
     await vi.waitFor(() => expect(a.players).toHaveLength(2));
 
     expect(b.isHost).toBe(false);
+    expect(b.authority).toBe("host");
     expect(b.isOwner).toBe(false);
 
     // DM creates a map
@@ -172,7 +185,7 @@ describe("server-authority mode over the local transport", () => {
     await vi.waitFor(() => expect(viewA.state.maps).toHaveLength(2));
   });
 
-  it("ends the local session when the ACTOR peer leaves (real servers do not)", async () => {
+  it("ends the local session when the HOST leaves (no migration)", async () => {
     const a = makePeer("a");
     attachView(a);
     await startAndSettle(a, 1);
@@ -185,7 +198,7 @@ describe("server-authority mode over the local transport", () => {
       closed = true;
     });
 
-    a.destroy(); // "a" is players[0]: both the lobby owner AND the emulated actor
+    a.destroy(); // "a" is players[0]: both the lobby owner AND the host
     await vi.waitFor(() => expect(closed).toBe(true));
   });
 });
@@ -199,6 +212,7 @@ describe("AuthorityController", () => {
 
     expect(controller.playerId).toBe("a");
     expect(controller.isOwner).toBe(true);
+    expect(controller.isHost).toBe(true);
 
     const mapNames: string[] = [];
     controller.events.on("changed", ({ state }) => {

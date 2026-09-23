@@ -1,23 +1,73 @@
 /*
- * MatchView — the CLIENT-side replica of the authoritative state.
+ * MatchView — the replicated state plus (on the host) the truth.
  *
- * This is the guest half of the KBAuthority model contract. In server-authority
- * mode every client is a guest, so only `applyPatch` / `applySnapshot` are ever
- * called: the client ADOPTS state, it never computes it.
+ * This implements BOTH halves of the KBAuthority model contract:
  *
- * Merges narrowed absolute patches by kind instead of replacing wholesale.
+ *   host  `applyIntent(fromId, action)` → Patch | null  (DM browser only)
+ *   host  `snapshot(forPlayerId?)` → shared projected snapshot
+ *   guest `applyPatch` / `applySnapshot` — adopt what the host publishes
+ *
+ * KBAuthority enforces the roles: only the host's `applyIntent` is ever called,
+ * and the host never adopts `delta`/`state` echoes. Patches stay absolute.
  */
 
 import type { CharacterSheet, DndMapperState, GameMap, MapSummary, Token } from "./domain.js";
-import { createDefaultDndMapperState, isFullMap, MAX_ROLL_LOG, reconcileSheetValues } from "./domain.js";
-import type { Patch } from "./types.js";
+import {
+  createDefaultDndMapperState,
+  isFullMap,
+  MAX_ROLL_LOG,
+  reconcileSheetValues,
+} from "./domain.js";
+import { applyIntent as applyIntentRules, projectSnapshot } from "./rules.js";
+import type { Patch, PlayerInfo } from "./types.js";
+import { guardSize } from "./wire.js";
+import { createLogger } from "../log.js";
+
+const log = createLogger("view");
 
 export class MatchView {
   private _state: DndMapperState = createDefaultDndMapperState();
+  private _roster: readonly PlayerInfo[] = [];
 
   /** The latest state the authority published. Treat it as read-only. */
   get state(): Readonly<DndMapperState> {
     return this._state;
+  }
+
+  /**
+   * Host only. The controller feeds the lobby roster here (see
+   * `AuthorityController.emitRoster`) so DM-gated intents validate against the
+   * same membership the server module used to see. Mirrors the authority
+   * module's init: an empty DM slot seeds to the first roster member.
+   */
+  setRoster(roster: readonly PlayerInfo[]): void {
+    this._roster = roster;
+    if (this._state.dmPlayerId === null && roster.length > 0) {
+      this._state = { ...this._state, dmPlayerId: roster[0].id };
+    }
+  }
+
+  /**
+   * Host only — validate an untrusted intent, mutate, and return the narrowed
+   * absolute patch to broadcast. Null means REJECTED (broadcast nothing).
+   * The browser host owns its clock, so `Date.now()` replaces `kb.now()`.
+   */
+  applyIntent(fromId: string, action: unknown): Patch | null {
+    const result = applyIntentRules(this._state, fromId, action, Date.now(), this._roster);
+    if (result === null || result.patch === null) return null;
+    this._state = result.state;
+    return guardSize(result.patch, (msg) => log.error(msg));
+  }
+
+  /**
+   * Host only — full state for sync / join / reconnect.
+   * Phase 1 returns the SHARED projected snapshot for every player; true
+   * per-player filtering lives in Phase 2 (`docs/architecture-rewrite/
+   * phase-02-projection.md`: `projectForPlayer` + per-recipient `guardSize`
+   * fan-out + `perRecipient:true` flip).
+   */
+  snapshot(_forPlayerId?: string): DndMapperState {
+    return projectSnapshot(this._state);
   }
 
   /** Full state snapshot, on join / reconnect. */

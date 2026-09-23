@@ -1,16 +1,17 @@
 /*
  * The transport surface — the structural type that both KnockBoxPlugin (real
- * WebSocket) and KnockBoxLocalPlugin / KnockBoxLocalPeer (no-server testing)
+ * relay) and KnockBoxLocalPlugin / KnockBoxLocalPeer (no-server testing)
  * satisfy at runtime. Everything above this line is written once and runs
  * unchanged in all three launch modes.
  *
- * Note what server-authoritative mode does to two familiar properties:
+ * Note what host-authoritative mode means for two familiar properties:
  *
- *   isHost   ALWAYS false. No browser is the authority — the server is. Never
- *            branch game logic on it; there is no "host branch" to write any more,
- *            because that code now lives in src/authority/.
+ *   isHost   TRUE on the DM's browser (the authority), false on guests.
+ *            The host holds the truth via MatchView's host half; guests adopt
+ *            what it publishes. Branch host-only work (applyIntent/snapshot)
+ *            on this — KBAuthority already does.
  *   isOwner  The member holding the LOBBY powers (kick, open/close). Starts as the
- *            creator and moves when the authority module calls kb.setOwner.
+ *            creator (the host) and moves when the host calls setOwner.
  *            Gate owner-only UI on this.
  */
 
@@ -21,9 +22,9 @@ export interface KnockBoxTransport {
   readonly playerId: string | null;
   /** The lobby roster, kept current as players join and leave. */
   readonly players: KBPlayer[];
-  /** Always false in server-authority mode — see the note above. */
+  /** True on the DM browser holding the truth; false on guests. */
   readonly isHost: boolean;
-  /** Who runs the game's rules: 'server' for this template, 'host' for opt-out games. */
+  /** Who runs the game's rules: 'host' for this game, 'server' for opt-out legacy. */
   readonly authority: "host" | "server";
   /** The lobby owner's id, or null when the lobby is running owner-less. */
   readonly ownerId: string | null;
@@ -39,16 +40,16 @@ export interface KnockBoxTransport {
     off(event: string, fn: (...args: never[]) => void): unknown;
   };
 
-  /** Send to the authority. In server mode that is the server, not a player. */
+  /** Send to the host (DM browser). Guests send intents here; the host answers syncs. */
   sendToHost(payload: unknown): void;
-  /** Send to every player including yourself. Free-form chatter only — the relay
-   *  drops client-sent `_kb` state frames; only the authority may publish state. */
+  /** Send to every player including yourself. The host broadcasts deltas/snapshots here;
+   *  the relay drops client-sent `_kb` state frames — only the host may publish state. */
   sendToAll(payload: unknown): void;
   sendTo(playerId: string, payload: unknown): void;
 
-  /** Owner-only, server-enforced: open or close the lobby to new joins. */
+  /** Owner-only, host-enforced: open or close the lobby to new joins. */
   setLobbyOpen(open: boolean): void;
-  /** Owner-only, server-enforced: remove a player. */
+  /** Owner-only, host-enforced: remove a player. */
   kickPlayer(playerId: string): void;
   /** Records a Play Log entry on the player's KnockBox home page. Real plugin only. */
   logPlay?(metadata?: Record<string, unknown>): void;

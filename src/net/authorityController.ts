@@ -1,18 +1,19 @@
 /*
  * AuthorityController — the ONE controller. It works identically in all three
- * launch modes because all three run the same server-authoritative path: solo and
- * multi-tab emulate the server actor locally by running this game's real
- * `createAuthority`, and the platform launch talks to the real thing.
+ * launch modes because all three run the same host-authoritative path: the DM's
+ * browser holds the truth (MatchView's host half), the server/relay just routes
+ * frames, and guests render what the host publishes.
  *
  * The loop it participates in:
  *
- *   UI ──sendIntent──► KBAuthority ──{_kb:'intent'}──► authority (server)
+ *   UI ──sendIntent──► KBAuthority ──{_kb:'intent'}──► host (DM browser)
  *                                                          │ applyIntent
- *   UI ◄──changed──── MatchView ◄──{_kb:'delta'|'state'}────┘ (from: "server")
+ *   UI ◄──changed──── MatchView ◄──{_kb:'delta'|'state'}────┘ (host broadcast)
  *
  * KBAuthority (the addon helper) owns the envelope, the sync-on-ready handshake,
- * and the forgery check that ignores state frames not stamped `from: "server"`.
- * We only supply the model (MatchView) and re-expose its events to the UI.
+ * and (in server mode) the forgery check on state frames. We supply the model
+ * (MatchView: host half on the DM, guest half everywhere) and re-expose its
+ * events to the UI.
  */
 
 import KBAuthority from "../../addons/knockbox/kb-authority.js";
@@ -37,8 +38,10 @@ export class AuthorityController implements GameController {
   constructor(net: KnockBoxTransport) {
     this.net = net;
 
-    // MatchView implements the GUEST half of the model contract. In server mode
-    // every client is a guest, so applyIntent/snapshot are never called on it.
+    // MatchView implements BOTH halves of the model contract. On the host
+    // (DM browser) KBAuthority calls applyIntent/snapshot; on guests it calls
+    // applyPatch/applySnapshot. Broadcast mode until Phase 02 flips
+    // perRecipient on (see docs/architecture-rewrite/phase-02-projection.md).
     const model: KBModel<MatchState, Patch> = this.view;
 
     // The addon types this parameter as the concrete KnockBoxPlugin. The local
@@ -47,7 +50,9 @@ export class AuthorityController implements GameController {
     // state properties are readonly. One cast, here, is the entire cost of the
     // no-server path. Do NOT "fix" this by shadowing the addon's .d.ts: that file
     // is CLI-managed and would be overwritten by `knockbox addon update`.
-    this.authority = new KBAuthority<MatchState, Patch>(net as unknown as KnockBoxPlugin, model);
+    this.authority = new KBAuthority<MatchState, Patch>(net as unknown as KnockBoxPlugin, model, {
+      perRecipient: false,
+    });
 
     this.authority.events.on("state-changed", this.onStateChanged);
     this.unsubscribe.push(() => this.authority.events.off("state-changed", this.onStateChanged));
@@ -80,14 +85,18 @@ export class AuthorityController implements GameController {
     return this.net.isOwner;
   }
 
+  get isHost(): boolean {
+    return this.net.isHost;
+  }
+
   sendIntent(intent: Intent): void {
-    // Fire-and-forget. The authority validates against ITS state, not ours, and a
+    // Fire-and-forget. The host validates against ITS state, not ours, and a
     // rejected intent broadcasts nothing at all — we simply never see a change.
     this.authority.sendIntent(intent);
   }
 
   setLobbyOpen(open: boolean): void {
-    // Server-enforced: a non-owner's call is ignored rather than failing.
+    // Host-enforced: a non-owner's call is ignored rather than failing.
     this.authority.setOpen(open);
   }
 
@@ -116,10 +125,10 @@ export class AuthorityController implements GameController {
       `ready — player=${this.playerId} authority=${this.net.authority} ` +
         `owner=${String(this.net.ownerId)} isHost=${this.net.isHost}`,
     );
-    if (this.net.authority !== "server") {
-      // The game declares "serverAuthority" in GAME.json, so this means the game
-      // was installed without its authority module, or on a server too old for it.
-      log.warn(`expected server authority but got '${this.net.authority}' — state will not update`);
+    if (this.net.authority !== "host") {
+      // Host-authority game: anything else means a relay/server mismatch and
+      // state will not converge.
+      log.warn(`expected host authority but got '${this.net.authority}' — state will not update`);
     }
     this.emitRoster();
   };
@@ -129,6 +138,8 @@ export class AuthorityController implements GameController {
   };
 
   private emitRoster(): void {
+    // Feed the host half its membership so DM-gated intents validate.
+    this.view.setRoster(this.net.players.map((p) => ({ id: p.id, displayName: p.displayName })));
     this.events.emit("roster", {
       players: this.net.players,
       ownerId: this.net.ownerId,

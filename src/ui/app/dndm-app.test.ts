@@ -16,6 +16,7 @@ import type { DndmConfirm } from "../modals/dndm-confirm";
 function createMockController(options: {
   playerId?: string;
   isOwner?: boolean;
+  isHost?: boolean;
   state?: Partial<MatchState>;
 }): GameController & { mockSendIntent: ReturnType<typeof vi.fn> } {
   const events = new Emitter<ControllerEvents>();
@@ -33,6 +34,7 @@ function createMockController(options: {
   return {
     playerId: options.playerId ?? "dm-user",
     isOwner: options.isOwner ?? true,
+    isHost: options.isHost ?? true,
     view: { state },
     events,
     sendIntent: mockSendIntent,
@@ -425,7 +427,9 @@ describe("<dndm-app> Application Shell", () => {
       expect(sessionPanel).not.toBeNull();
       const sessionHeader = sessionPanel.querySelector(".dndm-panel-header") as HTMLElement;
       expect(sessionHeader).not.toBeNull();
-      const settingsBtn = sessionHeader.querySelector('button[title="Session Settings"]') as HTMLButtonElement;
+      const settingsBtn = sessionHeader.querySelector(
+        'button[title="Session Settings"]',
+      ) as HTMLButtonElement;
       expect(settingsBtn).not.toBeNull();
 
       // Clicking settings button opens settings modal without collapsing session panel

@@ -32,9 +32,10 @@ class Fx {
   private shakeTarget?: HTMLElement;
 
   /** Boot the Phaser FX game into the given parent element. The KnockBox global
-   *  plugin is registered here for EVERY launch mode: the real WebSocket plugin on
-   *  the platform, and the no-server peer (running this game's own authority
-   *  module) for solo and multi-tab. One networking path, always. */
+   *  plugin is registered here for EVERY launch mode: the real relay plugin on
+   *  the platform, and the no-server peer (true host mode — the DM browser
+   *  behind the controller holds the truth) for solo and multi-tab. One
+   *  networking path, always. */
   init(parentId: string, mode: LaunchMode = "solo"): void {
     if (this.game) return;
     const net = knockboxPluginConfig(mode);
@@ -82,8 +83,8 @@ class Fx {
   }
 
   /** The KnockBox networking peer (the registered global plugin), if any. All
-   *  launch modes register one — solo and local-tab get the no-server peer running
-   *  this game's authority module, platform gets the real WebSocket plugin. */
+   *  launch modes register one — solo and local-tab get the no-server peer in
+   *  true host mode, platform gets the real relay plugin. */
   knockbox(): KnockBoxTransport | undefined {
     const plugins = this.game?.plugins as unknown as { get(key: string): unknown } | undefined;
     return (plugins?.get("KnockBox") as KnockBoxTransport | undefined) ?? undefined;

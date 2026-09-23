@@ -5,6 +5,14 @@ Goal: implement the issue's "projected data" promise; resolve open Q1.
 Authority is `src/game/rules.ts:94-117`; client mirrors in
 `src/game/visibility.ts:61,76-85` are prediction-only and must not win.
 
+## Incoming from Phase 01 (do not forget)
+
+Phase 01 left these placeholders FOR THIS PHASE to replace: shared
+`MatchView.snapshot()` ignoring `forPlayerId`, broadcast-mode `KBAuthority`
+(`perRecipient:false`), shared `guardSize` only. This phase adds
+`projectForPlayer`/`projectPatchForPlayer`, the per-recipient `guardSize`
+fan-out, and flips `perRecipient:true` in `AuthorityController`.
+
 ## Steps
 
 1. Add host-side pure `projectForPlayer(state, playerId)` +

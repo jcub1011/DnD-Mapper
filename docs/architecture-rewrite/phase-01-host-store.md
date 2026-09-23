@@ -24,10 +24,21 @@ Goal: the DM's browser holds truth; the server relays blindly.
 
 ## Completion checklist
 
-- [ ] Host `applyIntent` + `snapshot` implemented and unit-tested
-- [ ] Controller constructs full model on host, replica on guests
-- [ ] `onReady` warn flipped; `isHost` exposed on `GameController`
-- [ ] `solo`/`local-tab` run true host mode (no virtual server actor)
-- [ ] Two-browser test passes: DM intent converges on both, guest intent
+- [x] Host `applyIntent` + `snapshot` implemented and unit-tested
+- [x] Controller constructs full model on host, replica on guests
+- [x] `onReady` warn flipped; `isHost` exposed on `GameController`
+- [x] `solo`/`local-tab` run true host mode (no virtual server actor)
+- [x] Two-browser test passes: DM intent converges on both, guest intent
       validates via host, `isHost`/`authority:'host'` asserted
-- [ ] Transport docs updated (`sendToHost`/`sendToAll`/lobby-power enforcement)
+- [x] Transport docs updated (`sendToHost`/`sendToAll`/lobby-power enforcement)
+
+## Deferred (do not forget)
+
+- `MatchView.snapshot(forPlayerId)` intentionally ignores its arg and returns
+  the SHARED projected snapshot; roster is fed from the controller via
+  `setRoster` (DM seeds to roster[0], mirroring the old authority init);
+  `KBAuthority` runs broadcast mode (`perRecipient:false`) with shared
+  `guardSize`. True per-player filtering (`projectForPlayer` +
+  per-recipient `guardSize` fan-out + `perRecipient:true` flip) → Phase 02.
+- `src/authority/`, `build:authority`, `serverAuthority` manifest key, and the
+  server-mode test scaffolding are intentionally left intact → Phase 05.

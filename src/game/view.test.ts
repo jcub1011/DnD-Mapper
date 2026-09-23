@@ -195,3 +195,57 @@ describe("MatchView", () => {
     expect(state1).toEqual(state2);
   });
 });
+
+describe("MatchView host half", () => {
+  it("applyIntent accepts a DM intent and mutates host state", () => {
+    const view = new MatchView();
+    view.setRoster([{ id: "dm-1", displayName: "DM" }]);
+    // Seed DM ownership the same way the authority module does on init.
+    view.applySnapshot({ ...createDefaultDndMapperState("dm-1"), phase: "Playing" });
+
+    const patch = view.applyIntent("dm-1", { kind: "createMap", name: "The Crypt" });
+    expect(patch).not.toBeNull();
+    expect(patch?.kind).toBe("map");
+    expect(view.state.maps).toHaveLength(1);
+    expect(view.state.maps[0].name).toBe("The Crypt");
+  });
+
+  it("applyIntent rejects a guest DM-only intent and leaves state untouched", () => {
+    const view = new MatchView();
+    view.setRoster([
+      { id: "dm-1", displayName: "DM" },
+      { id: "guest-1", displayName: "Guest" },
+    ]);
+    view.applySnapshot({ ...createDefaultDndMapperState("dm-1"), phase: "Playing" });
+
+    const patch = view.applyIntent("guest-1", { kind: "createMap", name: "Illegal Map" });
+    expect(patch).toBeNull();
+    expect(view.state.maps).toHaveLength(0);
+  });
+
+  it("snapshot returns the shared projected snapshot for any player", () => {
+    const view = new MatchView();
+    view.setRoster([{ id: "dm-1", displayName: "DM" }]);
+    view.applySnapshot({ ...createDefaultDndMapperState("dm-1"), phase: "Playing" });
+    view.applyIntent("dm-1", { kind: "createMap", name: "The Crypt" });
+
+    const forDm = view.snapshot("dm-1");
+    const forGuest = view.snapshot("guest-1");
+    expect(forGuest).toEqual(forDm);
+    expect(forGuest.maps).toHaveLength(1);
+  });
+
+  it("host patch converges on a guest via applyPatch", () => {
+    const host = new MatchView();
+    host.setRoster([{ id: "dm-1", displayName: "DM" }]);
+    host.applySnapshot({ ...createDefaultDndMapperState("dm-1"), phase: "Playing" });
+    const patch = host.applyIntent("dm-1", { kind: "createMap", name: "The Crypt" });
+    expect(patch).not.toBeNull();
+
+    const guest = new MatchView();
+    guest.applySnapshot({ ...createDefaultDndMapperState("dm-1"), phase: "Playing" });
+    guest.applyPatch(patch!);
+    expect(guest.state.maps).toHaveLength(1);
+    expect(guest.state.maps[0].name).toBe("The Crypt");
+  });
+});
