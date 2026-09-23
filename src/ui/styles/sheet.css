@@ -329,6 +329,7 @@
 .dndm-sheet-notes-textarea {
   width: 100%;
   min-height: 120px;
+  max-height: 80vh;
   background: var(--dndm-color-surface-sunken);
   border: 1px solid var(--dndm-color-border);
   color: var(--dndm-color-text);
@@ -336,7 +337,8 @@
   padding: 8px;
   font-family: inherit;
   font-size: 0.85rem;
-  resize: vertical;
+  resize: none;
+  overflow-y: auto;
   box-sizing: border-box;
 }
 
@@ -347,6 +349,7 @@
 
 .dndm-sheet-notes-preview {
   min-height: 80px;
+  max-height: 80vh;
   padding: 8px;
   background: var(--dndm-color-surface-sunken);
   border: 1px solid var(--dndm-color-border);
@@ -681,4 +684,62 @@
   font-style: italic;
   text-align: center;
   color: var(--dndm-text-dim);
+}
+
+/* Notes edit/preview toggle: single flipping button with icon + label */
+.dndm-notes-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dndm-notes-toggle:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.dndm-notes-toggle svg {
+  display: block;
+}
+
+/* Large-format notes modal */
+.dndm-modal-card.dndm-notes-modal {
+  width: min(720px, calc(100vw - 48px));
+  max-width: min(720px, calc(100vw - 48px));
+}
+
+.dndm-notes-modal-textarea {
+  min-height: 320px;
+  max-height: 60vh;
+  resize: vertical;
+}
+
+/* Notes modal header: title text takes available width, toggle pins right
+   next to the close button (the shared dndm-modal renders modalTitle inline
+   inside its h3, so the h3 itself becomes the flex row here). */
+.dndm-modal-card.dndm-notes-modal .dndm-modal-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dndm-notes-modal-title-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dndm-modal-title .dndm-notes-toggle {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  padding: 1px 6px;
+}
+
+.dndm-notes-modal-preview {
+  min-height: 200px;
+  max-height: 60vh;
 }

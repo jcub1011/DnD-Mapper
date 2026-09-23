@@ -27,12 +27,15 @@ import {
   mayViewSheetNotesAndHp,
 } from "../../game/rules";
 import { GameElement } from "../app/GameElement";
-import { copyIcon, gearIcon, tokenPlusIcon } from "../icons";
+import { copyIcon, expandIcon, eyeIcon, gearIcon, penIcon, popoutIcon, tokenPlusIcon } from "../icons";
 import { toSafeHtml } from "./markdown";
+import { NOTES_SYNC_CHANNEL, buildNotesPopoutHtml } from "./notesPopout";
 import "./dndm-status-effects";
 import "./dndm-collapsible-panel";
 import "../modals/dndm-sheet-settings-modal";
 import type { SheetSettingsPatch } from "../modals/dndm-sheet-settings-modal";
+import "../modals/dndm-notes-modal";
+import type { NotesTab } from "../modals/dndm-notes-modal";
 import "../modals/dndm-schema-preset-modal";
 import "../modals/dndm-schema-cascade-warning";
 
@@ -142,12 +145,24 @@ export class DndmCharacterSheet extends GameElement {
   // Local component UI state
   @state() private scopeFilter: "map" | "all" = "map";
   @state() private searchQuery = "";
-  @state() private notesTab: "edit" | "preview" = "edit";
+  @state() private notesTab: NotesTab = "edit";
   @state() private settingsModalOpen = false;
   @state() private schemaModalOpen = false;
   @state() private cascadeWarningOpen = false;
   @state() private pendingPreset: AttributePreset | null = null;
   @state() private prunedAttributes: readonly string[] = [];
+
+  // Notes modal: pinned to the sheet that was open when launched.
+  @state() private notesModalOpen = false;
+  @state() private notesModalSheetId: string | null = null;
+  @state() private notesModalTab: NotesTab = "edit";
+  @state() private modalDraftNotes: string | null = null;
+
+  // Connected notes popout window (BroadcastChannel live sync).
+  private notesChannel: BroadcastChannel | null = null;
+  private notesPopout: Window | null = null;
+  private notesPopoutSheetId: string | null = null;
+  private notesPopoutPoll: number | null = null;
 
   // Draft inputs for 300ms debouncing
   @state() private draftName: string | null = null;
@@ -171,9 +186,24 @@ export class DndmCharacterSheet extends GameElement {
 
   private debounceTimers = new Map<string, number>();
 
+  override connectedCallback(): void {
+    super.connectedCallback();
+    if (typeof BroadcastChannel !== "undefined" && !this.notesChannel) {
+      this.notesChannel = new BroadcastChannel(NOTES_SYNC_CHANNEL);
+      this.notesChannel.onmessage = (event: MessageEvent) => {
+        this.handleNotesChannelMessage(event.data);
+      };
+    }
+  }
+
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.clearDebounceTimers();
+    this.closeNotesPopout(false);
+    if (this.notesChannel) {
+      this.notesChannel.close();
+      this.notesChannel = null;
+    }
   }
 
   private clearDebounceTimers(): void {
@@ -202,6 +232,36 @@ export class DndmCharacterSheet extends GameElement {
       this.draftNotes = null;
       this.draftValues = null;
       this.closeNumberPopover(false);
+    }
+  }
+
+  /** Grow the siderail notes editor to fit its content, up to the 80vh
+   * CSS cap (beyond that it scrolls internally). Scoped to the rail — the
+   * modal editor keeps its own fixed sizing. */
+  private autosizeRailNotes(): void {
+    const area = this.querySelector(
+      ".dndm-sheet-notes-container > .dndm-sheet-notes-textarea",
+    ) as HTMLTextAreaElement | null;
+    if (!area) return;
+    area.style.height = "auto";
+    // No layout engine (e.g. happy-dom tests) reports scrollHeight 0 —
+    // leave the stylesheet height alone in that case.
+    if (area.scrollHeight > 0) {
+      area.style.height = `${area.scrollHeight}px`;
+    }
+  }
+
+  override updated(changedProperties: Map<string, unknown>): void {
+    super.updated(changedProperties);
+    this.autosizeRailNotes();
+    // Live-sync the connected popout (and modal draft mirror) after renders.
+    if (this.notesPopout && this.notesPopoutSheetId) {
+      if (this.notesPopout.closed) {
+        this.notesPopout = null;
+        this.notesPopoutSheetId = null;
+      } else {
+        this.pushNotesState(this.notesPopoutSheetId);
+      }
     }
   }
 
@@ -345,10 +405,170 @@ export class DndmCharacterSheet extends GameElement {
 
   private onNotesInput(sheetId: string, e: Event): void {
     const value = (e.target as HTMLTextAreaElement).value;
-    this.draftNotes = value;
-    this.debounce("notes", () => {
+    this.applyNotesEdit(sheetId, value);
+    // Grow immediately for responsiveness; updated() re-fits after render.
+    this.autosizeRailNotes();
+  }
+
+  /** Shared notes edit path: rail textarea, notes modal, and popout window. */
+  private applyNotesEdit(sheetId: string, value: string, skipPush = false): void {
+    if (sheetId === this.selectedSheetId) {
+      this.draftNotes = value;
+    }
+    if (this.notesModalOpen && sheetId === this.notesModalSheetId) {
+      this.modalDraftNotes = value;
+    }
+    this.debounce(`notes_${sheetId}`, () => {
       this.emitUpdateSheet(sheetId, { notes: value });
     });
+    // Popup-originated edits skip the instant echo: the popup already holds
+    // this text, and updated() pushes the identical state post-render as its
+    // acknowledgement. Echoing mid-keystroke invites clobber races.
+    if (!skipPush) {
+      this.pushNotesState(sheetId);
+    }
+  }
+
+  /** Flush a pending debounced notes emit (e.g. modal closing mid-debounce). */
+  private flushNotesDraft(sheetId: string): void {
+    const key = `notes_${sheetId}`;
+    const timer = this.debounceTimers.get(key);
+    if (timer === undefined) return;
+    window.clearTimeout(timer);
+    this.debounceTimers.delete(key);
+    const sheet = this.sheets[sheetId];
+    if (!sheet) return;
+    const value =
+      sheetId === this.selectedSheetId && this.draftNotes !== null
+        ? this.draftNotes
+        : this.notesModalOpen && sheetId === this.notesModalSheetId && this.modalDraftNotes !== null
+          ? this.modalDraftNotes
+          : sheet.notes || "";
+    this.emitUpdateSheet(sheetId, { notes: value });
+  }
+
+  // ── Notes modal (pinned, live-synced) ─────────────────────────────────────
+  private openNotesModal(sheet: CharacterSheet, editable: boolean): void {
+    this.notesModalSheetId = sheet.id;
+    this.notesModalTab = editable ? this.notesTab : "preview";
+    this.modalDraftNotes = null;
+    this.notesModalOpen = true;
+  }
+
+  private closeNotesModal(): void {
+    if (this.notesModalSheetId) {
+      this.flushNotesDraft(this.notesModalSheetId);
+    }
+    this.notesModalOpen = false;
+    this.modalDraftNotes = null;
+  }
+
+  private onModalNotesInput(sheetId: string, value: string): void {
+    this.applyNotesEdit(sheetId, value);
+  }
+
+  // ── Connected notes popout window ─────────────────────────────────────────
+  private resolveNotesValue(sheet: CharacterSheet): string {
+    if (sheet.id === this.selectedSheetId && this.draftNotes !== null) {
+      return this.draftNotes;
+    }
+    if (this.notesModalOpen && sheet.id === this.notesModalSheetId && this.modalDraftNotes !== null) {
+      return this.modalDraftNotes;
+    }
+    return sheet.notes || "";
+  }
+
+  private pushNotesState(sheetId: string): void {
+    if (!this.notesChannel) return;
+    if (!this.notesPopout || this.notesPopout.closed || this.notesPopoutSheetId !== sheetId) return;
+    const sheet = this.sheets[sheetId];
+    if (!sheet) return;
+    const state = this.getEffectiveState();
+    const userId = this.currentUserId ?? (this.isDm ? (state.dmPlayerId ?? "") : "");
+    this.notesChannel.postMessage({
+      type: "notes-state",
+      sheetId: sheet.id,
+      sheetName: sheet.characterName,
+      notes: this.resolveNotesValue(sheet),
+      editable: mayEditSheet(state, userId, sheet),
+    });
+  }
+
+  private handleNotesChannelMessage(msg: unknown): void {
+    if (!msg || typeof msg !== "object") return;
+    const data = msg as { type?: string; sheetId?: string; notes?: string };
+    if (typeof data.sheetId !== "string") return;
+    if (data.type === "notes-edit" && typeof data.notes === "string") {
+      if (!this.sheets[data.sheetId]) return;
+      this.applyNotesEdit(data.sheetId, data.notes, true);
+    } else if (data.type === "notes-leave") {
+      if (this.notesPopoutSheetId === data.sheetId) {
+        this.notesPopout = null;
+        this.notesPopoutSheetId = null;
+      }
+    }
+  }
+
+  private openNotesPopout(sheet: CharacterSheet, editable: boolean): void {
+    const notes = this.resolveNotesValue(sheet);
+    let popout: Window | null;
+    try {
+      popout = window.open("", "_blank", "width=980,height=680");
+    } catch {
+      popout = null;
+    }
+    if (!popout) {
+      console.warn("[dndm-character-sheet] notes popout was blocked by the browser");
+      return;
+    }
+    try {
+      popout.document.open();
+      popout.document.write(
+        buildNotesPopoutHtml({
+          sheetId: sheet.id,
+          sheetName: sheet.characterName,
+          notes,
+          editable,
+        }),
+      );
+      popout.document.close();
+    } catch {
+      console.warn("[dndm-character-sheet] failed to initialize notes popout document");
+      return;
+    }
+    this.closeNotesPopout(false);
+    this.notesPopout = popout;
+    this.notesPopoutSheetId = sheet.id;
+    this.pushNotesState(sheet.id);
+    if (this.notesPopoutPoll !== null) {
+      window.clearInterval(this.notesPopoutPoll);
+    }
+    this.notesPopoutPoll = window.setInterval(() => {
+      if (this.notesPopout?.closed) {
+        this.notesPopout = null;
+        this.notesPopoutSheetId = null;
+        if (this.notesPopoutPoll !== null) {
+          window.clearInterval(this.notesPopoutPoll);
+          this.notesPopoutPoll = null;
+        }
+      }
+    }, 500);
+  }
+
+  private closeNotesPopout(notify: boolean): void {
+    if (this.notesPopoutPoll !== null) {
+      window.clearInterval(this.notesPopoutPoll);
+      this.notesPopoutPoll = null;
+    }
+    if (notify && this.notesChannel && this.notesPopoutSheetId) {
+      try {
+        this.notesChannel.postMessage({ type: "notes-close", sheetId: this.notesPopoutSheetId });
+      } catch {
+        // Channel already torn down — nothing to notify.
+      }
+    }
+    this.notesPopout = null;
+    this.notesPopoutSheetId = null;
   }
 
   private onAttributeInput(sheet: CharacterSheet, row: AttributeRow, val: AttributeValue): void {
@@ -799,6 +1019,53 @@ export class DndmCharacterSheet extends GameElement {
           this.pendingPreset = null;
         }}
       ></dndm-schema-cascade-warning>
+
+      ${(() => {
+        const modalSheet = this.notesModalSheetId ? (this.sheets[this.notesModalSheetId] ?? null) : null;
+        if (!modalSheet) return nothing;
+        const modalState = this.getEffectiveState();
+        const modalUserId = this.currentUserId ?? (this.isDm ? (modalState.dmPlayerId ?? "") : "");
+        const modalEditable = mayEditSheet(modalState, modalUserId, modalSheet);
+        const modalNotesValue =
+          this.modalDraftNotes !== null
+            ? this.modalDraftNotes
+            : modalSheet.id === this.selectedSheetId && this.draftNotes !== null
+              ? this.draftNotes
+              : modalSheet.notes || "";
+        return html`
+          <dndm-notes-modal
+            .isOpen=${this.notesModalOpen}
+            .sheetName=${modalSheet.characterName}
+            .notesValue=${modalNotesValue}
+            .editable=${modalEditable}
+            .activeTab=${modalEditable ? this.notesModalTab : "preview"}
+            .onTabChange=${(tab: NotesTab) => {
+              this.notesModalTab = tab;
+            }}
+            .onNotesInput=${(value: string) => {
+              this.onModalNotesInput(modalSheet.id, value);
+            }}
+            .onClose=${() => {
+              this.closeNotesModal();
+            }}
+            .onCancel=${() => {
+              this.closeNotesModal();
+            }}
+            @tab-change=${(e: CustomEvent<{ tab: NotesTab }>) => {
+              this.notesModalTab = e.detail.tab;
+            }}
+            @notes-input=${(e: CustomEvent<{ value: string }>) => {
+              this.onModalNotesInput(modalSheet.id, e.detail.value);
+            }}
+            @close=${() => {
+              this.closeNotesModal();
+            }}
+            @cancel=${() => {
+              this.closeNotesModal();
+            }}
+          ></dndm-notes-modal>
+        `;
+      })()}
 
       ${this.renderNumberPopover()}
     `;
@@ -1346,50 +1613,77 @@ export class DndmCharacterSheet extends GameElement {
 
       <!-- Notes Section -->
       ${canViewNotesAndHp
-        ? html`
-            <div class="dndm-sheet-notes-container">
-              <div style="display: flex; align-items: center; justify-content: space-between;">
-                <span class="dndm-sheet-section-title" style="margin: 0;">Notes</span>
-                <div style="display: flex; gap: 2px;">
-                  <button
-                    class="dndm-btn ${this.notesTab === "edit" ? "dndm-btn--subtle" : ""}"
-                    style="padding: 1px 6px; font-size: 0.75rem;"
-                    @click=${() => {
-                      this.notesTab = "edit";
-                    }}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    class="dndm-btn ${this.notesTab === "preview" ? "dndm-btn--subtle" : ""}"
-                    style="padding: 1px 6px; font-size: 0.75rem;"
-                    @click=${() => {
-                      this.notesTab = "preview";
-                    }}
-                  >
-                    Preview
-                  </button>
-                </div>
-              </div>
-
-              ${this.notesTab === "edit"
-                ? html`
-                    <textarea
-                      class="dndm-sheet-notes-textarea"
-                      placeholder="Character backstory, inventory, notes (Markdown supported)..."
-                      .value=${notesValue}
+        ? (() => {
+            const effectiveNotesTab: NotesTab = editable ? this.notesTab : "preview";
+            const showingEdit = effectiveNotesTab === "edit";
+            return html`
+              <div class="dndm-sheet-notes-container">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                  <span class="dndm-sheet-section-title" style="margin: 0;">Notes</span>
+                  <div style="display: flex; gap: 2px; align-items: center;">
+                    <button
+                      class="dndm-btn dndm-btn--subtle dndm-notes-toggle"
+                      style="padding: 1px 6px; font-size: 0.75rem;"
+                      type="button"
+                      aria-pressed=${showingEdit ? "true" : "false"}
                       ?disabled=${!editable}
-                      @input=${(e: Event) => this.onNotesInput(sheet.id, e)}
-                    ></textarea>
-                  `
-                : html`
-                    <div
-                      class="dndm-sheet-notes-preview"
-                      .innerHTML=${toSafeHtml(notesValue)}
-                    ></div>
-                  `}
-            </div>
-          `
+                      title=${editable
+                        ? showingEdit
+                          ? "Switch to markdown preview"
+                          : "Switch to markdown editor"
+                        : "Read-only — preview only"}
+                      @click=${() => {
+                        if (!editable) return;
+                        this.notesTab = showingEdit ? "preview" : "edit";
+                      }}
+                    >
+                      ${showingEdit
+                        ? html`${eyeIcon(true)}<span>Preview</span>`
+                        : html`${penIcon()}<span>Edit</span>`}
+                    </button>
+                    <button
+                      class="dndm-btn dndm-btn--subtle dndm-btn--icon"
+                      style="padding: 1px 6px;"
+                      type="button"
+                      title="Open notes in a modal"
+                      aria-label="Open notes in modal"
+                      @click=${() => this.openNotesModal(sheet, editable)}
+                    >
+                      ${expandIcon()}
+                    </button>
+                    <button
+                      class="dndm-btn dndm-btn--subtle dndm-btn--icon"
+                      style="padding: 1px 6px;"
+                      type="button"
+                      title="Open notes in a new window"
+                      aria-label="Open notes in new window"
+                      @click=${() => this.openNotesPopout(sheet, editable)}
+                    >
+                      ${popoutIcon()}
+                    </button>
+                  </div>
+                </div>
+
+                ${showingEdit
+                  ? html`
+                      <textarea
+                        class="dndm-sheet-notes-textarea"
+                        placeholder="Character backstory, inventory, notes (Markdown supported)..."
+                        .value=${notesValue}
+                        ?disabled=${!editable}
+                        aria-label="Notes markdown editor"
+                        @input=${(e: Event) => this.onNotesInput(sheet.id, e)}
+                      ></textarea>
+                    `
+                  : html`
+                      <div
+                        class="dndm-sheet-notes-preview"
+                        .innerHTML=${toSafeHtml(notesValue)}
+                      ></div>
+                    `}
+              </div>
+            `;
+          })()
         : nothing}
     `;
   }

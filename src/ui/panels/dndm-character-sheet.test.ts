@@ -602,6 +602,255 @@ describe("<dndm-character-sheet>", () => {
     expect(addTokenBtn.getAttribute("title")).toContain("Open a map");
   });
 
+  it("toggles notes between edit and preview with a single flipping button", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin");
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+    el.currentUserId = "dm-1";
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    const notesContainer = el.querySelector(".dndm-sheet-notes-container")!;
+    expect(notesContainer).not.toBeNull();
+
+    // Starts in edit mode: textarea visible, toggle offers Preview.
+    expect(notesContainer.querySelector(".dndm-sheet-notes-textarea")).not.toBeNull();
+    const toggle = notesContainer.querySelector(".dndm-notes-toggle") as HTMLButtonElement;
+    expect(toggle).not.toBeNull();
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(toggle.textContent).toContain("Preview");
+
+    // Modal + popout icon buttons sit to the right of the toggle.
+    expect(
+      notesContainer.querySelector('button[aria-label="Open notes in modal"]'),
+    ).not.toBeNull();
+    expect(
+      notesContainer.querySelector('button[aria-label="Open notes in new window"]'),
+    ).not.toBeNull();
+
+    toggle.click();
+    await el.updateComplete;
+
+    // Flipped to preview: rendered markdown visible, toggle offers Edit.
+    expect(notesContainer.querySelector(".dndm-sheet-notes-textarea")).toBeNull();
+    expect(notesContainer.querySelector(".dndm-sheet-notes-preview")).not.toBeNull();
+    const flipped = notesContainer.querySelector(".dndm-notes-toggle") as HTMLButtonElement;
+    expect(flipped.getAttribute("aria-pressed")).toBe("false");
+    expect(flipped.textContent).toContain("Edit");
+
+    flipped.click();
+    await el.updateComplete;
+    expect(notesContainer.querySelector(".dndm-sheet-notes-textarea")).not.toBeNull();
+  });
+
+  it("grows the rail notes editor to fit its content", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin");
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+    el.currentUserId = "dm-1";
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    const area = el.querySelector(
+      ".dndm-sheet-notes-container > .dndm-sheet-notes-textarea",
+    ) as HTMLTextAreaElement;
+    expect(area).not.toBeNull();
+    // happy-dom has no layout engine (scrollHeight 0), so simulate one.
+    Object.defineProperty(area, "scrollHeight", { value: 200, configurable: true });
+
+    area.value = "line1\nline2";
+    area.dispatchEvent(new Event("input"));
+    await el.updateComplete;
+    expect(area.style.height).toBe("200px");
+
+    // Shrinking content shrinks the editor back down.
+    Object.defineProperty(area, "scrollHeight", { value: 60, configurable: true });
+    area.value = "short";
+    area.dispatchEvent(new Event("input"));
+    await el.updateComplete;
+    expect(area.style.height).toBe("60px");
+  });
+
+  it("opens the notes modal pinned to the sheet with live-synced edits", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin");
+    const onUpdateSheet = vi.fn();
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+    el.currentUserId = "dm-1";
+    el.onUpdateSheet = onUpdateSheet;
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    const expandBtn = el.querySelector(
+      '.dndm-sheet-notes-container button[aria-label="Open notes in modal"]',
+    ) as HTMLButtonElement;
+    expandBtn.click();
+    await el.updateComplete;
+
+    const modal = el.querySelector("dndm-notes-modal") as unknown as {
+      updateComplete: Promise<unknown>;
+    } & HTMLElement;
+    expect(modal).not.toBeNull();
+    await modal.updateComplete;
+    const innerModal = modal.querySelector("dndm-modal") as unknown as {
+      updateComplete: Promise<unknown>;
+    } & HTMLElement;
+    await innerModal.updateComplete;
+
+    // Modal mirrors the sheet notes and offers its own edit/preview toggle.
+    const modalTextarea = modal.querySelector(
+      ".dndm-notes-modal-textarea",
+    ) as HTMLTextAreaElement;
+    expect(modalTextarea).not.toBeNull();
+    expect(modalTextarea.value).toBe("Heroic adventurer notes");
+    // Toggle lives in the modal header, next to the title — not the body.
+    const headerToggle = modal.querySelector(
+      ".dndm-modal-title .dndm-notes-toggle",
+    ) as HTMLButtonElement;
+    expect(headerToggle).not.toBeNull();
+
+    // Typing in the modal flows through the same debounced update-sheet path.
+    modalTextarea.value = "Updated from modal";
+    modalTextarea.dispatchEvent(new Event("input"));
+    expect(onUpdateSheet).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(300);
+    expect(onUpdateSheet).toHaveBeenCalledWith("sheet-1", { notes: "Updated from modal" });
+
+    // Modal toggle flips to preview rendering the edited notes.
+    const modalToggle = modal.querySelector(".dndm-notes-toggle") as HTMLButtonElement;
+    modalToggle.click();
+    await el.updateComplete;
+    await modal.updateComplete;
+    expect(modal.querySelector(".dndm-notes-modal-preview")).not.toBeNull();
+  });
+
+  it("locks read-only viewers to notes preview with a disabled toggle", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin", "player-1");
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = false;
+    el.currentUserId = "player-1";
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    const notesContainer = el.querySelector(".dndm-sheet-notes-container")!;
+    expect(notesContainer.querySelector(".dndm-sheet-notes-textarea")).toBeNull();
+    expect(notesContainer.querySelector(".dndm-sheet-notes-preview")).not.toBeNull();
+    const toggle = notesContainer.querySelector(".dndm-notes-toggle") as HTMLButtonElement;
+    expect(toggle.disabled).toBe(true);
+
+    // Modal opens locked to preview for viewers without edit permission.
+    const expandBtn = notesContainer.querySelector(
+      'button[aria-label="Open notes in modal"]',
+    ) as HTMLButtonElement;
+    expandBtn.click();
+    await el.updateComplete;
+    const modal = el.querySelector("dndm-notes-modal") as unknown as {
+      updateComplete: Promise<unknown>;
+    } & HTMLElement;
+    expect(modal).not.toBeNull();
+    await modal.updateComplete;
+    expect(modal.querySelector(".dndm-notes-modal-textarea")).toBeNull();
+    expect(modal.querySelector(".dndm-notes-modal-preview")).not.toBeNull();
+    expect(
+      (modal.querySelector(".dndm-notes-toggle") as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it("opens the notes popout window with the sheet content", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin");
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+    el.currentUserId = "dm-1";
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    const fakeDoc = { open: vi.fn(), write: vi.fn(), close: vi.fn() };
+    const fakeWindow = { closed: false, document: fakeDoc };
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(fakeWindow as unknown as Window);
+
+    try {
+      const popoutBtn = el.querySelector(
+        '.dndm-sheet-notes-container button[aria-label="Open notes in new window"]',
+      ) as HTMLButtonElement;
+      popoutBtn.click();
+      await el.updateComplete;
+
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      expect(fakeDoc.write).toHaveBeenCalledTimes(1);
+      const html = fakeDoc.write.mock.calls[0][0] as string;
+      expect(html).toContain("Thorin");
+      expect(html).toContain("dndm-notes-sync");
+      expect(html).toContain("Heroic adventurer notes");
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it("acknowledges popout edits post-render instead of echoing mid-keystroke", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin");
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+    el.currentUserId = "dm-1";
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    const fakeDoc = { open: vi.fn(), write: vi.fn(), close: vi.fn() };
+    const fakeWindow = { closed: false, document: fakeDoc };
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(fakeWindow as unknown as Window);
+
+    try {
+      const popoutBtn = el.querySelector(
+        '.dndm-sheet-notes-container button[aria-label="Open notes in new window"]',
+      ) as HTMLButtonElement;
+      popoutBtn.click();
+      await el.updateComplete;
+
+      // Deterministic channel regardless of test-environment support.
+      const inner = el as unknown as {
+        notesChannel: { postMessage: (...args: unknown[]) => void; close: () => void } | null;
+        handleNotesChannelMessage: (msg: unknown) => void;
+      };
+      const postMessage = vi.fn();
+      inner.notesChannel = { postMessage, close: vi.fn() };
+
+      // A fast-typed popout send must not be echoed back synchronously:
+      // that echo carries older text than the popup holds and clobbers it.
+      inner.handleNotesChannelMessage({
+        type: "notes-edit",
+        sheetId: "sheet-1",
+        notes: "Typed fast",
+      });
+      expect(postMessage).not.toHaveBeenCalled();
+
+      // The acknowledgement goes out once, post-render, with identical text.
+      await el.updateComplete;
+      expect(postMessage).toHaveBeenCalledTimes(1);
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "notes-state", notes: "Typed fast" }),
+      );
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
   it("calls onCreateSheet with the active map scope when the + button is clicked", async () => {
     const onCreateSheet = vi.fn();
     el.sheets = {};
