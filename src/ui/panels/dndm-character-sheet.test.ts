@@ -224,9 +224,7 @@ describe("<dndm-character-sheet>", () => {
     // Step current HP up via the increase button in the Current row.
     const rows = Array.from(popover!.querySelectorAll(".dndm-number-popover-row"));
     const currentRow = rows.find((r) => r.textContent?.includes("Current"))!;
-    const upBtn = currentRow.querySelector(
-      'button[title="Increase HP"]',
-    ) as HTMLButtonElement;
+    const upBtn = currentRow.querySelector('button[title="Increase HP"]') as HTMLButtonElement;
     expect(upBtn).not.toBeNull();
     upBtn.click();
     // Immediate: called synchronously without waiting for debounce timer!
@@ -305,9 +303,7 @@ describe("<dndm-character-sheet>", () => {
 
     // Ability cards render value buttons instead of inline number inputs.
     expect(el.querySelector(".dndm-sheet-scores-grid input[type='number']")).toBeNull();
-    const scoreBtn = el.querySelector(
-      ".dndm-sheet-value-btn--score",
-    ) as HTMLButtonElement;
+    const scoreBtn = el.querySelector(".dndm-sheet-value-btn--score") as HTMLButtonElement;
     expect(scoreBtn).toBeDefined();
     expect(scoreBtn.textContent?.trim()).toBe("16");
     scoreBtn.click();
@@ -561,9 +557,7 @@ describe("<dndm-character-sheet>", () => {
     expect(onDuplicateSheet).toHaveBeenCalledWith("sheet-1");
 
     // DM-only scope toggle: global sheet scopes to the active map.
-    const toggle = actionRow!.querySelector(
-      ".dndm-sheet-scope-toggle",
-    ) as HTMLButtonElement;
+    const toggle = actionRow!.querySelector(".dndm-sheet-scope-toggle") as HTMLButtonElement;
     expect(toggle).not.toBeNull();
     expect(toggle.textContent?.trim()).toBe("Global");
     // Text button: uses text-button styling, not icon-button sizing.
@@ -571,11 +565,16 @@ describe("<dndm-character-sheet>", () => {
     toggle.click();
     expect(onUpdateSheet).toHaveBeenCalledWith("sheet-1", { scopedMapId: "map-a" });
 
+    // Sheet popout button sits in the header action row (icon button).
+    const sheetPopoutBtn = actionRow!.querySelector(
+      'button[aria-label="Open sheet in new window"]',
+    ) as HTMLButtonElement;
+    expect(sheetPopoutBtn).not.toBeNull();
+    expect(sheetPopoutBtn.querySelector("svg")).not.toBeNull();
+
     // Every header button explains itself via a tooltip.
-    const headerButtons = Array.from(
-      actionRow!.querySelectorAll<HTMLButtonElement>("button"),
-    );
-    expect(headerButtons.length).toBe(4);
+    const headerButtons = Array.from(actionRow!.querySelectorAll<HTMLButtonElement>("button"));
+    expect(headerButtons.length).toBe(5);
     for (const btn of headerButtons) {
       expect(btn.getAttribute("title")?.trim().length).toBeGreaterThan(0);
     }
@@ -623,13 +622,13 @@ describe("<dndm-character-sheet>", () => {
     expect(toggle.getAttribute("aria-pressed")).toBe("true");
     expect(toggle.textContent).toContain("Preview");
 
-    // Modal + popout icon buttons sit to the right of the toggle.
-    expect(
-      notesContainer.querySelector('button[aria-label="Open notes in modal"]'),
-    ).not.toBeNull();
+    // Modal icon button sits to the right of the toggle; the whole-sheet
+    // popout lives in the sheet header action row instead.
+    expect(notesContainer.querySelector('button[aria-label="Open notes in modal"]')).not.toBeNull();
     expect(
       notesContainer.querySelector('button[aria-label="Open notes in new window"]'),
-    ).not.toBeNull();
+    ).toBeNull();
+    expect(el.querySelector('button[aria-label="Open sheet in new window"]')).not.toBeNull();
 
     toggle.click();
     await el.updateComplete;
@@ -707,9 +706,7 @@ describe("<dndm-character-sheet>", () => {
     await innerModal.updateComplete;
 
     // Modal mirrors the sheet notes and offers its own edit/preview toggle.
-    const modalTextarea = modal.querySelector(
-      ".dndm-notes-modal-textarea",
-    ) as HTMLTextAreaElement;
+    const modalTextarea = modal.querySelector(".dndm-notes-modal-textarea") as HTMLTextAreaElement;
     expect(modalTextarea).not.toBeNull();
     expect(modalTextarea.value).toBe("Heroic adventurer notes");
     // Toggle lives in the modal header, next to the title — not the body.
@@ -763,12 +760,10 @@ describe("<dndm-character-sheet>", () => {
     await modal.updateComplete;
     expect(modal.querySelector(".dndm-notes-modal-textarea")).toBeNull();
     expect(modal.querySelector(".dndm-notes-modal-preview")).not.toBeNull();
-    expect(
-      (modal.querySelector(".dndm-notes-toggle") as HTMLButtonElement).disabled,
-    ).toBe(true);
+    expect((modal.querySelector(".dndm-notes-toggle") as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("opens the notes popout window with the sheet content", async () => {
+  it("opens the whole sheet in a new window with the sheet route", async () => {
     const sheet1 = makeSheet("sheet-1", "Thorin");
     el.sheets = { "sheet-1": sheet1 };
     el.selectedSheetId = "sheet-1";
@@ -779,29 +774,31 @@ describe("<dndm-character-sheet>", () => {
     document.body.appendChild(el);
     await el.updateComplete;
 
-    const fakeDoc = { open: vi.fn(), write: vi.fn(), close: vi.fn() };
-    const fakeWindow = { closed: false, document: fakeDoc };
+    const fakeWindow = { closed: false, close: vi.fn(), focus: vi.fn() };
     const openSpy = vi.spyOn(window, "open").mockReturnValue(fakeWindow as unknown as Window);
 
     try {
       const popoutBtn = el.querySelector(
-        '.dndm-sheet-notes-container button[aria-label="Open notes in new window"]',
+        'button[aria-label="Open sheet in new window"]',
       ) as HTMLButtonElement;
+      expect(popoutBtn).not.toBeNull();
       popoutBtn.click();
       await el.updateComplete;
 
       expect(openSpy).toHaveBeenCalledTimes(1);
-      expect(fakeDoc.write).toHaveBeenCalledTimes(1);
-      const html = fakeDoc.write.mock.calls[0][0] as string;
-      expect(html).toContain("Thorin");
-      expect(html).toContain("dndm-notes-sync");
-      expect(html).toContain("Heroic adventurer notes");
+      expect(openSpy).toHaveBeenCalledWith(
+        "?view=sheet&sheetId=sheet-1",
+        "_blank",
+        expect.any(String),
+      );
+      const inner = el as unknown as { sheetPopouts: Map<string, unknown> };
+      expect(inner.sheetPopouts.get("sheet-1")).toBe(fakeWindow);
     } finally {
       openSpy.mockRestore();
     }
   });
 
-  it("acknowledges popout edits post-render instead of echoing mid-keystroke", async () => {
+  it("warns and toasts when the sheet popout is blocked, with no fallback", async () => {
     const sheet1 = makeSheet("sheet-1", "Thorin");
     el.sheets = { "sheet-1": sheet1 };
     el.selectedSheetId = "sheet-1";
@@ -812,40 +809,82 @@ describe("<dndm-character-sheet>", () => {
     document.body.appendChild(el);
     await el.updateComplete;
 
-    const fakeDoc = { open: vi.fn(), write: vi.fn(), close: vi.fn() };
-    const fakeWindow = { closed: false, document: fakeDoc };
-    const openSpy = vi.spyOn(window, "open").mockReturnValue(fakeWindow as unknown as Window);
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { toastService } = await import("../toast/toastService");
+    const toastSpy = vi.spyOn(toastService, "warn");
 
     try {
       const popoutBtn = el.querySelector(
-        '.dndm-sheet-notes-container button[aria-label="Open notes in new window"]',
+        'button[aria-label="Open sheet in new window"]',
       ) as HTMLButtonElement;
       popoutBtn.click();
       await el.updateComplete;
 
-      // Deterministic channel regardless of test-environment support.
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalled();
+      expect(toastSpy).toHaveBeenCalledWith(expect.stringContaining("Pop-up blocked"));
+      const inner = el as unknown as { sheetPopouts: Map<string, unknown> };
+      expect(inner.sheetPopouts.size).toBe(0);
+      // No fallback: the notes modal stays closed.
+      expect(el.querySelector("dndm-notes-modal")).toBeNull();
+    } finally {
+      openSpy.mockRestore();
+      warnSpy.mockRestore();
+      toastSpy.mockRestore();
+    }
+  });
+
+  it("applies popup sheet-edit intents and acknowledges with sheet-state post-render", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin");
+    const onUpdateSheet = vi.fn();
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+    el.currentUserId = "dm-1";
+    el.onUpdateSheet = onUpdateSheet;
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    const fakeWindow = { closed: false, close: vi.fn(), focus: vi.fn() };
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(fakeWindow as unknown as Window);
+
+    try {
       const inner = el as unknown as {
-        notesChannel: { postMessage: (...args: unknown[]) => void; close: () => void } | null;
-        handleNotesChannelMessage: (msg: unknown) => void;
+        sheetChannel: { postMessage: (...args: unknown[]) => void; close: () => void } | null;
+        handleSheetChannelMessage: (msg: unknown) => void;
       };
       const postMessage = vi.fn();
-      inner.notesChannel = { postMessage, close: vi.fn() };
+      inner.sheetChannel = { postMessage, close: vi.fn() };
 
-      // A fast-typed popout send must not be echoed back synchronously:
-      // that echo carries older text than the popup holds and clobbers it.
-      inner.handleNotesChannelMessage({
-        type: "notes-edit",
-        sheetId: "sheet-1",
-        notes: "Typed fast",
-      });
-      expect(postMessage).not.toHaveBeenCalled();
-
-      // The acknowledgement goes out once, post-render, with identical text.
+      const popoutBtn = el.querySelector(
+        'button[aria-label="Open sheet in new window"]',
+      ) as HTMLButtonElement;
+      popoutBtn.click();
       await el.updateComplete;
-      expect(postMessage).toHaveBeenCalledTimes(1);
+
+      // A popup edit applies immediately through the update-sheet path…
+      inner.handleSheetChannelMessage({
+        type: "sheet-edit",
+        sheetId: "sheet-1",
+        intent: { kind: "updateSheet", patch: { notes: "Typed in popup" } },
+      });
+      expect(onUpdateSheet).toHaveBeenCalledWith("sheet-1", { notes: "Typed in popup" });
+
+      // …and once the edit replicates back into props, the popup is pushed
+      // the fresh sheet-state.
+      el.sheets = { "sheet-1": { ...sheet1, notes: "Typed in popup" } };
+      await el.updateComplete;
       expect(postMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ type: "notes-state", notes: "Typed fast" }),
+        expect.objectContaining({ type: "sheet-state", sheetId: "sheet-1" }),
       );
+      const last = postMessage.mock.calls[postMessage.mock.calls.length - 1][0] as {
+        sheet: CharacterSheet;
+      };
+      expect(last.sheet.characterName).toBe("Thorin");
+      expect(last.sheet.notes).toBe("Typed in popup");
     } finally {
       openSpy.mockRestore();
     }
@@ -866,27 +905,24 @@ describe("<dndm-character-sheet>", () => {
       closed: false,
       close: vi.fn(),
       focus: vi.fn(),
-      document: { open: vi.fn(), write: vi.fn(), close: vi.fn() },
     });
     const first = makeFake();
-    const openSpy = vi
-      .spyOn(window, "open")
-      .mockReturnValueOnce(first as unknown as Window);
+    const openSpy = vi.spyOn(window, "open").mockReturnValueOnce(first as unknown as Window);
 
     try {
       const inner = el as unknown as {
-        notesChannel: { postMessage: (...args: unknown[]) => void; close: () => void } | null;
-        notesPopouts: Map<string, unknown>;
+        sheetChannel: { postMessage: (...args: unknown[]) => void; close: () => void } | null;
+        sheetPopouts: Map<string, unknown>;
       };
       const postMessage = vi.fn();
-      inner.notesChannel = { postMessage, close: vi.fn() };
+      inner.sheetChannel = { postMessage, close: vi.fn() };
 
       const popoutBtn = el.querySelector(
-        '.dndm-sheet-notes-container button[aria-label="Open notes in new window"]',
+        'button[aria-label="Open sheet in new window"]',
       ) as HTMLButtonElement;
       popoutBtn.click();
       await el.updateComplete;
-      expect(inner.notesPopouts.get("sheet-1")).toBe(first);
+      expect(inner.sheetPopouts.get("sheet-1")).toBe(first);
 
       // Reopening the same sheet focuses the live window — no duplicate,
       // no teardown of the existing window.
@@ -896,8 +932,8 @@ describe("<dndm-character-sheet>", () => {
       expect(openSpy).toHaveBeenCalledTimes(1);
       expect(first.focus).toHaveBeenCalledTimes(1);
       expect(first.close).not.toHaveBeenCalled();
-      expect(inner.notesPopouts.get("sheet-1")).toBe(first);
-      expect(inner.notesPopouts.size).toBe(1);
+      expect(inner.sheetPopouts.get("sheet-1")).toBe(first);
+      expect(inner.sheetPopouts.size).toBe(1);
     } finally {
       openSpy.mockRestore();
     }
@@ -919,7 +955,6 @@ describe("<dndm-character-sheet>", () => {
       closed: false,
       close: vi.fn(),
       focus: vi.fn(),
-      document: { open: vi.fn(), write: vi.fn(), close: vi.fn() },
     });
     const first = makeFake();
     const second = makeFake();
@@ -930,20 +965,32 @@ describe("<dndm-character-sheet>", () => {
 
     try {
       const inner = el as unknown as {
-        notesChannel: { postMessage: (...args: unknown[]) => void; close: () => void } | null;
-        notesPopouts: Map<string, unknown>;
-        openNotesPopout: (sheet: CharacterSheet, editable: boolean) => void;
+        sheetChannel: { postMessage: (...args: unknown[]) => void; close: () => void } | null;
+        sheetPopouts: Map<string, unknown>;
+        openSheetPopout: (sheet: CharacterSheet) => void;
       };
-      inner.notesChannel = { postMessage: vi.fn(), close: vi.fn() };
+      inner.sheetChannel = { postMessage: vi.fn(), close: vi.fn() };
 
-      inner.openNotesPopout(sheet1, true);
+      inner.openSheetPopout(sheet1);
       await el.updateComplete;
-      inner.openNotesPopout(sheet2, true);
+      inner.openSheetPopout(sheet2);
       await el.updateComplete;
 
       expect(openSpy).toHaveBeenCalledTimes(2);
-      expect(inner.notesPopouts.get("sheet-1")).toBe(first);
-      expect(inner.notesPopouts.get("sheet-2")).toBe(second);
+      expect(openSpy).toHaveBeenNthCalledWith(
+        1,
+        "?view=sheet&sheetId=sheet-1",
+        "_blank",
+        expect.any(String),
+      );
+      expect(openSpy).toHaveBeenNthCalledWith(
+        2,
+        "?view=sheet&sheetId=sheet-2",
+        "_blank",
+        expect.any(String),
+      );
+      expect(inner.sheetPopouts.get("sheet-1")).toBe(first);
+      expect(inner.sheetPopouts.get("sheet-2")).toBe(second);
       expect(first.close).not.toHaveBeenCalled();
       expect(second.close).not.toHaveBeenCalled();
     } finally {
@@ -966,24 +1013,23 @@ describe("<dndm-character-sheet>", () => {
     const onUpdateSheet = vi.fn();
     el.onUpdateSheet = onUpdateSheet;
     const inner = el as unknown as {
-      notesChannel: { postMessage: (...args: unknown[]) => void; close: () => void } | null;
-      handleNotesChannelMessage: (msg: unknown) => void;
+      sheetChannel: { postMessage: (...args: unknown[]) => void; close: () => void } | null;
+      handleSheetChannelMessage: (msg: unknown) => void;
     };
-    inner.notesChannel = { postMessage: vi.fn(), close: vi.fn() };
+    inner.sheetChannel = { postMessage: vi.fn(), close: vi.fn() };
 
     // Edits arriving from two different popouts converge on their own sheet.
-    inner.handleNotesChannelMessage({
-      type: "notes-edit",
+    inner.handleSheetChannelMessage({
+      type: "sheet-edit",
       sheetId: "sheet-1",
-      notes: "Thorin's saga",
+      intent: { kind: "updateSheet", patch: { notes: "Thorin's saga" } },
     });
-    inner.handleNotesChannelMessage({
-      type: "notes-edit",
+    inner.handleSheetChannelMessage({
+      type: "sheet-edit",
       sheetId: "sheet-2",
-      notes: "Balin's saga",
+      intent: { kind: "updateSheet", patch: { notes: "Balin's saga" } },
     });
     await el.updateComplete;
-    vi.advanceTimersByTime(1000);
 
     expect(onUpdateSheet).toHaveBeenCalledWith("sheet-1", { notes: "Thorin's saga" });
     expect(onUpdateSheet).toHaveBeenCalledWith("sheet-2", { notes: "Balin's saga" });
@@ -1003,22 +1049,53 @@ describe("<dndm-character-sheet>", () => {
     const onUpdateSheet = vi.fn();
     el.onUpdateSheet = onUpdateSheet;
     const inner = el as unknown as {
-      notesChannel: { postMessage: (...args: unknown[]) => void; close: () => void } | null;
-      handleNotesChannelMessage: (msg: unknown) => void;
+      sheetChannel: { postMessage: (...args: unknown[]) => void; close: () => void } | null;
+      handleSheetChannelMessage: (msg: unknown) => void;
     };
-    inner.notesChannel = { postMessage: vi.fn(), close: vi.fn() };
+    inner.sheetChannel = { postMessage: vi.fn(), close: vi.fn() };
 
     // Default policy is HostOnly: player-2 may not edit player-1's sheet,
-    // so a notes-edit arriving over the unauthenticated channel is dropped.
-    inner.handleNotesChannelMessage({
-      type: "notes-edit",
+    // so a sheet-edit arriving over the unauthenticated channel is dropped.
+    inner.handleSheetChannelMessage({
+      type: "sheet-edit",
       sheetId: "sheet-1",
-      notes: "Forged by attacker",
+      intent: { kind: "updateSheet", patch: { notes: "Forged by attacker" } },
     });
     await el.updateComplete;
     vi.advanceTimersByTime(1000);
 
     expect(onUpdateSheet).not.toHaveBeenCalled();
+  });
+
+  it("hides delete, duplicate, and place-token in sheet popout mode", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin");
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+    el.currentUserId = "dm-1";
+    el.isSheetPopout = true;
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    // Roster selection, destructive/canvas actions, and nested popouts are gone…
+    expect(el.querySelector(".dndm-sheet-roster")).toBeNull();
+    expect(el.querySelector('button[aria-label="Place token"]')).toBeNull();
+    expect(el.querySelector('button[aria-label="Duplicate sheet"]')).toBeNull();
+    expect(el.querySelector('button[aria-label="Open sheet in new window"]')).toBeNull();
+    // …and the rail panel chrome is replaced by the responsive grid panel.
+    expect(el.querySelector("dndm-collapsible-panel")).toBeNull();
+    expect(el.querySelector(".dndm-sheet-panel--popout")).not.toBeNull();
+    // Paired sections share rows so notes can absorb the remaining height.
+    expect(el.querySelector(".dndm-sheet-popout-head")).not.toBeNull();
+    const cols = el.querySelectorAll(".dndm-sheet-popout-cols");
+    expect(cols.length).toBeGreaterThanOrEqual(1);
+    expect(cols[0].querySelector(".dndm-sheet-vitals")).not.toBeNull();
+    expect(cols[0].querySelector(".dndm-sheet-scores-grid")).not.toBeNull();
+    // …but the sheet itself still renders and stays editable.
+    expect(el.querySelector(".dndm-sheet-name-input")).not.toBeNull();
+    expect(el.querySelector(".dndm-sheet-notes-textarea")).not.toBeNull();
   });
 
   it("calls onCreateSheet with the active map scope when the + button is clicked", async () => {
@@ -1033,15 +1110,13 @@ describe("<dndm-character-sheet>", () => {
 
     document.body.appendChild(el);
     await el.updateComplete;
-    const panel = el.querySelector(
-      "dndm-collapsible-panel",
-    ) as unknown as { updateComplete: Promise<unknown> } | null;
+    const panel = el.querySelector("dndm-collapsible-panel") as unknown as {
+      updateComplete: Promise<unknown>;
+    } | null;
     if (panel) await panel.updateComplete;
     await el.updateComplete;
 
-    const btn = el.querySelector(
-      'button[title="New character sheet"]',
-    ) as HTMLButtonElement;
+    const btn = el.querySelector('button[title="New character sheet"]') as HTMLButtonElement;
     expect(btn).not.toBeNull();
     btn.click();
     expect(onCreateSheet).toHaveBeenCalledTimes(1);

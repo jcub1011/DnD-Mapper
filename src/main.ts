@@ -12,6 +12,7 @@ import { fx } from "./ui/fx/fx";
 // Side-effect import registers <dndm-app>; the type import is erased at build.
 import "./ui/app/dndm-app";
 import type { DndmApp } from "./ui/app/dndm-app";
+import { isSheetPopoutLocation } from "./ui/panels/sheetPopout";
 
 const log = createLogger("boot");
 
@@ -25,7 +26,25 @@ function installGlobalErrorHandlers(): void {
   });
 }
 
+/** Dismiss the loading screen. */
+function dismissBoot(): void {
+  const bootEl = document.getElementById("boot");
+  if (bootEl) {
+    bootEl.classList.add("is-done");
+    window.setTimeout(() => bootEl.remove(), 600);
+  }
+}
+
 function boot(): void {
+  // Whole-character-sheet popouts boot the same bundle as a pure
+  // BroadcastChannel client: no Phaser map, no KnockBox plugin, no
+  // controller. The <dndm-sheet-popout-view> syncs with the main window.
+  if (isSheetPopoutLocation(typeof location !== "undefined" ? location : undefined)) {
+    log.info("booting sheet popout (no map, no network)");
+    dismissBoot();
+    return;
+  }
+
   // Resolve the launch mode ONCE, up front. The KnockBox plugin scrubs the ticket
   // out of location.hash the moment it starts, so detectLaunch() is only reliable
   // before the Phaser game boots — capture it here and thread it down.
@@ -61,11 +80,7 @@ function boot(): void {
   log.info("app shell mounted");
 
   // Dismiss the loading screen.
-  const bootEl = document.getElementById("boot");
-  if (bootEl) {
-    bootEl.classList.add("is-done");
-    window.setTimeout(() => bootEl.remove(), 600);
-  }
+  dismissBoot();
 
   if (import.meta.env.DEV) {
     (window as unknown as { __fx?: unknown; __app?: unknown }).__fx = fx;

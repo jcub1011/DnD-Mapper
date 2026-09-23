@@ -36,6 +36,13 @@ export class DndmSheetSettingsModal extends GameElement {
   @property({ type: String })
   activeMapId: string | null = null;
 
+  /**
+   * Popout mode: hide delete / duplicate / place-token, which are
+   * main-window-only. Rename, recolor, owner, and scope stay available.
+   */
+  @property({ type: Boolean })
+  hideDestructiveActions = false;
+
   @property({ attribute: false })
   onSave?: (patch: SheetSettingsPatch) => void;
 
@@ -167,7 +174,10 @@ export class DndmSheetSettingsModal extends GameElement {
               />
             </label>
 
-            <label class="dndm-label" title="Picking a color here overrides the name-seeded color for the sheet and its linked token.">
+            <label
+              class="dndm-label"
+              title="Picking a color here overrides the name-seeded color for the sheet and its linked token."
+            >
               Token &amp; Accent Color
               <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
                 <input
@@ -203,7 +213,10 @@ export class DndmSheetSettingsModal extends GameElement {
                         </option>
                         ${assignableRoster.map(
                           (p) =>
-                            html`<option value=${p.id} ?selected=${(this.ownerUserId ?? "") === p.id}>
+                            html`<option
+                              value=${p.id}
+                              ?selected=${(this.ownerUserId ?? "") === p.id}
+                            >
                               ${p.name}
                             </option>`,
                         )}
@@ -250,13 +263,20 @@ export class DndmSheetSettingsModal extends GameElement {
                         </option>
                         ${this.maps.map(
                           (m) =>
-                            html`<option value=${m.id} ?selected=${(this.scopedMapId ?? "") === m.id}>
+                            html`<option
+                              value=${m.id}
+                              ?selected=${(this.scopedMapId ?? "") === m.id}
+                            >
                               ${m.name}
                             </option>`,
                         )}
                       </select>
                     </label>
 
+                    ${
+                      this.hideDestructiveActions
+                        ? nothing
+                        : html`
                     <div>
                       <span class="dndm-label">Sheet Actions</span>
                       <div style="display: flex; gap: 8px; margin-top: 4px;">
@@ -280,6 +300,8 @@ export class DndmSheetSettingsModal extends GameElement {
                       </div>
                     </div>
                   `
+                    }
+                  `
                 : nothing
             }
           </div>
@@ -288,7 +310,7 @@ export class DndmSheetSettingsModal extends GameElement {
           <div style="display: flex; justify-content: space-between; width: 100%;">
             <div>
               ${
-                this.isDm
+                this.isDm && !this.hideDestructiveActions
                   ? html`
                       <button
                         class="dndm-btn dndm-btn--danger"

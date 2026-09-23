@@ -327,9 +327,9 @@
 }
 
 .dndm-sheet-notes-textarea {
-  width: 100%;
   min-height: 120px;
   max-height: 80vh;
+  flex: 1;
   background: var(--dndm-color-surface-sunken);
   border: 1px solid var(--dndm-color-border);
   color: var(--dndm-color-text);
@@ -348,8 +348,9 @@
 }
 
 .dndm-sheet-notes-preview {
-  min-height: 80px;
+  min-height: 120px;
   max-height: 80vh;
+  flex: 1;
   padding: 8px;
   background: var(--dndm-color-surface-sunken);
   border: 1px solid var(--dndm-color-border);
@@ -357,6 +358,7 @@
   font-size: 0.85rem;
   line-height: 1.4;
   overflow-y: auto;
+  box-sizing: border-box;
 }
 
 .dndm-sheet-notes-preview h1,

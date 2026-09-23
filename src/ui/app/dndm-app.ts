@@ -60,6 +60,8 @@ import "../toast/dndm-toast";
 import "../upload/dndm-image-upload";
 import "../markup/dndm-markup-overlay";
 import "../display/dndm-display-roll-ticker";
+import "../panels/dndm-sheet-popout-view";
+import { parseSheetPopoutParams } from "../panels/sheetPopout";
 import { filterDisplayImages, filterDisplayTokens } from "../display/displayProjection";
 import { resolveActiveTurnTokenId } from "../../game/combat";
 import { canMoveToken } from "../../game/visibility";
@@ -164,6 +166,15 @@ export class DndmApp extends GameElement {
   @state() private projectorMode =
     typeof window !== "undefined" && window.location?.search?.includes("view=display");
 
+  /**
+   * Whole-character-sheet popout (`?view=sheet&sheetId=<id>`). Renders only the
+   * single-sheet view as a BroadcastChannel client — no controller, no map.
+   */
+  private readonly sheetPopoutParams =
+    typeof window !== "undefined"
+      ? parseSheetPopoutParams(window.location?.search ?? "")
+      : { isSheetPopout: false as boolean, sheetId: null as string | null };
+
   private seenRollIds = new Set<string>();
   private displaySyncChannel?: BroadcastChannel;
   // MapScene instance the canvas callbacks are wired to. Phaser boots
@@ -196,6 +207,9 @@ export class DndmApp extends GameElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    // Sheet popouts never touch the controller, map, or library — the
+    // <dndm-sheet-popout-view> owns its sync channel.
+    if (this.sheetPopoutParams.isSheetPopout) return;
     document.addEventListener("click", this.onGlobalPanelCollapseClick);
     window.addEventListener("dndm-open-sheet", this.onOpenSheet);
     window.addEventListener("keydown", this.onEscapeKey);
@@ -797,6 +811,11 @@ export class DndmApp extends GameElement {
 
   // ── Render ─────────────────────────────────────────────────────────────────
   override render(): TemplateResult {
+    if (this.sheetPopoutParams.isSheetPopout) {
+      return html`
+        <dndm-sheet-popout-view .sheetId=${this.sheetPopoutParams.sheetId}></dndm-sheet-popout-view>
+      `;
+    }
     const { phase, maps, activeMapId, settings } = this.match;
     const me = this.controller?.playerId ?? "";
 
@@ -1116,7 +1135,8 @@ export class DndmApp extends GameElement {
                     }
                   }}
                   ></dndm-toolbar>
-                    ${this.isDm && this.toolMode === "markup"
+                    ${
+                      this.isDm && this.toolMode === "markup"
                       ? html`
                           <dndm-markup-overlay
                             .activeMap=${active}
@@ -1129,7 +1149,8 @@ export class DndmApp extends GameElement {
                           }}
                           ></dndm-markup-overlay>
                         `
-                      : nothing}
+                        : nothing
+                    }
                   </div>
 
                   ${
@@ -1196,8 +1217,8 @@ export class DndmApp extends GameElement {
                 }
                 `
           }
-
-          ${active
+          ${
+            active
             ? html`
                 <dndm-token-rail
                   .tokens=${active.tokens}
@@ -1220,7 +1241,8 @@ export class DndmApp extends GameElement {
                     this.send({ kind: "reassignTokenSheet", tokenId, sheetId })}
                 ></dndm-token-rail>
               `
-            : nothing}
+              : nothing
+          }
 
           <dndm-quick-roll-footer
             .state=${this.match}

@@ -18,18 +18,32 @@ import type {
 import {
   createDefaultAttributeSchema,
   createDefaultDndMapperState,
+  isFullMap,
   resolveAttributeContribution,
   resolveEffectiveMaxHp,
+  toMapSummary,
 } from "../../game/domain";
-import {
-  mayEditSheet,
-  mayViewSheet,
-  mayViewSheetNotesAndHp,
-} from "../../game/rules";
+import { mayEditSheet, mayViewSheet, mayViewSheetNotesAndHp } from "../../game/rules";
 import { GameElement } from "../app/GameElement";
-import { copyIcon, expandIcon, eyeIcon, gearIcon, penIcon, popoutIcon, tokenPlusIcon } from "../icons";
+import {
+  copyIcon,
+  expandIcon,
+  eyeIcon,
+  gearIcon,
+  penIcon,
+  popoutIcon,
+  tokenPlusIcon,
+} from "../icons";
+import { toastService } from "../toast/toastService";
 import { toSafeHtml } from "./markdown";
-import { NOTES_SYNC_CHANNEL, buildNotesPopoutHtml } from "./notesPopout";
+import {
+  SHEET_SYNC_CHANNEL,
+  buildSheetPopoutUrl,
+  type SheetEditMessage,
+  type SheetJoinMessage,
+  type SheetLeaveMessage,
+  type SheetStateMessage,
+} from "./sheetPopout";
 import "./dndm-status-effects";
 import "./dndm-collapsible-panel";
 import "../modals/dndm-sheet-settings-modal";
@@ -40,8 +54,18 @@ import "../modals/dndm-schema-preset-modal";
 import "../modals/dndm-schema-cascade-warning";
 
 const ABILITY_KEYS = new Set([
-  "str", "dex", "con", "int", "wis", "cha",
-  "strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma",
+  "str",
+  "dex",
+  "con",
+  "int",
+  "wis",
+  "cha",
+  "strength",
+  "dexterity",
+  "constitution",
+  "intelligence",
+  "wisdom",
+  "charisma",
 ]);
 
 function isAbilityRow(row: AttributeRow): boolean {
@@ -59,7 +83,9 @@ function shortAbilityName(name: string): string {
   return name.slice(0, 3).toUpperCase();
 }
 
-export type SheetPatch = Partial<Pick<CharacterSheet, "characterName" | "color" | "scopedMapId" | "notes">>;
+export type SheetPatch = Partial<
+  Pick<CharacterSheet, "characterName" | "color" | "scopedMapId" | "notes">
+>;
 
 @customElement("dndm-character-sheet")
 export class DndmCharacterSheet extends GameElement {
@@ -99,6 +125,15 @@ export class DndmCharacterSheet extends GameElement {
   @property({ attribute: false })
   maps: readonly (GameMap | MapSummary)[] = [];
 
+  /**
+   * True when this instance runs inside a `?view=sheet` popout window.
+   * Hides roster selection, destructive/canvas actions (delete, duplicate,
+   * place-token), and the popout button itself; the instance never opens
+   * nested popouts or a sync channel.
+   */
+  @property({ type: Boolean })
+  isSheetPopout = false;
+
   // Callbacks
   @property({ attribute: false })
   onSelectSheet?: (sheetId: string | null) => void;
@@ -131,7 +166,10 @@ export class DndmCharacterSheet extends GameElement {
   onPlaceToken?: (sheetId: string) => void;
 
   @property({ attribute: false })
-  onUpdateAttributeValues?: (sheetId: string, values: Readonly<Record<string, AttributeValue>>) => void;
+  onUpdateAttributeValues?: (
+    sheetId: string,
+    values: Readonly<Record<string, AttributeValue>>,
+  ) => void;
 
   @property({ attribute: false })
   onApplyStatusEffect?: (sheetId: string, effect: Omit<StatusEffect, "id" | "appliedUtc">) => void;
@@ -158,10 +196,10 @@ export class DndmCharacterSheet extends GameElement {
   @state() private notesModalTab: NotesTab = "edit";
   @state() private modalDraftNotes: string | null = null;
 
-  // Connected notes popout windows (BroadcastChannel live sync), one per sheet.
-  private notesChannel: BroadcastChannel | null = null;
-  private notesPopouts = new Map<string, Window>();
-  private notesPopoutPoll: number | null = null;
+  // Whole-sheet popout windows (BroadcastChannel live sync), one per sheet.
+  private sheetChannel: BroadcastChannel | null = null;
+  private sheetPopouts = new Map<string, Window>();
+  private sheetPopoutPoll: number | null = null;
 
   // Draft inputs for 300ms debouncing
   @state() private draftName: string | null = null;
@@ -187,10 +225,12 @@ export class DndmCharacterSheet extends GameElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    if (typeof BroadcastChannel !== "undefined" && !this.notesChannel) {
-      this.notesChannel = new BroadcastChannel(NOTES_SYNC_CHANNEL);
-      this.notesChannel.onmessage = (event: MessageEvent) => {
-        this.handleNotesChannelMessage(event.data);
+    // Popout instances never open nested popouts — no channel needed.
+    if (this.isSheetPopout) return;
+    if (typeof BroadcastChannel !== "undefined" && !this.sheetChannel) {
+      this.sheetChannel = new BroadcastChannel(SHEET_SYNC_CHANNEL);
+      this.sheetChannel.onmessage = (event: MessageEvent) => {
+        this.handleSheetChannelMessage(event.data);
       };
     }
   }
@@ -198,10 +238,10 @@ export class DndmCharacterSheet extends GameElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.clearDebounceTimers();
-    this.closeAllNotesPopouts(true);
-    if (this.notesChannel) {
-      this.notesChannel.close();
-      this.notesChannel = null;
+    this.closeAllSheetPopouts(true);
+    if (this.sheetChannel) {
+      this.sheetChannel.close();
+      this.sheetChannel = null;
     }
   }
 
@@ -253,23 +293,24 @@ export class DndmCharacterSheet extends GameElement {
   override updated(changedProperties: Map<string, unknown>): void {
     super.updated(changedProperties);
     this.autosizeRailNotes();
-    // Live-sync every connected popout after renders.
-    if (this.notesPopouts.size > 0) {
-      for (const [sheetId, popout] of [...this.notesPopouts]) {
+    // Live-sync every connected sheet popout after renders.
+    if (this.sheetPopouts.size > 0) {
+      for (const [sheetId, popout] of [...this.sheetPopouts]) {
         if (popout.closed) {
-          this.notesPopouts.delete(sheetId);
+          this.sheetPopouts.delete(sheetId);
         } else {
-          this.pushNotesState(sheetId);
+          this.pushSheetState(sheetId);
         }
       }
-      if (this.notesPopouts.size === 0 && this.notesPopoutPoll !== null) {
-        window.clearInterval(this.notesPopoutPoll);
-        this.notesPopoutPoll = null;
+      if (this.sheetPopouts.size === 0 && this.sheetPopoutPoll !== null) {
+        window.clearInterval(this.sheetPopoutPoll);
+        this.sheetPopoutPoll = null;
       }
     }
   }
 
-  private getEffectiveState(): DndMapperState {    return {
+  private getEffectiveState(): DndMapperState {
+    return {
       phase: "Playing",
       settings: this.settings,
       attributeSchema: this.attributeSchema,
@@ -287,7 +328,7 @@ export class DndmCharacterSheet extends GameElement {
       focusRect: null,
       loadedDiceRules: [],
       hostHeldKeys: [],
-      dmPlayerId: this.isDm ? (this.currentUserId || "dm-user") : "dm-id",
+      dmPlayerId: this.isDm ? this.currentUserId || "dm-user" : "dm-id",
     };
   }
 
@@ -338,7 +379,7 @@ export class DndmCharacterSheet extends GameElement {
   }
 
   private handleDeleteSheet(sheetId: string): void {
-    this.closeNotesPopoutFor(sheetId, true);
+    this.closeSheetPopoutFor(sheetId, true);
     this.settingsModalOpen = false;
     this.dispatchEvent(
       new CustomEvent<{ sheetId: string }>("delete-sheet", {
@@ -388,15 +429,49 @@ export class DndmCharacterSheet extends GameElement {
     this.onAssignSheetOwner?.(sheetId, ownerUserId);
   }
 
-  private emitUpdateAttributeValues(sheetId: string, values: Readonly<Record<string, AttributeValue>>): void {
+  private emitUpdateAttributeValues(
+    sheetId: string,
+    values: Readonly<Record<string, AttributeValue>>,
+  ): void {
     this.dispatchEvent(
-      new CustomEvent<{ sheetId: string; values: Readonly<Record<string, AttributeValue>> }>("update-attributes", {
+      new CustomEvent<{ sheetId: string; values: Readonly<Record<string, AttributeValue>> }>(
+        "update-attributes",
+        {
         bubbles: true,
         composed: true,
         detail: { sheetId, values },
-      }),
+        },
+      ),
     );
     this.onUpdateAttributeValues?.(sheetId, values);
+  }
+
+  private emitApplyStatusEffect(
+    sheetId: string,
+    effect: Omit<StatusEffect, "id" | "appliedUtc">,
+  ): void {
+    this.dispatchEvent(
+      new CustomEvent<{ sheetId: string; effect: Omit<StatusEffect, "id" | "appliedUtc"> }>(
+        "apply-status-effect",
+        {
+          bubbles: true,
+          composed: true,
+          detail: { sheetId, effect },
+        },
+      ),
+    );
+    this.onApplyStatusEffect?.(sheetId, effect);
+  }
+
+  private emitRemoveStatusEffect(sheetId: string, effectId: string): void {
+    this.dispatchEvent(
+      new CustomEvent<{ sheetId: string; effectId: string }>("remove-status-effect", {
+        bubbles: true,
+        composed: true,
+        detail: { sheetId, effectId },
+      }),
+    );
+    this.onRemoveStatusEffect?.(sheetId, effectId);
   }
 
   // ── Debounced inputs ────────────────────────────────────────────────────────
@@ -430,7 +505,7 @@ export class DndmCharacterSheet extends GameElement {
     // this text, and updated() pushes the identical state post-render as its
     // acknowledgement. Echoing mid-keystroke invites clobber races.
     if (!skipPush) {
-      this.pushNotesState(sheetId);
+      this.pushSheetState(sheetId);
     }
   }
 
@@ -475,126 +550,223 @@ export class DndmCharacterSheet extends GameElement {
     this.applyNotesEdit(sheetId, value);
   }
 
-  // ── Connected notes popout window ─────────────────────────────────────────
+  // ── Connected whole-sheet popout window ───────────────────────────────────
   private resolveNotesValue(sheet: CharacterSheet): string {
     if (sheet.id === this.selectedSheetId && this.draftNotes !== null) {
       return this.draftNotes;
     }
-    if (this.notesModalOpen && sheet.id === this.notesModalSheetId && this.modalDraftNotes !== null) {
+    if (
+      this.notesModalOpen &&
+      sheet.id === this.notesModalSheetId &&
+      this.modalDraftNotes !== null
+    ) {
       return this.modalDraftNotes;
     }
     return sheet.notes || "";
   }
 
-  private pushNotesState(sheetId: string): void {
-    if (!this.notesChannel) return;
-    const popout = this.notesPopouts.get(sheetId);
+  private pushSheetState(sheetId: string): void {
+    if (this.isSheetPopout) return;
+    if (!this.sheetChannel) return;
+    const popout = this.sheetPopouts.get(sheetId);
     if (!popout) return;
     if (popout.closed) {
-      this.notesPopouts.delete(sheetId);
+      this.sheetPopouts.delete(sheetId);
       return;
     }
     const sheet = this.sheets[sheetId];
     if (!sheet) return;
-    const state = this.getEffectiveState();
-    const userId = this.currentUserId ?? (this.isDm ? (state.dmPlayerId ?? "") : "");
-    this.notesChannel.postMessage({
-      type: "notes-state",
+    // Overlay unsent drafts so popups track in-progress typing (debounced
+    // emits haven't reached props yet). Mirrors resolveNotesValue().
+    const isSelected = sheet.id === this.selectedSheetId;
+    // Summaries only — never ship full maps (tokens/images/fog) to popups.
+    const maps = this.maps.map((m) => (isFullMap(m) ? toMapSummary(m) : m));
+    const msg: SheetStateMessage = {
+      type: "sheet-state",
       sheetId: sheet.id,
-      sheetName: sheet.characterName,
+      sheet: {
+        ...sheet,
+        characterName: isSelected && this.draftName !== null ? this.draftName : sheet.characterName,
       notes: this.resolveNotesValue(sheet),
-      editable: mayEditSheet(state, userId, sheet),
-    });
+        values: isSelected && this.draftValues !== null ? this.draftValues : sheet.values,
+      },
+      attributeSchema: this.attributeSchema,
+      statusEffectTemplates: this.statusEffectTemplates,
+      settings: this.settings,
+      isDm: this.isDm,
+      currentUserId: this.currentUserId,
+      roster: this.roster,
+      dmPlayerId: this.dmPlayerId,
+      maps,
+      activeMapId: this.activeMapId,
+    };
+    this.sheetChannel.postMessage(msg);
   }
 
-  private handleNotesChannelMessage(msg: unknown): void {
+  private handleSheetChannelMessage(msg: unknown): void {
+    if (this.isSheetPopout) return;
     if (!msg || typeof msg !== "object") return;
-    const data = msg as { type?: string; sheetId?: string; notes?: string };
+    const data = msg as SheetEditMessage | SheetJoinMessage | SheetLeaveMessage;
     if (typeof data.sheetId !== "string") return;
-    if (data.type === "notes-edit" && typeof data.notes === "string") {
+    if (data.type === "sheet-join") {
+      this.pushSheetState(data.sheetId);
+      return;
+    }
+    if (data.type === "sheet-leave") {
+      this.sheetPopouts.delete(data.sheetId);
+      return;
+    }
+    if (data.type !== "sheet-edit") return;
       const sheet = this.sheets[data.sheetId];
       if (!sheet) return;
       const state = this.getEffectiveState();
       const userId = this.currentUserId ?? (this.isDm ? (state.dmPlayerId ?? "") : "");
       if (!mayEditSheet(state, userId, sheet)) return;
-      this.applyNotesEdit(data.sheetId, data.notes, true);
-    } else if (data.type === "notes-leave") {
-      this.notesPopouts.delete(data.sheetId);
+    // HP/AC/notes are private fields: editing them additionally requires
+    // the viewer gate, matching the main-window section rendering.
+    const canViewPrivate = mayViewSheetNotesAndHp(state, userId, sheet);
+    const intent = data.intent;
+    switch (intent.kind) {
+      case "updateSheet":
+        if (intent.patch.notes !== undefined && !canViewPrivate) return;
+        this.emitUpdateSheet(data.sheetId, intent.patch);
+        break;
+      case "assignSheetOwner":
+        this.emitAssignSheetOwner(data.sheetId, intent.ownerUserId);
+        break;
+      case "setSheetHp":
+        if (!canViewPrivate) return;
+        this.forwardSetHp(data.sheetId, intent.hp);
+        break;
+      case "setSheetMaxHp":
+        if (!canViewPrivate) return;
+        this.forwardSetMaxHp(data.sheetId, intent.maxHp);
+        break;
+      case "setSheetAc":
+        if (!canViewPrivate) return;
+        this.forwardSetAc(data.sheetId, intent.ac);
+        break;
+      case "updateAttributeValues":
+        this.emitUpdateAttributeValues(data.sheetId, intent.values);
+        break;
+      case "applyStatusEffect":
+        this.emitApplyStatusEffect(data.sheetId, intent.effect);
+        break;
+      case "removeStatusEffect":
+        this.emitRemoveStatusEffect(data.sheetId, intent.effectId);
+        break;
+      default:
+        // Unknown or disallowed intent (delete/duplicate/place-token are
+        // main-window-only) — ignore.
+        break;
     }
   }
 
-  private openNotesPopout(sheet: CharacterSheet, editable: boolean): void {
+  /** Popup-originated vital forwards: numbers are re-clamped against live state. */
+  private forwardSetHp(sheetId: string, hp: number | null): void {
+    if (hp === null) {
+      this.dispatchEvent(
+        new CustomEvent<{ sheetId: string; hp: number | null }>("set-sheet-hp", {
+          bubbles: true,
+          composed: true,
+          detail: { sheetId, hp },
+        }),
+      );
+      this.onSetSheetHp?.(sheetId, hp);
+      return;
+    }
+    const sheet = this.sheets[sheetId];
+    if (sheet) this.setHpAbsolute(sheet, hp);
+  }
+
+  private forwardSetMaxHp(sheetId: string, maxHp: number | null): void {
+    if (maxHp === null) {
+      this.dispatchEvent(
+        new CustomEvent<{ sheetId: string; maxHp: number | null }>("set-sheet-max-hp", {
+          bubbles: true,
+          composed: true,
+          detail: { sheetId, maxHp },
+        }),
+      );
+      this.onSetSheetMaxHp?.(sheetId, maxHp);
+      return;
+    }
+    const sheet = this.sheets[sheetId];
+    if (sheet) this.setMaxHpAbsolute(sheet, maxHp);
+  }
+
+  private forwardSetAc(sheetId: string, ac: number | null): void {
+    if (ac === null) {
+      this.dispatchEvent(
+        new CustomEvent<{ sheetId: string; ac: number | null }>("set-sheet-ac", {
+          bubbles: true,
+          composed: true,
+          detail: { sheetId, ac },
+        }),
+      );
+      this.onSetSheetAc?.(sheetId, ac);
+      return;
+    }
+    const sheet = this.sheets[sheetId];
+    if (sheet) this.setAcAbsolute(sheet, ac);
+  }
+
+  private openSheetPopout(sheet: CharacterSheet): void {
     // One window per sheet: re-clicking focuses the existing window instead
     // of opening a duplicate. Other sheets' windows are left untouched so
     // multiple character sheets can be edited concurrently.
-    const existing = this.notesPopouts.get(sheet.id);
+    const existing = this.sheetPopouts.get(sheet.id);
     if (existing && !existing.closed) {
       try {
         existing.focus();
       } catch {
         // Focus is best-effort — the window is still usable without it.
       }
-      this.pushNotesState(sheet.id);
+      this.pushSheetState(sheet.id);
       return;
     }
     if (existing) {
-      this.notesPopouts.delete(sheet.id);
+      this.sheetPopouts.delete(sheet.id);
     }
-    const notes = this.resolveNotesValue(sheet);
+    // The popup boots the same bundle at ?view=sheet&sheetId=… and syncs
+    // over BroadcastChannel — no second app boot, no extra ticket.
     let popout: Window | null;
     try {
-      popout = window.open("", "_blank", "width=980,height=680");
+      popout = window.open(buildSheetPopoutUrl(sheet.id), "_blank", "width=1100,height=800");
     } catch {
       popout = null;
     }
     if (!popout) {
-      console.warn("[dndm-character-sheet] notes popout was blocked by the browser");
-      return;
-    }
-    try {
-      popout.document.open();
-      popout.document.write(
-        buildNotesPopoutHtml({
-          sheetId: sheet.id,
-          sheetName: sheet.characterName,
-          notes,
-          editable,
-        }),
+      console.warn("[dndm-character-sheet] sheet popout was blocked by the browser");
+      toastService.warn(
+        "Pop-up blocked — allow pop-ups to open the character sheet in a new window.",
       );
-      popout.document.close();
-    } catch {
-      console.warn("[dndm-character-sheet] failed to initialize notes popout document");
-      try {
-        popout.close();
-      } catch {
-        // Popup already gone — nothing to clean up.
-      }
       return;
     }
-    this.notesPopouts.set(sheet.id, popout);
-    this.pushNotesState(sheet.id);
-    this.ensureNotesPopoutPoll();
+    this.sheetPopouts.set(sheet.id, popout);
+    this.pushSheetState(sheet.id);
+    this.ensureSheetPopoutPoll();
   }
 
-  private ensureNotesPopoutPoll(): void {
-    if (this.notesPopoutPoll !== null) return;
-    this.notesPopoutPoll = window.setInterval(() => {
-      for (const [sheetId, popout] of [...this.notesPopouts]) {
+  private ensureSheetPopoutPoll(): void {
+    if (this.sheetPopoutPoll !== null) return;
+    this.sheetPopoutPoll = window.setInterval(() => {
+      for (const [sheetId, popout] of [...this.sheetPopouts]) {
         if (popout.closed) {
-          this.notesPopouts.delete(sheetId);
+          this.sheetPopouts.delete(sheetId);
         }
       }
-      if (this.notesPopouts.size === 0 && this.notesPopoutPoll !== null) {
-        window.clearInterval(this.notesPopoutPoll);
-        this.notesPopoutPoll = null;
+      if (this.sheetPopouts.size === 0 && this.sheetPopoutPoll !== null) {
+        window.clearInterval(this.sheetPopoutPoll);
+        this.sheetPopoutPoll = null;
       }
     }, 500);
   }
 
-  private closeNotesPopoutFor(sheetId: string, notify: boolean): void {
-    const old = this.notesPopouts.get(sheetId);
+  private closeSheetPopoutFor(sheetId: string, notify: boolean): void {
+    const old = this.sheetPopouts.get(sheetId);
     if (!old) return;
-    this.notesPopouts.delete(sheetId);
+    this.sheetPopouts.delete(sheetId);
     if (!old.closed) {
       try {
         old.close();
@@ -602,26 +774,26 @@ export class DndmCharacterSheet extends GameElement {
         // Popup already gone — nothing to clean up.
       }
     }
-    if (notify && this.notesChannel) {
+    if (notify && this.sheetChannel) {
       try {
-        this.notesChannel.postMessage({ type: "notes-close", sheetId });
+        this.sheetChannel.postMessage({ type: "sheet-close", sheetId });
       } catch {
         // Channel already torn down — nothing to notify.
       }
     }
-    if (this.notesPopouts.size === 0 && this.notesPopoutPoll !== null) {
-      window.clearInterval(this.notesPopoutPoll);
-      this.notesPopoutPoll = null;
+    if (this.sheetPopouts.size === 0 && this.sheetPopoutPoll !== null) {
+      window.clearInterval(this.sheetPopoutPoll);
+      this.sheetPopoutPoll = null;
     }
   }
 
-  private closeAllNotesPopouts(notify: boolean): void {
-    if (this.notesPopoutPoll !== null) {
-      window.clearInterval(this.notesPopoutPoll);
-      this.notesPopoutPoll = null;
+  private closeAllSheetPopouts(notify: boolean): void {
+    if (this.sheetPopoutPoll !== null) {
+      window.clearInterval(this.sheetPopoutPoll);
+      this.sheetPopoutPoll = null;
     }
-    const entries = [...this.notesPopouts];
-    this.notesPopouts.clear();
+    const entries = [...this.sheetPopouts];
+    this.sheetPopouts.clear();
     for (const [sheetId, old] of entries) {
       if (!old.closed) {
         try {
@@ -630,9 +802,9 @@ export class DndmCharacterSheet extends GameElement {
           // Popup already gone — nothing to clean up.
         }
       }
-      if (notify && this.notesChannel) {
+      if (notify && this.sheetChannel) {
         try {
-          this.notesChannel.postMessage({ type: "notes-close", sheetId });
+          this.sheetChannel.postMessage({ type: "sheet-close", sheetId });
         } catch {
           // Channel already torn down — nothing to notify.
         }
@@ -800,17 +972,14 @@ export class DndmCharacterSheet extends GameElement {
           : pop.rowType === "Score"
             ? 10
             : 0;
-      const draftNum =
-        this.popoverDraft !== null ? parseInt(this.popoverDraft, 10) : base;
+      const draftNum = this.popoverDraft !== null ? parseInt(this.popoverDraft, 10) : base;
       const next = (isNaN(draftNum) ? base : draftNum) + delta;
       this.popoverDraft = String(next);
       const row: AttributeRow = {
         name: pop.rowName,
         type: pop.rowType,
         default:
-          pop.rowType === "Score"
-            ? { kind: "Score", value: 10 }
-            : { kind: "Modifier", value: 0 },
+          pop.rowType === "Score" ? { kind: "Score", value: 10 } : { kind: "Modifier", value: 0 },
       };
       this.onAttributeInput(sheet, row, {
         kind: pop.rowType,
@@ -818,8 +987,7 @@ export class DndmCharacterSheet extends GameElement {
       } as AttributeValue);
     } else if (pop.kind === "ac") {
       const base = sheet.armorClass ?? 10;
-      const draftNum =
-        this.popoverDraft !== null ? parseInt(this.popoverDraft, 10) : base;
+      const draftNum = this.popoverDraft !== null ? parseInt(this.popoverDraft, 10) : base;
       const next = Math.max(0, (isNaN(draftNum) ? base : draftNum) + delta);
       this.popoverDraft = String(next);
       this.setAcAbsolute(sheet, next);
@@ -877,9 +1045,7 @@ export class DndmCharacterSheet extends GameElement {
     const userId = this.currentUserId ?? (this.isDm ? (state.dmPlayerId ?? "") : "");
 
     // Visible sheets per permission policy
-    const visibleSheets = Object.values(this.sheets).filter((s) =>
-      mayViewSheet(state, userId, s),
-    );
+    const visibleSheets = Object.values(this.sheets).filter((s) => mayViewSheet(state, userId, s));
 
     // Filter by scope and search
     const filteredSheets = visibleSheets.filter((s) => {
@@ -898,11 +1064,33 @@ export class DndmCharacterSheet extends GameElement {
     const canViewActive = activeSheet ? mayViewSheet(state, userId, activeSheet) : false;
     // The open sheet must stay a member of the roster list: a sheet filtered
     // out by scope or search is not shown open (the selection id is retained,
-    // so it reopens when the filter changes back).
+    // so it reopens when the filter changes back). Popouts are pinned to one
+    // sheet, so scope/search filtering is bypassed there.
+    const pool = this.isSheetPopout ? visibleSheets : filteredSheets;
     const selectedSheet =
-      canViewActive && activeSheet && filteredSheets.some((s) => s.id === activeSheet.id)
+      canViewActive && activeSheet && pool.some((s) => s.id === activeSheet.id)
         ? activeSheet
         : null;
+
+    const details = selectedSheet
+      ? this.renderSheetDetails(selectedSheet, state, userId)
+      : html`
+          <div
+            class="dndm-sheet-empty"
+            style="padding: 20px; text-align: center; color: var(--dndm-text-muted); font-size: 0.9rem;"
+          >
+            Select or create a character sheet to view details.
+          </div>
+        `;
+
+    // Popouts are a dedicated window, not a rail section: no collapsible
+    // panel chrome, no roster — the responsive grid panel plus overlays.
+    if (this.isSheetPopout) {
+      return html`
+        <div class="dndm-sheet-panel dndm-sheet-panel--popout">${details}</div>
+        ${this.renderOverlays(selectedSheet)} ${this.renderNumberPopover()}
+      `;
+    }
 
     return html`
       <dndm-collapsible-panel
@@ -915,6 +1103,10 @@ export class DndmCharacterSheet extends GameElement {
         }}
         .content=${html`
           <div class="dndm-sheet-panel">
+            ${
+              this.isSheetPopout
+                ? nothing
+                : html`
             <!-- Roster / Selector Header -->
         <div class="dndm-sheet-roster">
           <div class="dndm-sheet-roster-controls">
@@ -927,8 +1119,11 @@ export class DndmCharacterSheet extends GameElement {
             >
               ${this.scopeFilter === "map" ? "Map" : "All"}
             </button>
-            <div style="display: flex; align-items: center; gap: 4px; margin-left: auto;">
-              ${this.isDm || this.settings.playersCanCreateNPCs
+                        <div
+                          style="display: flex; align-items: center; gap: 4px; margin-left: auto;"
+                        >
+                          ${
+                this.isDm || this.settings.playersCanCreateNPCs
                 ? html`
                     <button
                       class="dndm-btn dndm-btn--primary"
@@ -939,8 +1134,10 @@ export class DndmCharacterSheet extends GameElement {
                       +
                     </button>
                   `
-                : nothing}
-              ${this.isDm
+                  : nothing
+              }
+                          ${
+                this.isDm
                 ? html`
                     <button
                       class="dndm-btn dndm-btn--subtle"
@@ -953,7 +1150,8 @@ export class DndmCharacterSheet extends GameElement {
                       Schema
                     </button>
                   `
-                : nothing}
+                  : nothing
+              }
             </div>
           </div>
           <div class="dndm-sheet-search-row">
@@ -987,20 +1185,21 @@ export class DndmCharacterSheet extends GameElement {
             })}
           </div>
         </div>
+                  `
+            }
 
         <!-- Selected Character Sheet Body -->
-        ${selectedSheet
-          ? this.renderSheetDetails(selectedSheet, state, userId)
-          : html`
-              <div style="padding: 20px; text-align: center; color: var(--dndm-text-muted); font-size: 0.9rem;">
-                Select or create a character sheet to view details.
-              </div>
-            `}
+            ${details}
           </div>
         `}
       ></dndm-collapsible-panel>
+      ${this.renderOverlays(selectedSheet)} ${this.renderNumberPopover()}
+    `;
+  }
 
-      <!-- Modals -->
+  /** Settings / schema / notes modals shared by the rail panel and popouts. */
+  private renderOverlays(selectedSheet: CharacterSheet | null): TemplateResult {
+    return html`
       <dndm-sheet-settings-modal
         .isOpen=${this.settingsModalOpen}
         .sheet=${selectedSheet}
@@ -1009,6 +1208,7 @@ export class DndmCharacterSheet extends GameElement {
         .maps=${this.maps}
         .isDm=${this.isDm}
         .activeMapId=${this.activeMapId}
+        .hideDestructiveActions=${this.isSheetPopout}
         @place-token=${(e: CustomEvent<{ sheetId: string }>) => {
           this.handlePlaceToken(e.detail.sheetId);
         }}
@@ -1090,7 +1290,9 @@ export class DndmCharacterSheet extends GameElement {
       ></dndm-schema-cascade-warning>
 
       ${(() => {
-        const modalSheet = this.notesModalSheetId ? (this.sheets[this.notesModalSheetId] ?? null) : null;
+        const modalSheet = this.notesModalSheetId
+          ? (this.sheets[this.notesModalSheetId] ?? null)
+          : null;
         if (!modalSheet) return nothing;
         const modalState = this.getEffectiveState();
         const modalUserId = this.currentUserId ?? (this.isDm ? (modalState.dmPlayerId ?? "") : "");
@@ -1129,8 +1331,6 @@ export class DndmCharacterSheet extends GameElement {
           ></dndm-notes-modal>
         `;
       })()}
-
-      ${this.renderNumberPopover()}
     `;
   }
 
@@ -1171,11 +1371,7 @@ export class DndmCharacterSheet extends GameElement {
       </svg>
     `;
 
-    const stepButton = (
-      dir: -1 | 1,
-      titlePrefix: string,
-      onStep: (delta: number) => void,
-    ) => html`
+    const stepButton = (dir: -1 | 1, titlePrefix: string, onStep: (delta: number) => void) => html`
       <button
         class="dndm-number-popover-step${dir === 1 ? " dndm-number-popover-step--up" : ""}"
         title=${dir === 1 ? `Increase ${titlePrefix}` : `Decrease ${titlePrefix}`}
@@ -1215,8 +1411,7 @@ export class DndmCharacterSheet extends GameElement {
       titlePrefix: string,
     ) => html`
       <div class="dndm-number-popover-hero">
-        ${stepButton(-1, titlePrefix, onStep)}
-        ${numberField(label, inputValue, onDraft, onCommit)}
+        ${stepButton(-1, titlePrefix, onStep)} ${numberField(label, inputValue, onDraft, onCommit)}
         ${stepButton(1, titlePrefix, onStep)}
       </div>
     `;
@@ -1234,8 +1429,7 @@ export class DndmCharacterSheet extends GameElement {
         <span class="dndm-number-popover-label">${label}</span>
         <div class="dndm-number-popover-stepper">
           ${stepButton(-1, titlePrefix, onStep)}
-          ${numberField(label, inputValue, onDraft, onCommit)}
-          ${stepButton(1, titlePrefix, onStep)}
+          ${numberField(label, inputValue, onDraft, onCommit)} ${stepButton(1, titlePrefix, onStep)}
         </div>
       </div>
     `;
@@ -1287,7 +1481,8 @@ export class DndmCharacterSheet extends GameElement {
       const hpInput = this.popoverHpDraft ?? String(sheet.hp ?? 0);
       const maxInput = this.popoverMaxHpDraft ?? (sheet.maxHp !== null ? String(sheet.maxHp) : "");
       const stepHp = (delta: number) => {
-        const draftNum = this.popoverHpDraft !== null ? parseInt(this.popoverHpDraft, 10) : (sheet.hp ?? 0);
+        const draftNum =
+          this.popoverHpDraft !== null ? parseInt(this.popoverHpDraft, 10) : (sheet.hp ?? 0);
         const baseNum = isNaN(draftNum) ? (sheet.hp ?? 0) : draftNum;
         let next = Math.max(0, baseNum + delta);
         const effectiveMax = resolveEffectiveMaxHp(sheet);
@@ -1377,25 +1572,28 @@ export class DndmCharacterSheet extends GameElement {
 
     const effectiveMaxHp = resolveEffectiveMaxHp(sheet);
     const currentHp = sheet.hp ?? 0;
-    const hpPercent = effectiveMaxHp !== null && effectiveMaxHp > 0
+    const hpPercent =
+      effectiveMaxHp !== null && effectiveMaxHp > 0
       ? Math.max(0, Math.min(100, Math.round((currentHp / effectiveMaxHp) * 100)))
       : 0;
 
-    const isBloodied = effectiveMaxHp !== null && currentHp > 0 && currentHp <= Math.floor(effectiveMaxHp / 2);
+    const isBloodied =
+      effectiveMaxHp !== null && currentHp > 0 && currentHp <= Math.floor(effectiveMaxHp / 2);
     const isDead = effectiveMaxHp !== null && currentHp === 0;
 
     const abilityRows = this.attributeSchema.rows.filter(isAbilityRow);
     const otherRows = this.attributeSchema.rows.filter((r) => !isAbilityRow(r));
 
     const nameValue = this.draftName !== null ? this.draftName : sheet.characterName;
-    const notesValue = this.draftNotes !== null ? this.draftNotes : (sheet.notes || "");
+    const notesValue = this.draftNotes !== null ? this.draftNotes : sheet.notes || "";
     const isGlobal = sheet.scopedMapId === null;
     const sheetColor = sheet.color || "#4a90e2";
 
-    return html`
+    const titleBar = html`
       <!-- Title Bar: color indicator + name on its own line -->
       <div class="dndm-sheet-header-title-bar">
-        ${editable
+        ${
+          editable
           ? html`
               <label
                 class="dndm-sheet-color-dot dndm-sheet-color-dot--editable"
@@ -1419,7 +1617,8 @@ export class DndmCharacterSheet extends GameElement {
                 title="Sheet color"
                 aria-label="Sheet color"
               ></span>
-            `}
+              `
+        }
         <input
           type="text"
           class="dndm-sheet-name-input"
@@ -1429,7 +1628,9 @@ export class DndmCharacterSheet extends GameElement {
           @input=${(e: Event) => this.onNameInput(sheet.id, e)}
         />
       </div>
+    `;
 
+    const headerActions = html`
       <!-- Header action row: settings, add token, copy, scope toggle -->
       <div class="dndm-sheet-header-actions">
         <button
@@ -1443,12 +1644,18 @@ export class DndmCharacterSheet extends GameElement {
         >
           ${gearIcon()}
         </button>
+        ${
+          this.isSheetPopout
+            ? nothing
+            : html`
         <button
           class="dndm-btn dndm-btn--subtle dndm-btn--icon"
           type="button"
-          title=${this.activeMapId
+                  title=${
+                  this.activeMapId
             ? "Place a token for this character on the active map"
-            : "Open a map to place a token for this character"}
+                    : "Open a map to place a token for this character"
+                }
           aria-label="Place token"
           ?disabled=${!this.activeMapId}
           @click=${() => this.handlePlaceToken(sheet.id)}
@@ -1464,14 +1671,34 @@ export class DndmCharacterSheet extends GameElement {
         >
           ${copyIcon()}
         </button>
-        ${this.isDm
+              `
+        }
+        ${
+          this.isSheetPopout
+            ? nothing
+            : html`
+                <button
+                  class="dndm-btn dndm-btn--subtle dndm-btn--icon"
+                  type="button"
+                  title="Open this sheet in a new window"
+                  aria-label="Open sheet in new window"
+                  @click=${() => this.openSheetPopout(sheet)}
+                >
+                  ${popoutIcon()}
+                </button>
+              `
+        }
+        ${
+          this.isDm
           ? html`
               <button
                 class="dndm-btn dndm-btn--subtle dndm-sheet-scope-toggle"
                 type="button"
-                title=${isGlobal
+                  title=${
+                  isGlobal
                   ? "Global sheet — listed on every map. Click to restrict to the active map."
-                  : "Map-only sheet — listed on its map's roster. Click to share across all maps."}
+                    : "Map-only sheet — listed on its map's roster. Click to share across all maps."
+                }
                 aria-label=${isGlobal ? "Switch sheet to map-only" : "Switch sheet to global"}
                 aria-pressed=${isGlobal ? "false" : "true"}
                 ?disabled=${isGlobal && !this.activeMapId}
@@ -1480,26 +1707,36 @@ export class DndmCharacterSheet extends GameElement {
                 ${isGlobal ? "Global" : "Map"}
               </button>
             `
-          : nothing}
+            : nothing
+        }
       </div>
+    `;
 
-      ${sheet.representsUserId
+    const provenance = html`
+      ${
+        sheet.representsUserId
         ? html`
             <div
               class="dndm-sheet-provenance"
               style="font-size: 0.78rem; color: var(--dndm-text-muted); font-style: italic; margin: -2px 0 6px 4px;"
             >
-              (originally played by ${this.roster.find((p) => p.id === sheet.representsUserId)?.name ?? sheet.representsUserId})
+                (originally played by
+                ${this.roster.find((p) => p.id === sheet.representsUserId)?.name ?? sheet.representsUserId})
             </div>
           `
-        : nothing}
+          : nothing
+      }
+    `;
 
+    const vitals = html`
       <!-- Vitals (HP & AC) -->
-      ${canViewNotesAndHp
+      ${
+        canViewNotesAndHp
         ? html`
             <div class="dndm-sheet-vitals">
               <!-- HP Bar (click to edit HP / max HP) -->
-              ${editable
+                ${
+                editable
                 ? html`
                     <button
                       class="dndm-sheet-hp-bar dndm-sheet-hp-bar--clickable"
@@ -1513,9 +1750,11 @@ export class DndmCharacterSheet extends GameElement {
                         style="width: ${hpPercent}%;"
                       ></div>
                       <div class="dndm-sheet-hp-text">
-                        ${sheet.hp != null && effectiveMaxHp != null
+                          ${
+                          sheet.hp != null && effectiveMaxHp != null
                           ? `${currentHp} / ${effectiveMaxHp} HP`
-                          : "HP Not Set"}
+                            : "HP Not Set"
+                        }
                         ${isDead ? " (Dead)" : isBloodied ? " (Bloodied)" : ""}
                       </div>
                     </button>
@@ -1527,20 +1766,24 @@ export class DndmCharacterSheet extends GameElement {
                         style="width: ${hpPercent}%;"
                       ></div>
                       <div class="dndm-sheet-hp-text">
-                        ${sheet.hp != null && effectiveMaxHp != null
+                          ${
+                          sheet.hp != null && effectiveMaxHp != null
                           ? `${currentHp} / ${effectiveMaxHp} HP`
-                          : "HP Not Set"}
+                            : "HP Not Set"
+                        }
                         ${isDead ? " (Dead)" : isBloodied ? " (Bloodied)" : ""}
                       </div>
                     </div>
-                  `}
+                    `
+              }
 
               <!-- Controls Row -->
               <div class="dndm-sheet-vitals-row">
                 <!-- HP Value -->
                 <div class="dndm-sheet-stat-box">
                   <span style="font-size: 0.75rem; font-weight: bold;">HP:</span>
-                  ${editable
+                    ${
+                    editable
                     ? html`
                         <button
                           class="dndm-sheet-value-btn"
@@ -1552,13 +1795,17 @@ export class DndmCharacterSheet extends GameElement {
                           ${currentHp} / ${effectiveMaxHp ?? "—"}
                         </button>
                       `
-                    : html`<span style="font-size: 0.85rem;">${currentHp} / ${effectiveMaxHp ?? "—"}</span>`}
+                      : html`<span style="font-size: 0.85rem;"
+                          >${currentHp} / ${effectiveMaxHp ?? "—"}</span
+                        >`
+                  }
                 </div>
 
                 <!-- AC Value -->
                 <div class="dndm-sheet-stat-box">
                   <span style="font-size: 0.75rem; font-weight: bold;">AC:</span>
-                  ${editable
+                    ${
+                    editable
                     ? html`
                         <button
                           class="dndm-sheet-value-btn dndm-sheet-value-btn--ac"
@@ -1572,15 +1819,20 @@ export class DndmCharacterSheet extends GameElement {
                       `
                     : html`<span style="font-size: 1rem; font-weight: bold; margin-right: 4px;">
                         ${sheet.armorClass ?? 10}
-                      </span>`}
+                        </span>`
+                  }
                 </div>
               </div>
             </div>
           `
-        : nothing}
+          : nothing
+      }
+    `;
 
+    const scores = html`
       <!-- Ability Scores Grid -->
-      ${abilityRows.length > 0
+      ${
+        abilityRows.length > 0
         ? html`
             <div class="dndm-sheet-scores-grid">
               ${abilityRows.map((row) => {
@@ -1588,41 +1840,57 @@ export class DndmCharacterSheet extends GameElement {
                 const attrVal = values[row.name] ?? row.default;
                 const contribution = resolveAttributeContribution(sheet, row.name, attrVal);
                 const rawNum = attrVal.kind === "Score" ? attrVal.value : 10;
-                const effectiveNum = contribution.effectiveValue.kind === "Score" ? contribution.effectiveValue.value : 10;
+                const effectiveNum =
+                  contribution.effectiveValue.kind === "Score"
+                    ? contribution.effectiveValue.value
+                    : 10;
                 const mod = contribution.effectiveModifier;
                 const modStr = mod >= 0 ? `+${mod}` : `${mod}`;
 
                 return html`
                   <div class="dndm-score-card">
-                    <span class="dndm-score-label" title=${row.name}>${shortAbilityName(row.name)}</span>
-                    ${editable
+                    <span class="dndm-score-label" title=${row.name}
+                      >${shortAbilityName(row.name)}</span
+                    >
+                    ${
+                      editable
                       ? html`
                           <button
                             class="dndm-sheet-value-btn dndm-sheet-value-btn--score"
                             title="Edit ${row.name}"
                             @click=${(e: Event) => {
-                              this.openNumberPopover("attribute", sheet.id, e.currentTarget as HTMLElement, {
+                              this.openNumberPopover(
+                                "attribute",
+                                sheet.id,
+                                e.currentTarget as HTMLElement,
+                                {
                                 rowName: row.name,
                                 rowType: "Score",
-                              });
+                                },
+                              );
                             }}
                           >
                             ${rawNum}
                           </button>
                         `
-                      : html`<span class="dndm-score-value">${effectiveNum}</span>`}
+                        : html`<span class="dndm-score-value">${effectiveNum}</span>`
+                    }
                     <span class="dndm-score-modifier">${modStr}</span>
                   </div>
                 `;
               })}
             </div>
           `
-        : nothing}
+          : nothing
+      }
+    `;
 
+    const attrsSection = html`
       <!-- Other Attributes / Skills -->
-      ${otherRows.length > 0
+      ${
+        otherRows.length > 0
         ? html`
-            <div>
+            <div class="dndm-sheet-attrs-section">
               <span class="dndm-sheet-section-title">Attributes &amp; Skills</span>
               <div class="dndm-sheet-attrs-table">
                 ${otherRows.map((row) => {
@@ -1639,43 +1907,29 @@ export class DndmCharacterSheet extends GameElement {
               </div>
             </div>
           `
-        : nothing}
+          : nothing
+      }
+    `;
 
+    const statusEffects = html`
       <!-- Status Effects Section -->
       <dndm-status-effects
         .sheet=${sheet}
         .editable=${editable}
         .customTemplates=${Object.values(this.statusEffectTemplates)}
         @apply-effect=${(e: CustomEvent<{ effect: Omit<StatusEffect, "id" | "appliedUtc"> }>) => {
-          this.dispatchEvent(
-            new CustomEvent<{ sheetId: string; effect: Omit<StatusEffect, "id" | "appliedUtc"> }>(
-              "apply-status-effect",
-              {
-                bubbles: true,
-                composed: true,
-                detail: { sheetId: sheet.id, effect: e.detail.effect },
-              },
-            ),
-          );
-          this.onApplyStatusEffect?.(sheet.id, e.detail.effect);
+          this.emitApplyStatusEffect(sheet.id, e.detail.effect);
         }}
         @remove-effect=${(e: CustomEvent<{ effectId: string }>) => {
-          this.dispatchEvent(
-            new CustomEvent<{ sheetId: string; effectId: string }>(
-              "remove-status-effect",
-              {
-                bubbles: true,
-                composed: true,
-                detail: { sheetId: sheet.id, effectId: e.detail.effectId },
-              },
-            ),
-          );
-          this.onRemoveStatusEffect?.(sheet.id, e.detail.effectId);
+          this.emitRemoveStatusEffect(sheet.id, e.detail.effectId);
         }}
       ></dndm-status-effects>
+    `;
 
+    const notesSection = html`
       <!-- Notes Section -->
-      ${canViewNotesAndHp
+      ${
+        canViewNotesAndHp
         ? (() => {
             const effectiveNotesTab: NotesTab = editable ? this.notesTab : "preview";
             const showingEdit = effectiveNotesTab === "edit";
@@ -1690,19 +1944,23 @@ export class DndmCharacterSheet extends GameElement {
                       type="button"
                       aria-pressed=${showingEdit ? "true" : "false"}
                       ?disabled=${!editable}
-                      title=${editable
+                        title=${
+                        editable
                         ? showingEdit
                           ? "Switch to markdown preview"
                           : "Switch to markdown editor"
-                        : "Read-only — preview only"}
+                          : "Read-only — preview only"
+                      }
                       @click=${() => {
                         if (!editable) return;
                         this.notesTab = showingEdit ? "preview" : "edit";
                       }}
                     >
-                      ${showingEdit
+                        ${
+                        showingEdit
                         ? html`${eyeIcon(true)}<span>Preview</span>`
-                        : html`${penIcon()}<span>Edit</span>`}
+                          : html`${penIcon()}<span>Edit</span>`
+                      }
                     </button>
                     <button
                       class="dndm-btn dndm-btn--subtle dndm-btn--icon"
@@ -1714,20 +1972,11 @@ export class DndmCharacterSheet extends GameElement {
                     >
                       ${expandIcon()}
                     </button>
-                    <button
-                      class="dndm-btn dndm-btn--subtle dndm-btn--icon"
-                      style="padding: 1px 6px;"
-                      type="button"
-                      title="Open notes in a new window"
-                      aria-label="Open notes in new window"
-                      @click=${() => this.openNotesPopout(sheet, editable)}
-                    >
-                      ${popoutIcon()}
-                    </button>
                   </div>
                 </div>
 
-                ${showingEdit
+                  ${
+                  showingEdit
                   ? html`
                       <textarea
                         class="dndm-sheet-notes-textarea"
@@ -1743,11 +1992,44 @@ export class DndmCharacterSheet extends GameElement {
                         class="dndm-sheet-notes-preview"
                         .innerHTML=${toSafeHtml(notesValue)}
                       ></div>
-                    `}
+                      `
+                }
               </div>
             `;
           })()
-        : nothing}
+          : nothing
+      }
+    `;
+
+    const hasVitals = canViewNotesAndHp;
+    const hasScores = abilityRows.length > 0;
+    const hasAttrs = otherRows.length > 0;
+
+    // Popout windows fill the viewport height: paired sections share a row
+    // and the notes editor absorbs the remaining space (sheet-popout.css).
+    if (this.isSheetPopout) {
+      return html`
+        <div class="dndm-sheet-popout-head">${titleBar}${headerActions}</div>
+        ${provenance}
+        ${hasVitals && hasScores
+          ? html`<div class="dndm-sheet-popout-cols">${vitals}${scores}</div>`
+          : html`${vitals}${scores}`}
+        ${hasAttrs
+          ? html`<div class="dndm-sheet-popout-cols">${attrsSection}${statusEffects}</div>`
+          : statusEffects}
+        ${notesSection}
+      `;
+    }
+
+    return html`
+      ${titleBar}
+      ${headerActions}
+      ${provenance}
+      ${vitals}
+      ${scores}
+      ${attrsSection}
+      ${statusEffects}
+      ${notesSection}
     `;
   }
 
