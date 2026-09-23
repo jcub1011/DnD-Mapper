@@ -89,6 +89,16 @@
   gap: var(--dndm-spacing-xs);
 }
 
+.dndm-sheet-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--dndm-spacing-xs);
+}
+
+.dndm-sheet-scope-toggle {
+  margin-left: auto;
+}
+
 .dndm-sheet-name-input {
   width: 100%;
   font-size: 1.1rem;
@@ -113,6 +123,40 @@
   border: 1px solid var(--dndm-color-border);
   cursor: pointer;
   flex-shrink: 0;
+}
+
+.dndm-sheet-header-title-bar .dndm-sheet-color-dot {
+  width: 20px;
+  height: 20px;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.dndm-sheet-color-dot--editable:hover {
+  border-color: var(--dndm-color-accent);
+}
+
+.dndm-sheet-color-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  padding: 0;
+  border: none;
+}
+
+.dndm-sheet-color-dot-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .dndm-sheet-vitals {

@@ -430,7 +430,7 @@ describe("<dndm-character-sheet>", () => {
     expect(el.querySelector(".dndm-sheet-name-input")).not.toBeNull();
   });
 
-  it("keeps the side rail title bar minimal; owner + actions live in the settings modal", async () => {
+  it("shows header actions in the side rail; owner assignment lives in the settings modal", async () => {
     const sheet1 = makeSheet("sheet-1", "Thorin", null);
     const onPlaceToken = vi.fn();
     const onDuplicateSheet = vi.fn();
@@ -452,15 +452,24 @@ describe("<dndm-character-sheet>", () => {
     document.body.appendChild(el);
     await el.updateComplete;
 
-    // Side rail title bar: gear + name only — no owner dropdown, no action buttons.
+    // Side rail title bar: color + name only — no owner dropdown.
     expect(el.querySelector('select[title="Assign Owner"]')).toBeNull();
     const titleBar = el.querySelector(".dndm-sheet-header-title-bar");
+    expect(titleBar?.querySelector(".dndm-sheet-name-input")).not.toBeNull();
+    expect(titleBar?.querySelector(".dndm-sheet-color-dot")).not.toBeNull();
     expect(titleBar?.textContent).not.toContain("Place token");
     expect(titleBar?.textContent).not.toContain("Copy");
 
-    // Open settings via the gear button.
-    const gear = titleBar?.querySelector(
-      'button[title="Sheet Settings"]',
+    // Header action row: settings, add token, copy, scope toggle (icon buttons).
+    const actionRow = el.querySelector(".dndm-sheet-header-actions");
+    expect(actionRow).not.toBeNull();
+    expect(actionRow?.querySelector('button[aria-label="Place token"]')).not.toBeNull();
+    expect(actionRow?.querySelector('button[aria-label="Duplicate sheet"]')).not.toBeNull();
+    expect(actionRow?.querySelector(".dndm-sheet-scope-toggle")).not.toBeNull();
+
+    // Open settings via the gear button in the action row.
+    const gear = actionRow?.querySelector(
+      'button[aria-label="Sheet Settings"]',
     ) as HTMLButtonElement;
     expect(gear).toBeDefined();
     gear.click();
@@ -502,6 +511,95 @@ describe("<dndm-character-sheet>", () => {
     copyBtn!.click();
     expect(onDuplicateSheet).toHaveBeenCalledTimes(1);
     expect(onDuplicateSheet).toHaveBeenCalledWith("sheet-1");
+  });
+
+  it("exposes color, header actions, and scope toggle in the side rail header", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin", null);
+    const onUpdateSheet = vi.fn();
+    const onPlaceToken = vi.fn();
+    const onDuplicateSheet = vi.fn();
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+    el.currentUserId = "dm-1";
+    el.activeMapId = "map-a";
+    el.onUpdateSheet = onUpdateSheet;
+    el.onPlaceToken = onPlaceToken;
+    el.onDuplicateSheet = onDuplicateSheet;
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    // Color picker is left of the name line for editors.
+    const colorInput = el.querySelector(
+      ".dndm-sheet-header-title-bar .dndm-sheet-color-input",
+    ) as HTMLInputElement;
+    expect(colorInput).not.toBeNull();
+    colorInput.value = "#ff0000";
+    colorInput.dispatchEvent(new Event("input"));
+    expect(onUpdateSheet).toHaveBeenCalledWith("sheet-1", { color: "#ff0000" });
+
+    // Header action row forwards place-token and duplicate (icon buttons).
+    const actionRow = el.querySelector(".dndm-sheet-header-actions");
+    expect(actionRow).not.toBeNull();
+    const addTokenBtn = actionRow!.querySelector(
+      'button[aria-label="Place token"]',
+    ) as HTMLButtonElement;
+    expect(addTokenBtn).not.toBeNull();
+    // Icon buttons carry an SVG, not a text label.
+    expect(addTokenBtn.querySelector("svg")).not.toBeNull();
+    addTokenBtn.click();
+    expect(onPlaceToken).toHaveBeenCalledWith("sheet-1");
+
+    const copyBtn = actionRow!.querySelector(
+      'button[aria-label="Duplicate sheet"]',
+    ) as HTMLButtonElement;
+    expect(copyBtn).not.toBeNull();
+    expect(copyBtn.querySelector("svg")).not.toBeNull();
+    copyBtn.click();
+    expect(onDuplicateSheet).toHaveBeenCalledWith("sheet-1");
+
+    // DM-only scope toggle: global sheet scopes to the active map.
+    const toggle = actionRow!.querySelector(
+      ".dndm-sheet-scope-toggle",
+    ) as HTMLButtonElement;
+    expect(toggle).not.toBeNull();
+    expect(toggle.textContent?.trim()).toBe("Global");
+    // Same compact padding as the settings icon button.
+    expect(toggle.classList.contains("dndm-btn--icon")).toBe(true);
+    toggle.click();
+    expect(onUpdateSheet).toHaveBeenCalledWith("sheet-1", { scopedMapId: "map-a" });
+
+    // Every header button explains itself via a tooltip.
+    const headerButtons = Array.from(
+      actionRow!.querySelectorAll<HTMLButtonElement>("button"),
+    );
+    expect(headerButtons.length).toBe(4);
+    for (const btn of headerButtons) {
+      expect(btn.getAttribute("title")?.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it("explains the disabled place-token button via its tooltip", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin", null);
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+    el.currentUserId = "dm-1";
+    el.activeMapId = null;
+    el.maps = [];
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    const addTokenBtn = el.querySelector(
+      '.dndm-sheet-header-actions button[aria-label="Place token"]',
+    ) as HTMLButtonElement;
+    expect(addTokenBtn).not.toBeNull();
+    expect(addTokenBtn.disabled).toBe(true);
+    expect(addTokenBtn.getAttribute("title")).toContain("Open a map");
   });
 
   it("calls onCreateSheet with the active map scope when the + button is clicked", async () => {

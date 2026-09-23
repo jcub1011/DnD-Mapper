@@ -647,3 +647,40 @@ export function chevronIcon(direction: "down" | "right"): TemplateResult {
       </svg>`;
 }
 
+export function tokenPlusIcon(): TemplateResult {
+  return html`<svg
+    viewBox="0 0 24 24"
+    width="16"
+    height="16"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+    style="display: block;"
+  >
+    <circle cx="10" cy="10" r="6.5" />
+    <line x1="18.5" y1="16" x2="18.5" y2="21" />
+    <line x1="16" y1="18.5" x2="21" y2="18.5" />
+  </svg>`;
+}
+
+export function copyIcon(): TemplateResult {
+  return html`<svg
+    viewBox="0 0 24 24"
+    width="16"
+    height="16"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+    style="display: block;"
+  >
+    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+  </svg>`;
+}
+

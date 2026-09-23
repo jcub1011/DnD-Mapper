@@ -27,7 +27,7 @@ import {
   mayViewSheetNotesAndHp,
 } from "../../game/rules";
 import { GameElement } from "../app/GameElement";
-import { gearIcon } from "../icons";
+import { copyIcon, gearIcon, tokenPlusIcon } from "../icons";
 import { toSafeHtml } from "./markdown";
 import "./dndm-status-effects";
 import "./dndm-collapsible-panel";
@@ -286,6 +286,19 @@ export class DndmCharacterSheet extends GameElement {
     if (this.selectedSheetId === sheetId) {
       this.handleSelectSheet(null);
     }
+  }
+
+  private handleScopeToggle(sheet: CharacterSheet): void {
+    const isGlobal = sheet.scopedMapId === null;
+    if (isGlobal && !this.activeMapId) return;
+    this.emitUpdateSheet(sheet.id, {
+      scopedMapId: isGlobal ? this.activeMapId : null,
+    });
+  }
+
+  private handleColorInput(sheetId: string, e: Event): void {
+    const value = (e.target as HTMLInputElement).value;
+    this.emitUpdateSheet(sheetId, { color: value });
   }
 
   private emitUpdateSheet(sheetId: string, patch: SheetPatch): void {
@@ -1046,29 +1059,98 @@ export class DndmCharacterSheet extends GameElement {
 
     const nameValue = this.draftName !== null ? this.draftName : sheet.characterName;
     const notesValue = this.draftNotes !== null ? this.draftNotes : (sheet.notes || "");
+    const isGlobal = sheet.scopedMapId === null;
+    const sheetColor = sheet.color || "#4a90e2";
 
     return html`
-      <!-- Title Bar -->
+      <!-- Title Bar: color indicator + name on its own line -->
       <div class="dndm-sheet-header-title-bar">
+        ${editable
+          ? html`
+              <label
+                class="dndm-sheet-color-dot dndm-sheet-color-dot--editable"
+                style="background-color: ${sheetColor};"
+                title="Sheet color"
+              >
+                <span class="dndm-sheet-color-dot-sr">Sheet color</span>
+                <input
+                  type="color"
+                  class="dndm-sheet-color-input"
+                  .value=${sheetColor}
+                  aria-label="Sheet color"
+                  @input=${(e: Event) => this.handleColorInput(sheet.id, e)}
+                />
+              </label>
+            `
+          : html`
+              <span
+                class="dndm-sheet-color-dot"
+                style="background-color: ${sheetColor};"
+                title="Sheet color"
+                aria-label="Sheet color"
+              ></span>
+            `}
+        <input
+          type="text"
+          class="dndm-sheet-name-input"
+          .value=${nameValue}
+          ?disabled=${!editable}
+          aria-label="Character name"
+          @input=${(e: Event) => this.onNameInput(sheet.id, e)}
+        />
+      </div>
+
+      <!-- Header action row: settings, add token, copy, scope toggle -->
+      <div class="dndm-sheet-header-actions">
         <button
           class="dndm-btn dndm-btn--subtle dndm-btn--icon"
           type="button"
-          title="Sheet Settings"
+          title="Sheet settings — rename, recolor, assign owner, change map scope, or delete"
           aria-label="Sheet Settings"
-          style="color: ${sheet.color || "#4a90e2"};"
           @click=${() => {
             this.settingsModalOpen = true;
           }}
         >
           ${gearIcon()}
         </button>
-        <input
-          type="text"
-          class="dndm-sheet-name-input"
-          .value=${nameValue}
-          ?disabled=${!editable}
-          @input=${(e: Event) => this.onNameInput(sheet.id, e)}
-        />
+        <button
+          class="dndm-btn dndm-btn--subtle dndm-btn--icon"
+          type="button"
+          title=${this.activeMapId
+            ? "Place a token for this character on the active map"
+            : "Open a map to place a token for this character"}
+          aria-label="Place token"
+          ?disabled=${!this.activeMapId}
+          @click=${() => this.handlePlaceToken(sheet.id)}
+        >
+          ${tokenPlusIcon()}
+        </button>
+        <button
+          class="dndm-btn dndm-btn--subtle dndm-btn--icon"
+          type="button"
+          title="Duplicate this sheet — creates an independent copy"
+          aria-label="Duplicate sheet"
+          @click=${() => this.handleDuplicateSheet(sheet.id)}
+        >
+          ${copyIcon()}
+        </button>
+        ${this.isDm
+          ? html`
+              <button
+                class="dndm-btn dndm-btn--subtle dndm-btn--icon dndm-sheet-scope-toggle"
+                type="button"
+                title=${isGlobal
+                  ? "Global sheet — listed on every map. Click to restrict to the active map."
+                  : "Map-only sheet — listed on its map's roster. Click to share across all maps."}
+                aria-label=${isGlobal ? "Switch sheet to map-only" : "Switch sheet to global"}
+                aria-pressed=${isGlobal ? "false" : "true"}
+                ?disabled=${isGlobal && !this.activeMapId}
+                @click=${() => this.handleScopeToggle(sheet)}
+              >
+                ${isGlobal ? "Global" : "Map"}
+              </button>
+            `
+          : nothing}
       </div>
 
       ${sheet.representsUserId
