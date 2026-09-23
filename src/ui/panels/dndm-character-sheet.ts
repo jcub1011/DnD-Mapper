@@ -1137,7 +1137,7 @@ export class DndmCharacterSheet extends GameElement {
         ${this.isDm
           ? html`
               <button
-                class="dndm-btn dndm-btn--subtle dndm-btn--icon dndm-sheet-scope-toggle"
+                class="dndm-btn dndm-btn--subtle dndm-sheet-scope-toggle"
                 type="button"
                 title=${isGlobal
                   ? "Global sheet — listed on every map. Click to restrict to the active map."

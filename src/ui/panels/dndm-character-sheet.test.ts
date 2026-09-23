@@ -566,8 +566,8 @@ describe("<dndm-character-sheet>", () => {
     ) as HTMLButtonElement;
     expect(toggle).not.toBeNull();
     expect(toggle.textContent?.trim()).toBe("Global");
-    // Same compact padding as the settings icon button.
-    expect(toggle.classList.contains("dndm-btn--icon")).toBe(true);
+    // Text button: uses text-button styling, not icon-button sizing.
+    expect(toggle.classList.contains("dndm-btn--icon")).toBe(false);
     toggle.click();
     expect(onUpdateSheet).toHaveBeenCalledWith("sheet-1", { scopedMapId: "map-a" });
 

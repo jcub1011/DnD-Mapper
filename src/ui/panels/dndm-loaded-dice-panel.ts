@@ -214,7 +214,6 @@ export class DndmLoadedDicePanel extends GameElement {
         <div class="dndm-loaded-rule-actions">
           <button
             class="dndm-btn dndm-btn--ghost dndm-btn--small"
-            style="padding: 1px 4px; font-size: 0.65rem;"
             type="button"
             title="Move up"
             ?disabled=${isFirst}
@@ -224,7 +223,6 @@ export class DndmLoadedDicePanel extends GameElement {
           </button>
           <button
             class="dndm-btn dndm-btn--ghost dndm-btn--small"
-            style="padding: 1px 4px; font-size: 0.65rem;"
             type="button"
             title="Move down"
             ?disabled=${isLast}
@@ -244,7 +242,6 @@ export class DndmLoadedDicePanel extends GameElement {
 
           <button
             class="dndm-btn dndm-btn--ghost dndm-btn--small"
-            style="padding: 2px 5px;"
             type="button"
             title="Edit rule"
             @click=${() => this.openEditModal(rule)}
@@ -254,7 +251,7 @@ export class DndmLoadedDicePanel extends GameElement {
 
           <button
             class="dndm-btn dndm-btn--ghost dndm-btn--small"
-            style="padding: 2px 5px; color: var(--dndm-color-danger);"
+            style="color: var(--dndm-color-danger);"
             type="button"
             title="Delete rule"
             @click=${() => this.onDeleteRule?.(rule.id)}

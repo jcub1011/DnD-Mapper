@@ -373,6 +373,33 @@ dndm-collapsible-panel .dndm-panel-header::after {
   font-size: 0.85rem;
 }
 
+/* ─── Side-rail buttons ─────────────────────────────────────────
+   Consistent sizing for text and icon buttons inside .dndm-rail.
+   Text buttons are 28px tall with 8px horizontal padding; icon
+   buttons use a 38x28 minimum so they can grow for longer labels. */
+.dndm-rail .dndm-btn {
+  min-height: 28px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 0.85rem;
+  line-height: 1;
+  box-sizing: border-box;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.dndm-rail .dndm-btn--icon {
+  min-width: 32px;
+  min-height: 28px;
+  width: 32px;
+  height: 28px;
+  padding: 0 4px;
+  font-size: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* ─── Inputs ──────────────────────────────────────────────────── */
 .dndm-input,
 .dndm-select,
