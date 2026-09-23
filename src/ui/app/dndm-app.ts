@@ -194,6 +194,13 @@ export class DndmApp extends GameElement {
   // never be offered a local auto-save restore.
   private bootLiveWasEmpty: boolean | null = null;
   @state() private autoRestoreCandidate: MatchState | null = null;
+  /**
+   * In-flight `requestMap` fetches for maps currently held as summaries.
+   * The live snapshot projects inactive maps to MapSummary (bandwidth cap),
+   * so the DM converges to full data by requesting each missing map once;
+   * entries clear when the full `map` patch arrives (see requestMissingMaps).
+   */
+  private readonly pendingMapFetches = new Set<string>();
   private displaySyncChannel?: BroadcastChannel;
   // MapScene instance the canvas callbacks are wired to. Phaser boots
   // asynchronously, so attach() can run before fx.map() exists — wiring is
@@ -256,6 +263,7 @@ export class DndmApp extends GameElement {
     window.removeEventListener("pointercancel", this.onWindowPointerUp);
     this.displaySyncChannel?.close();
     cancelAnimationFrame(this.rafId);
+    this.pendingMapFetches.clear();
     this.controller?.destroy();
     this.hostInputTracker?.destroy();
     void this.libraryService.detach();
@@ -273,6 +281,7 @@ export class DndmApp extends GameElement {
   /** Attach the controller main.ts built. Safe to call once. */
   attach(controller: GameController): void {
     void this.libraryService.attach();
+    this.pendingMapFetches.clear();
     this.controller = controller;
     this.match = controller.view.state;
     this.seenRollIds = new Set((this.match.rollLog ?? []).map((r) => r.id));
@@ -764,6 +773,7 @@ export class DndmApp extends GameElement {
 
     if (this.isDm) {
       this.libraryService.onStateChanged(state);
+      this.requestMissingMaps(state);
     }
 
     if (this.isDm && state.settings.loadedDiceEnabled) {
@@ -852,6 +862,45 @@ export class DndmApp extends GameElement {
   }
 
   /**
+   * DM-only background hydration: request full data for any map currently
+   * held as a MapSummary. The authority (server memory) is the sole complete
+   * holder during a live session; each `requestMap` resolves to a `map`
+   * patch that MatchView merges, after which the next auto-save sees full
+   * maps. One flight per map id; entries clear on arrival (or removal).
+   */
+  private requestMissingMaps(state: Readonly<MatchState>): void {
+    if (this.projectorMode) return;
+    const liveById = new Map(state.maps.map((m) => [m.id, m] as const));
+    for (const id of [...this.pendingMapFetches]) {
+      const cur = liveById.get(id);
+      if (!cur || isFullMap(cur)) this.pendingMapFetches.delete(id);
+    }
+    let requested = 0;
+    for (const m of state.maps) {
+      if (isFullMap(m) || this.pendingMapFetches.has(m.id)) continue;
+      if (requested >= 10) break;
+      this.pendingMapFetches.add(m.id);
+      this.send({ kind: "requestMap", mapId: m.id });
+      requested++;
+    }
+  }
+
+  /**
+   * Map selection always pairs `setActiveMap` with a `requestMap` when the
+   * target is currently a summary — switching alone only broadcasts the id,
+   * leaving the newly active map without tokens/images until fetched.
+   * Requesting an already-full map is harmless (authority re-sends it).
+   */
+  private selectMap(id: string): void {
+    this.send({ kind: "setActiveMap", mapId: id });
+    const target = this.match.maps.find((m) => m.id === id);
+    if (target && !isFullMap(target) && !this.pendingMapFetches.has(id)) {
+      this.pendingMapFetches.add(id);
+      this.send({ kind: "requestMap", mapId: id });
+    }
+  }
+
+  /**
    * Applies a loaded slot state to the live session: re-publishes its image
    * blobs, then streams the full campaign (header + maps) through the chunked
    * import protocol. Replaces the old beginImport-only flow, which staged an
@@ -872,11 +921,25 @@ export class DndmApp extends GameElement {
           }
         }
       }
-      // Slot shards always persist full maps; the state type is wider because
-      // live snapshots project inactive maps to summaries.
+      // Slot shards should be full maps (the storage guard skips summaries);
+      // the state type stays wider because live snapshots project inactive
+      // maps, and pre-fix slots may still contain summary shards. Those are
+      // unrecoverable from the slot — drop them loudly instead of silently.
       const fullMaps = loaded.maps.filter(isFullMap);
+      const dropped = loaded.maps.length - fullMaps.length;
       sendChunkedImport((intent) => this.send(intent), buildCampaignHeader(loaded), fullMaps);
-      toastService.success(`Loaded save "${displayName}".`);
+      if (dropped > 0) {
+        const names = loaded.maps
+          .filter((m) => !isFullMap(m))
+          .map((m) => `"${m.name}"`)
+          .join(", ");
+        log.warn(`loaded save "${displayName}" omitted ${dropped} summary map(s): ${names}`);
+        toastService.warn(
+          `Loaded "${displayName}" without ${dropped} map(s) that had no saved content (${names}).`,
+        );
+      } else {
+        toastService.success(`Loaded save "${displayName}".`);
+      }
     } catch (err) {
       log.warn(`failed to apply loaded campaign "${displayName}": ${String(err)}`, err);
       toastService.error(`Could not load save "${displayName}".`);
@@ -929,11 +992,19 @@ export class DndmApp extends GameElement {
       `${mapCount} map${mapCount === 1 ? "" : "s"}`,
       `${sheetCount} character sheet${sheetCount === 1 ? "" : "s"}`,
     ];
+    const incompleteCount = candidate
+      ? candidate.maps.filter((m) => !isFullMap(m)).length
+      : 0;
+    const message =
+      `An auto-save was found (${parts.join(", ")}). Load it into the current session?` +
+      (incompleteCount > 0
+        ? ` Warning: ${incompleteCount} map(s) have no saved content and will be skipped.`
+        : "");
     return html`
       <dndm-confirm
         ?isOpen=${candidate !== null}
         modalTitle="Restore auto-save?"
-        message=${`An auto-save was found (${parts.join(", ")}). Load it into the current session?`}
+        message=${message}
         confirmText="Load"
         .onConfirm=${() => void this.confirmAutoRestore()}
         .onCancel=${() => this.cancelAutoRestore()}
@@ -1040,7 +1111,7 @@ export class DndmApp extends GameElement {
                       .maps=${maps}
                       .activeMapId=${activeMapId}
                       .onCreateMap=${() => this.send({ kind: "createMap", name: "New Map" })}
-                      .onSelectMap=${(id: string) => this.send({ kind: "setActiveMap", mapId: id })}
+                      .onSelectMap=${(id: string) => this.selectMap(id)}
                       .onRenameMap=${(id: string, name: string) =>
                       this.send({ kind: "renameMap", mapId: id, name })}
                       .onDuplicateMap=${(id: string) =>

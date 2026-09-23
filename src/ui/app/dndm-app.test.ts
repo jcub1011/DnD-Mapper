@@ -2,7 +2,7 @@
 import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Emitter } from "../../game/emitter";
-import { createDefaultDndMapperState, type GameMap } from "../../game/domain";
+import { createDefaultDndMapperState, toMapSummary, type GameMap } from "../../game/domain";
 import type { ControllerEvents, GameController } from "../../net/controller";
 import type { MatchState } from "../../game/types";
 import type { KBPlayer } from "../../../addons/knockbox/knockbox-phaser";
@@ -634,6 +634,76 @@ describe("<dndm-app> Application Shell", () => {
       } finally {
         await reader.detach();
       }
+    });
+  });
+
+  describe("Summary-map hydration", () => {
+    afterEach(async () => {
+      // Same scrub as the restore-prompt suite: a DM state change arms the
+      // auto-save debounce, and app.remove() clears the timer — but flushes
+      // that already landed must not leak into other tests.
+      const scrubber = new LibraryService(10);
+      await scrubber.attach();
+      const db = (scrubber as unknown as { db: IDBDatabase }).db;
+      const { STORE_LIBRARY } = await import("../../storage/schema");
+      const { deleteBatch } = await import("../../storage/db");
+      const keys = await new Promise<string[]>((resolve, reject) => {
+        try {
+          const tx = db.transaction(STORE_LIBRARY, "readonly");
+          const req = tx.objectStore(STORE_LIBRARY).getAllKeys();
+          req.onsuccess = () => resolve((req.result as string[]).map(String));
+          req.onerror = () => reject(req.error);
+        } catch (err) {
+          reject(err);
+        }
+      });
+      await deleteBatch(
+        db,
+        STORE_LIBRARY,
+        keys.filter((k) => k.startsWith("__auto__")),
+      );
+      await scrubber.detach();
+    });
+
+    it("DM requests full data for summary maps once, then stops after the full map arrives", async () => {
+      const mapA = makeMap("map-a", "Hall");
+      const fullB = { ...makeMap("map-b", "Crypt"), listOrder: 1 };
+      const controller = createMockController({
+        playerId: "dm-user",
+        isOwner: true,
+        state: {
+          phase: "Playing",
+          maps: [mapA, toMapSummary(fullB)],
+          activeMapId: "map-a",
+          dmPlayerId: "dm-user",
+        },
+      });
+      app.attach(controller);
+      await app.updateComplete;
+
+      // Projected snapshot arrives: B is a summary — DM must fetch it.
+      controller.events.emit("changed", { state: controller.view.state });
+      await app.updateComplete;
+
+      expect(controller.mockSendIntent).toHaveBeenCalledWith({
+        kind: "requestMap",
+        mapId: "map-b",
+      });
+
+      // Authority answers with the full map (as a merged view state): no
+      // second fetch for B.
+      controller.mockSendIntent.mockClear();
+      const hydrated: MatchState = {
+        ...controller.view.state,
+        maps: [mapA, fullB],
+      };
+      controller.events.emit("changed", { state: hydrated });
+      await app.updateComplete;
+
+      expect(controller.mockSendIntent).not.toHaveBeenCalledWith({
+        kind: "requestMap",
+        mapId: "map-b",
+      });
     });
   });
 

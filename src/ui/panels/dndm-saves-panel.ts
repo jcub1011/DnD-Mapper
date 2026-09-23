@@ -85,6 +85,18 @@ export class DndmSavesPanel extends GameElement {
     }
   }
 
+  private warnForSkippedMaps(): void {
+    // The storage guard skips MapSummary entries (inactive maps the live
+    // snapshot projected away) instead of persisting them. Name them so the
+    // DM knows to open each map, then save again for a complete slot.
+    const skipped = this.libraryService?.lastSkippedMapIds ?? [];
+    if (skipped.length === 0) return;
+    const names = skipped.map((m) => `"${m.name}"`).join(", ");
+    toastService.warn(
+      `Saved without ${skipped.length} map(s) not fully loaded (${names}). Open each map, then save again.`,
+    );
+  }
+
   private async confirmCreate(): Promise<void> {
     if (!this.libraryService || !this.currentState || !this.newSlotName.trim()) return;
     const slotId =
@@ -93,6 +105,7 @@ export class DndmSavesPanel extends GameElement {
         : `slot-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     try {
       await this.libraryService.saveSlot(slotId, this.newSlotName.trim(), this.currentState);
+      this.warnForSkippedMaps();
       this.creating = false;
       this.newSlotName = "";
       await this.refreshSlots();
@@ -121,6 +134,7 @@ export class DndmSavesPanel extends GameElement {
         this.pendingOverwriteSlot.name,
         this.currentState,
       );
+      this.warnForSkippedMaps();
       this.pendingOverwriteSlot = null;
       await this.refreshSlots();
     } catch (err) {

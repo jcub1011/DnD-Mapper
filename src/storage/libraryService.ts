@@ -22,6 +22,7 @@ import type {
   NamedTemplate,
   RollTemplate,
 } from "../game/domain.js";
+import { isFullMap } from "../game/domain.js";
 import type { AttributeSchema } from "../game/domain.js";
 import {
   deleteBatch,
@@ -128,6 +129,14 @@ export class LibraryService {
   // Key -> SHA-256 hash of last written JSON for AUTO_SLOT_ID
   private readonly autoFlushHashes = new Map<string, string>();
 
+  /**
+   * Maps from the most recent save that were summaries (not full data) and
+   * therefore skipped instead of persisted. Lets the UI warn ("2 maps not
+   * fully loaded — visit them, then save again") without changing the
+   * saveSlot/flushAutoSave signatures.
+   */
+  public lastSkippedMapIds: ReadonlyArray<{ id: string; name: string }> = [];
+
   // Mutex lock promise chain
   private saveLock: Promise<void> = Promise.resolve();
 
@@ -223,6 +232,7 @@ export class LibraryService {
     this.lastFlushedFingerprint = null;
     this.flushFailureCount = 0;
     this.autoFlushHashes.clear();
+    this.lastSkippedMapIds = [];
     this.setSaving(false);
   }
 
@@ -364,6 +374,33 @@ export class LibraryService {
     isAutoSave: boolean,
   ): Promise<void> {
     const db = await this.ensureDb();
+    const cKey = coreKey(slotId);
+
+    // Previous core lets us distinguish "unloaded" (summary in the live
+    // view, full shard already stored — retain it) from "deleted" (gone
+    // from the view entirely — stale-delete as before). Without this read,
+    // persisting a projected snapshot would clobber full shards with
+    // MapSummary payloads, silently destroying inactive maps on restore.
+    let prevMapIds = new Set<string>();
+    try {
+      const prevCore = await getFromStore<LibraryCoreSnapshot>(db, STORE_LIBRARY, cKey);
+      if (prevCore && Array.isArray(prevCore.mapIds)) {
+        prevMapIds = new Set(prevCore.mapIds);
+      }
+    } catch {
+      // A read failure must not block the save; fall through with an
+      // empty set (summaries are then omitted rather than retained).
+    }
+
+    const fullMaps = state.maps.filter(isFullMap);
+    const summaryMaps = state.maps.filter((m) => !isFullMap(m));
+    this.lastSkippedMapIds = summaryMaps.map((m) => ({ id: m.id, name: m.name }));
+
+    // Retain previously stored full shards for maps that are currently
+    // summaries. For a brand-new slot there is nothing to retain, so those
+    // ids are omitted from the new core (a summary shard with no content
+    // is worse than an omitted map; load already tolerates missing shards).
+    const retainedIds = summaryMaps.map((m) => m.id).filter((id) => prevMapIds.has(id));
 
     const core: LibraryCoreSnapshot = {
       schemaVersion: 1,
@@ -374,16 +411,17 @@ export class LibraryService {
       customTemplates: Object.values(state.customTemplates),
       globalRollTemplates: state.globalRollTemplates,
       loadedDiceRules: state.loadedDiceRules,
-      mapIds: state.maps.map((m) => m.id),
+      mapIds: [...fullMaps.map((m) => m.id), ...retainedIds],
       sheetIds: Object.keys(state.sheets),
     };
 
     const batchItems: Array<{ key: string; value: unknown }> = [];
     const newHashes = new Map<string, string>();
 
-    // 1. Map shards
+    // 1. Map shards — full maps only. Summary entries are never written:
+    // writing one would replace a full shard with id/name/dimensions only.
     const currentMapKeys = new Set<string>();
-    for (const map of state.maps) {
+    for (const map of fullMaps) {
       const k = mapKey(slotId, map.id);
       currentMapKeys.add(k);
       const hash = await hashShard(map);
@@ -394,6 +432,11 @@ export class LibraryService {
 
       batchItems.push({ key: k, value: map });
       newHashes.set(k, hash);
+    }
+    // Retained ids keep their existing shards/hashes; include them in the
+    // keep-set so the stale-deletion pass below doesn't remove them.
+    for (const id of retainedIds) {
+      currentMapKeys.add(mapKey(slotId, id));
     }
 
     // 2. Sheet shards
@@ -412,7 +455,6 @@ export class LibraryService {
     }
 
     // 3. Core shard (written LAST)
-    const cKey = coreKey(slotId);
     const coreH = await hashShard(core);
     if (!isAutoSave || this.autoFlushHashes.get(cKey) !== coreH) {
       batchItems.push({ key: cKey, value: core });
@@ -512,9 +554,11 @@ export class LibraryService {
     const core = await getFromStore<LibraryCoreSnapshot>(db, STORE_LIBRARY, cKey);
     if (!core) return null;
 
-    // Read maps and sheets in parallel
+    // Read maps and sheets in parallel. Shards are typed as the union:
+    // slots written before the summary-guard fix (or by other paths) may
+    // still contain MapSummary payloads; downstream restore filters them.
     const mapPromises = (core.mapIds || []).map((mid) =>
-      getFromStore<GameMap>(db, STORE_LIBRARY, mapKey(slotId, mid)),
+      getFromStore<GameMap | MapSummary>(db, STORE_LIBRARY, mapKey(slotId, mid)),
     );
     const sheetPromises = (core.sheetIds || []).map((sid) =>
       getFromStore<CharacterSheet>(db, STORE_LIBRARY, sheetKey(slotId, sid)),
@@ -525,7 +569,9 @@ export class LibraryService {
       Promise.all(sheetPromises),
     ]);
 
-    const maps: GameMap[] = mapResults.filter((m): m is GameMap => m !== null);
+    const maps: Array<GameMap | MapSummary> = mapResults.filter(
+      (m): m is GameMap | MapSummary => m !== null,
+    );
     const sheetsRecord: Record<string, CharacterSheet> = {};
     for (const s of sheetResults) {
       if (s) sheetsRecord[s.id] = s;

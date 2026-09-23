@@ -1,6 +1,7 @@
 import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CharacterSheet, DndMapperState, GameMap } from "../game/domain.js";
+import { isFullMap, toMapSummary } from "../game/domain.js";
 import { deleteDatabase } from "./db.js";
 import { captureFingerprint, isFingerprintEqual, LibraryService } from "./libraryService.js";
 import { AUTO_SLOT_ID } from "./schema.js";
@@ -268,6 +269,95 @@ describe("LibraryService and Sharded Persistence", () => {
       const loaded = await service.loadSlot(AUTO_SLOT_ID);
       expect(loaded).not.toBeNull();
       expect(loaded!.maps).toHaveLength(0);
+    });
+  });
+
+  describe("MapSummary guard", () => {
+    function makeSecondMap(): GameMap {
+      const base = createMockState().maps[0] as GameMap;
+      return {
+        ...base,
+        id: "map-2",
+        name: "Crypt",
+        listOrder: 1,
+        tokens: [
+          {
+            ...base.tokens[0],
+            id: "tok-2",
+            mapId: "map-2",
+            name: "Rogue",
+          },
+        ],
+      };
+    }
+
+    it("retains full shards when a projected snapshot carries summaries (auto-save)", async () => {
+      const mapA = createMockState().maps[0] as GameMap;
+      const mapB = makeSecondMap();
+      const full: DndMapperState = {
+        ...createMockState(),
+        maps: [mapA, mapB],
+        activeMapId: "map-1",
+      };
+      await service.flushAutoSave(full);
+
+      // Live view projects the inactive map: B arrives as a summary only.
+      const projected: DndMapperState = {
+        ...full,
+        maps: [mapA, toMapSummary(mapB)],
+      };
+      await service.flushAutoSave(projected);
+
+      expect(service.lastSkippedMapIds.map((m) => m.id)).toEqual(["map-2"]);
+
+      const loaded = await service.loadSlot(AUTO_SLOT_ID);
+      expect(loaded).not.toBeNull();
+      expect(loaded!.maps).toHaveLength(2);
+      for (const m of loaded!.maps) {
+        expect(isFullMap(m)).toBe(true);
+      }
+      const reloadedB = loaded!.maps.find((m) => m.id === "map-2") as GameMap;
+      expect(reloadedB.tokens).toHaveLength(1);
+      expect(reloadedB.tokens[0].name).toBe("Rogue");
+    });
+
+    it("omits summary maps from brand-new manual slots instead of persisting summaries", async () => {
+      const mapA = createMockState().maps[0] as GameMap;
+      const mapB = makeSecondMap();
+      const projected: DndMapperState = {
+        ...createMockState(),
+        maps: [mapA, toMapSummary(mapB)],
+        activeMapId: "map-1",
+      };
+      await service.saveSlot("manual-projected", "Projected", projected);
+
+      expect(service.lastSkippedMapIds.map((m) => m.id)).toEqual(["map-2"]);
+
+      const loaded = await service.loadSlot("manual-projected");
+      expect(loaded).not.toBeNull();
+      expect(loaded!.maps).toHaveLength(1);
+      expect(loaded!.maps[0].id).toBe("map-1");
+      for (const m of loaded!.maps) {
+        expect(isFullMap(m)).toBe(true);
+      }
+    });
+
+    it("still deletes truly removed maps (deleted is not unloaded)", async () => {
+      const mapA = createMockState().maps[0] as GameMap;
+      const mapB = makeSecondMap();
+      await service.flushAutoSave({
+        ...createMockState(),
+        maps: [mapA, mapB],
+        activeMapId: "map-1",
+      });
+
+      // B is gone from the view entirely (not a summary) → stale-delete it.
+      await service.flushAutoSave(createMockState());
+
+      const loaded = await service.loadSlot(AUTO_SLOT_ID);
+      expect(loaded).not.toBeNull();
+      expect(loaded!.maps).toHaveLength(1);
+      expect(loaded!.maps[0].id).toBe("map-1");
     });
   });
 
