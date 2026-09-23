@@ -6,3 +6,6 @@ knockbox.json
 # Build output
 dist/
 dist-game/
+
+# Vendored libraries
+src/lib/

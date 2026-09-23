@@ -14,6 +14,7 @@ import type { LaunchMode } from "../../net/launch";
 import { knockboxPluginConfig } from "../../net/knockboxPlugin";
 import type { KnockBoxTransport } from "../../net/transport";
 import { FxScene } from "./FxScene";
+import { MapScene } from "../map/MapScene";
 
 const log = createLogger("fx");
 
@@ -27,6 +28,7 @@ export interface Rectish {
 class Fx {
   private game?: Phaser.Game;
   private scene?: FxScene;
+  private mapScene?: MapScene;
   private shakeTarget?: HTMLElement;
 
   /** Boot the Phaser FX game into the given parent element. The KnockBox global
@@ -43,32 +45,40 @@ class Fx {
       parent: parentId,
       transparent: true,
       scale: { mode: Phaser.Scale.RESIZE, width: window.innerWidth, height: window.innerHeight },
-      scene: [FxScene],
+      scene: [MapScene, FxScene],
       ...(net ? { plugins: { global: [net] } } : {}),
-      // The canvas must never eat pointer events; the wrapper handles that too.
-      input: { mouse: { preventDefaultWheel: false } },
+      // Prevent wheel default to prevent page scrolling in iframe and enable map zooming
+      input: { mouse: { preventDefaultWheel: true } },
       fps: { target: 60 },
     });
     this.game.events.once(Phaser.Core.Events.READY, () => {
       this.scene = this.game!.scene.getScene("Fx") as FxScene;
+      this.mapScene = this.game!.scene.getScene("Map") as MapScene;
       this.installContextLossGuards();
     });
   }
 
   /** Guard against WebGL context loss. On mobile Safari and backgrounded tabs the
-   *  GPU can drop the canvas context; without intervention the FX particles then
+   *  GPU can drop the canvas context; without intervention the FX particles and map
    *  silently never render again. */
   private installContextLossGuards(): void {
     const canvas = this.game?.canvas;
     if (!canvas) return;
     canvas.addEventListener("webglcontextlost", (e: Event) => {
       e.preventDefault(); // ask the browser to attempt a restore
-      log.warn("WebGL context lost; FX particles paused until restore");
+      log.warn("WebGL context lost; map and FX paused until restore");
     });
     canvas.addEventListener("webglcontextrestored", () => {
-      log.warn("WebGL context restored; resuming FX");
+      log.warn("WebGL context restored; resuming map and FX");
       this.scene = this.game?.scene.getScene("Fx") as FxScene | undefined;
+      this.mapScene = this.game?.scene.getScene("Map") as MapScene | undefined;
+      this.mapScene?.onContextRestored();
     });
+  }
+
+  /** Access the active MapScene if initialized. */
+  map(): MapScene | undefined {
+    return this.mapScene;
   }
 
   /** The KnockBox networking peer (the registered global plugin), if any. All

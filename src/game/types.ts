@@ -10,51 +10,311 @@
  *
  * Nothing here imports Phaser, Lit, or the DOM: `src/game/` is shared by the
  * authority module and the client, and the authority runs in a bare sandbox.
- * Reshape these when your game's rules are designed.
  */
 
-/** High-level lifecycle of a match. */
-export type GamePhase = "Lobby" | "Playing" | "GameOver";
+import type {
+  AttributePreset,
+  AttributeRow,
+  AttributeSchema,
+  AttributeValue,
+  CampaignHeader,
+  CenterViewportRequest,
+  CharacterSheet,
+  CustomTemplate,
+  DndMapperPhase,
+  DndMapperSettings,
+  DndMapperState,
+  FocusRect,
+  GameMap,
+  GridConfig,
+  LoadedDiceRule,
+  MapImage,
+  MapSummary,
+  NewMapImage,
+  NewToken,
+  RollMode,
+  RollResult,
+  RollTemplate,
+  StatusEffect,
+  StatusEffectTemplate,
+  Token,
+  CombatState,
+} from "./domain.js";
 
 /** A lobby member, as the platform reports it (`init`, `onPlayerJoined`). */
 export interface PlayerInfo {
-  id: string;
-  displayName: string;
-}
-
-/** A single player's authoritative state. */
-export interface PlayerState {
-  id: string;
-  displayName: string;
-  score: number;
-}
-
-/** The full authoritative match state — what `snapshot()` returns. */
-export interface MatchState {
-  phase: GamePhase;
-  players: PlayerState[];
-  /** Winner's player id once phase is GameOver. `null`, never undefined. */
-  winnerId: string | null;
+  readonly id: string;
+  readonly displayName: string;
 }
 
 /**
- * Client → authority. The client sends these through `sendIntent`; they arrive at
- * the authority as UNTRUSTED data (a modified client can send anything), which is
- * why `rules.applyIntent` takes `unknown` and narrows.
+ * The authoritative match state replicated across clients.
+ * In DndMapper, this is the top-level DndMapperState.
  */
-export type Intent = { kind: "start" } | { kind: "score"; points: number };
+export type MatchState = DndMapperState;
 
 /**
- * Authority → clients. Patches MUST carry ABSOLUTE values, never relative ones:
- * a broadcast delta can overtake a point-to-point snapshot on a real socket, so
- * convergence relies on re-applying a patch being safe. `{ score: 5 }` is fine;
- * `{ delta: +1 }` would double-count.
- *
- * This template broadcasts the whole state (it's tiny), which makes the absolute
- * rule impossible to get wrong — the same choice `games/tictactoe-server` makes.
- * For a large state, narrow this to the fields that changed, still absolute-valued.
+ * Client → authority intents.
+ * Untrusted data received by authority via `applyIntent`.
  */
-export type Patch = MatchState;
+export type Intent =
+  // maps
+  | { readonly kind: "createMap"; readonly name: string }
+  | { readonly kind: "renameMap"; readonly mapId: string; readonly name: string }
+  | { readonly kind: "deleteMap"; readonly mapId: string }
+  | { readonly kind: "duplicateMap"; readonly mapId: string }
+  | { readonly kind: "reorderMaps"; readonly order: readonly string[] }
+  | { readonly kind: "setActiveMap"; readonly mapId: string }
+  | { readonly kind: "switchMap"; readonly mapId: string }
+  | { readonly kind: "updateGrid"; readonly mapId: string; readonly grid: GridConfig }
+  | { readonly kind: "setGridConfig"; readonly mapId: string; readonly grid: GridConfig }
+  | { readonly kind: "exportMapImage"; readonly mapId: string }
+  // tokens
+  | { readonly kind: "spawnToken"; readonly mapId: string; readonly token: NewToken }
+  | { readonly kind: "createToken"; readonly mapId: string; readonly token: NewToken }
+  | { readonly kind: "moveToken"; readonly tokenId: string; readonly x: number; readonly y: number }
+  | { readonly kind: "updateToken"; readonly tokenId: string; readonly patch: Partial<Token> }
+  | { readonly kind: "removeToken"; readonly tokenId: string }
+  | { readonly kind: "deleteToken"; readonly tokenId: string }
+  | { readonly kind: "reorderTokens"; readonly mapId: string; readonly tokenIds: readonly string[] }
+  | { readonly kind: "duplicateToken"; readonly tokenId: string }
+  | { readonly kind: "spawnPlayerToken"; readonly playerId: string; readonly mapId?: string; readonly name?: string; readonly color?: string }
+  | { readonly kind: "reassignTokenSheet"; readonly tokenId: string; readonly sheetId: string | null }
+  | { readonly kind: "setTokenHidden"; readonly tokenId: string; readonly hidden: boolean }
+  // images
+  | {
+      readonly kind: "addImage";
+      readonly mapId: string;
+      readonly image: NewMapImage;
+      readonly imageId?: string;
+    }
+  | {
+      readonly kind: "placeImage";
+      readonly mapId: string;
+      readonly image: NewMapImage;
+      readonly imageId?: string;
+    }
+  | {
+      readonly kind: "transformImage";
+      readonly imageId: string;
+      readonly x: number;
+      readonly y: number;
+      readonly width: number;
+      readonly height: number;
+      readonly rotation: number;
+    }
+  | { readonly kind: "reorderImage"; readonly imageId: string; readonly layerOrder: number }
+  | { readonly kind: "reorderImages"; readonly imageId: string; readonly layerOrder: number }
+  | { readonly kind: "setImageLocked"; readonly imageId: string; readonly locked: boolean }
+  | { readonly kind: "lockImage"; readonly imageId: string; readonly locked: boolean }
+  | { readonly kind: "setImageHidden"; readonly imageId: string; readonly hidden: boolean }
+  | { readonly kind: "removeImage"; readonly imageId: string }
+  | { readonly kind: "deleteImage"; readonly imageId: string }
+  // fog — ONE intent per stroke, never per cell
+  | {
+      readonly kind: "paintFog";
+      readonly mapId: string;
+      readonly cells: readonly number[];
+      readonly fogged: boolean;
+    }
+  | { readonly kind: "setFogBitset"; readonly mapId: string; readonly mask: string }
+  | { readonly kind: "fillFog"; readonly mapId: string }
+  | { readonly kind: "clearFog"; readonly mapId: string }
+  | { readonly kind: "revealAllFog"; readonly mapId: string }
+  | { readonly kind: "hideAllFog"; readonly mapId: string }
+  // markup (Phase 10)
+  | { readonly kind: "updateMarkup"; readonly mapId: string; readonly markupSvg: string | null }
+  | { readonly kind: "clearMarkup"; readonly mapId: string }
+  // viewport
+  | { readonly kind: "setFocusRect"; readonly rect: FocusRect | null }
+  | { readonly kind: "clearFocusRect" }
+  | {
+      readonly kind: "centerViewport";
+      readonly mapId: string;
+      readonly x: number;
+      readonly y: number;
+    }
+  // session & lifecycle (Phase 11)
+  | { readonly kind: "updateSettings"; readonly patch: Partial<DndMapperSettings> }
+  | { readonly kind: "endSession" }
+  | { readonly kind: "syncClientState" }
+  // campaign saves
+  | { readonly kind: "saveCampaign"; readonly slotName?: string }
+  | { readonly kind: "loadCampaign"; readonly slotId: string }
+  | { readonly kind: "deleteCampaignSave"; readonly slotId: string }
+  // campaign loading
+  | { readonly kind: "requestMap"; readonly mapId: string }
+  | {
+      readonly kind: "beginImport";
+      readonly campaign: CampaignHeader;
+      readonly chunkCount: number;
+      readonly token?: string;
+    }
+  | {
+      readonly kind: "importChunk";
+      readonly token: string;
+      readonly index: number;
+      readonly maps: readonly GameMap[];
+    }
+  | { readonly kind: "commitImport"; readonly token: string }
+  | { readonly kind: "startSession" }
+  // sheets (10 intents; assignCharacterToPlayer in Phase 11)
+  | { readonly kind: "createSheet"; readonly characterName: string; readonly scopedMapId?: string | null; readonly ownerUserId?: string | null; readonly color?: string | null }
+  | { readonly kind: "updateSheet"; readonly sheetId: string; readonly patch: Partial<Pick<CharacterSheet, "characterName" | "color" | "scopedMapId" | "notes">> }
+  | { readonly kind: "deleteSheet"; readonly sheetId: string }
+  | { readonly kind: "duplicateSheet"; readonly sheetId: string }
+  | { readonly kind: "assignSheetOwner"; readonly sheetId: string; readonly ownerUserId: string | null }
+  | { readonly kind: "assignCharacterToPlayer"; readonly sheetId: string; readonly playerId: string | null }
+  | { readonly kind: "setSheetHp"; readonly sheetId: string; readonly hp: number | null }
+  | { readonly kind: "setSheetMaxHp"; readonly sheetId: string; readonly maxHp: number | null }
+  | { readonly kind: "setSheetAc"; readonly sheetId: string; readonly ac: number | null }
+  | { readonly kind: "updateAttributeValues"; readonly sheetId: string; readonly values: Readonly<Record<string, AttributeValue>> }
+  // schemas (3 intents)
+  | { readonly kind: "setSchemaPreset"; readonly preset: AttributePreset }
+  | { readonly kind: "updateSchemaRows"; readonly rows: readonly AttributeRow[]; readonly initiativeAttributeName?: string | null }
+  | { readonly kind: "setInitiativeAttribute"; readonly attributeName: string | null }
+  // status effects (6 intents)
+  | { readonly kind: "applyStatusEffect"; readonly sheetId: string; readonly effect: Omit<StatusEffect, "id" | "appliedUtc"> }
+  | { readonly kind: "updateStatusEffect"; readonly sheetId: string; readonly effectId: string; readonly patch: Partial<Omit<StatusEffect, "id" | "appliedUtc">> }
+  | { readonly kind: "removeStatusEffect"; readonly sheetId: string; readonly effectId: string }
+  | { readonly kind: "createEffectTemplate"; readonly template: Omit<StatusEffectTemplate, "id"> }
+  | { readonly kind: "updateEffectTemplate"; readonly templateId: string; readonly patch: Partial<Omit<StatusEffectTemplate, "id">> }
+  | { readonly kind: "deleteEffectTemplate"; readonly templateId: string }
+  // custom templates (6 intents)
+  | { readonly kind: "createCustomTemplate"; readonly template: Omit<CustomTemplate, "id"> }
+  | { readonly kind: "updateCustomTemplate"; readonly templateId: string; readonly patch: Partial<Omit<CustomTemplate, "id">> }
+  | { readonly kind: "deleteCustomTemplate"; readonly templateId: string }
+  | { readonly kind: "applyCustomTemplate"; readonly templateId: string; readonly characterName?: string; readonly scopedMapId?: string | null }
+  | { readonly kind: "duplicateCustomTemplate"; readonly templateId: string }
+  | { readonly kind: "reorderCustomTemplates"; readonly templateIds: readonly string[] }
+  // dice & roll templates (Phase 7)
+  | {
+      readonly kind: "rollDice";
+      readonly formula: string;
+      readonly mode: RollMode;
+      readonly label?: string;
+      readonly tokenId?: string | null;
+      readonly sheetId?: string | null;
+      readonly attributeName?: string | null;
+    }
+  | {
+      readonly kind: "rollTemplate";
+      readonly templateId: string;
+      readonly modeOverride?: RollMode;
+      readonly tokenId?: string | null;
+      readonly sheetId?: string | null;
+    }
+  | {
+      readonly kind: "createGlobalRollTemplate";
+      readonly template: Omit<RollTemplate, "id" | "scope">;
+    }
+  | {
+      readonly kind: "updateGlobalRollTemplate";
+      readonly templateId: string;
+      readonly patch: Partial<Omit<RollTemplate, "id" | "scope">>;
+    }
+  | {
+      readonly kind: "deleteGlobalRollTemplate";
+      readonly templateId: string;
+    }
+  | {
+      readonly kind: "createRollTemplate";
+      readonly sheetId: string;
+      readonly template: Omit<RollTemplate, "id" | "scope">;
+    }
+  | {
+      readonly kind: "updateRollTemplate";
+      readonly sheetId: string;
+      readonly templateId: string;
+      readonly patch: Partial<Omit<RollTemplate, "id" | "scope">>;
+    }
+  | {
+      readonly kind: "deleteRollTemplate";
+      readonly sheetId: string;
+      readonly templateId: string;
+    }
+  | { readonly kind: "clearRollLog" }
+  // loaded dice (Phase 8)
+  | { readonly kind: "createLoadedDiceRule"; readonly rule: Omit<LoadedDiceRule, "id"> }
+  | { readonly kind: "updateLoadedDiceRule"; readonly ruleId: string; readonly patch: Partial<LoadedDiceRule> }
+  | { readonly kind: "deleteLoadedDiceRule"; readonly ruleId: string }
+  | { readonly kind: "toggleLoadedDiceRule"; readonly ruleId: string; readonly enabled: boolean }
+  | { readonly kind: "reorderLoadedDiceRules"; readonly ruleIds: readonly string[] }
+  | { readonly kind: "updateHostKeys"; readonly heldKeys: readonly string[] }
+  // combat (Phase 9)
+  | { readonly kind: "startCombat"; readonly mapId: string; readonly npcTokenIds?: readonly string[] }
+  | { readonly kind: "endCombat" }
+  | { readonly kind: "nextTurn" }
+  | { readonly kind: "previousTurn" }
+  | {
+      readonly kind: "rollInitiative";
+      readonly combatantId: string;
+      readonly rollOverride?: number;
+    }
+  | {
+      readonly kind: "forceInitiativeRoll";
+      readonly combatantId: string;
+      readonly score?: number;
+    }
+  | {
+      readonly kind: "setNpcInitiative";
+      readonly combatantId: string;
+      readonly score: number;
+    }
+  | { readonly kind: "rollAllUnsetNpcs" }
+  | { readonly kind: "rollAllNpcInitiative" }
+  | { readonly kind: "addCombatant"; readonly tokenId: string; readonly initiativeRoll: number }
+  | { readonly kind: "removeCombatant"; readonly combatantId: string };
 
-/** Score that ends the match. */
-export const TARGET_SCORE = 5;
+/**
+ * Authority → clients narrowed patches.
+ * Carrying absolute values (never relative deltas) to ensure safe idempotence.
+ */
+export type Patch =
+  | { readonly kind: "full"; readonly state: DndMapperState } // sync / join / reconnect only
+  | { readonly kind: "token"; readonly token: Token } // absolute position, not a delta
+  | { readonly kind: "tokenRemoved"; readonly tokenId: string }
+  | { readonly kind: "fog"; readonly mapId: string; readonly mask: string } // whole mask for ONE map
+  | { readonly kind: "image"; readonly image: MapImage }
+  | { readonly kind: "imageRemoved"; readonly imageId: string }
+  | { readonly kind: "grid"; readonly mapId: string; readonly grid: GridConfig }
+  | { readonly kind: "activeMap"; readonly mapId: string }
+  | { readonly kind: "focusRect"; readonly rect: FocusRect | null }
+  | { readonly kind: "centerViewport"; readonly request: CenterViewportRequest }
+  | { readonly kind: "settings"; readonly settings: DndMapperSettings }
+  | { readonly kind: "mapList"; readonly maps: readonly MapSummary[] } // metadata only, no tokens/images
+  | { readonly kind: "map"; readonly map: GameMap } // ONE map in full
+  | { readonly kind: "dm"; readonly dmPlayerId: string } // succession
+  | { readonly kind: "phase"; readonly phase: DndMapperPhase }
+  | { readonly kind: "sheet"; readonly sheet: CharacterSheet }
+  | { readonly kind: "sheetRemoved"; readonly sheetId: string }
+  | { readonly kind: "schema"; readonly schema: AttributeSchema; readonly initiativeAttributeName: string | null }
+  | { readonly kind: "effectTemplate"; readonly template: StatusEffectTemplate }
+  | { readonly kind: "effectTemplateRemoved"; readonly templateId: string }
+  | { readonly kind: "customTemplate"; readonly template: CustomTemplate }
+  | { readonly kind: "customTemplateRemoved"; readonly templateId: string }
+  | { readonly kind: "roll"; readonly roll: RollResult }
+  | { readonly kind: "rollLogCleared" }
+  | { readonly kind: "globalRollTemplates"; readonly templates: readonly RollTemplate[] }
+  | { readonly kind: "loadedDiceRules"; readonly rules: readonly LoadedDiceRule[] }
+  | { readonly kind: "hostKeys"; readonly keys: readonly string[] }
+  | { readonly kind: "combat"; readonly combat: CombatState | null }
+  | { readonly kind: "markup"; readonly mapId: string; readonly markupSvg: string | null };
+
+/** Import chunk budget for campaign streaming (~39% of 512 KiB cap). */
+export const CHUNK_BUDGET = 200_000;
+
+/** Max broadcast frame byte limit guard (~78% of 512 KiB cap). */
+export const MAX_FRAME_BYTES = 400_000;
+
+// Re-export full domain models and helpers
+export * from "./domain.js";
+export * from "./fog.js";
+export * from "./snapping.js";
+export * from "./stacking.js";
+export * from "./dice.js";
+export * from "./color.js";
+export * from "./visibility.js";
+export * from "./ruler.js";
+export * from "./loadedDice.js";
+export * from "./combat.js";

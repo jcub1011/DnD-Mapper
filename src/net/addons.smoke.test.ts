@@ -45,4 +45,11 @@ describe("addon interop", () => {
       ),
     ).not.toThrow();
   });
+
+  it("exposes the blob API methods on KnockBoxLocalPeer (09 — Blob Share Spec)", () => {
+    const peerProto = KnockBoxLocal.KnockBoxLocalPeer.prototype;
+    expect(peerProto.registerBlob).toBeTypeOf("function");
+    expect(peerProto.unregisterBlob).toBeTypeOf("function");
+    expect(peerProto.blobUrl).toBeTypeOf("function");
+  });
 });

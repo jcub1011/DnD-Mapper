@@ -1,0 +1,1170 @@
+/* UI Shell & Component Styles — Forge & Ember aesthetic.
+   Light DOM styles reaching all Lit components. Prefix: dndm- */
+
+/* ─── Playing Phase Shell Layout ────────────────────────────── */
+dndm-app {
+  --dndm-rail-w-left: 280px;
+  --dndm-rail-w-right: 320px;
+  --dndm-rail-collapsed: 28px;
+  --dndm-rollfooter-h: 2.75rem;
+  --dndm-rail-pad-left: 0px;
+  --dndm-rail-pad-right: var(--dndm-rail-w-right);
+}
+
+.dnd-mapper-playing {
+  --dndm-rail-collapsed: 28px;
+  --dndm-rollfooter-h: 2.75rem;
+
+  --dndm-rail-pad-left: 0px;
+  --dndm-rail-pad-right: var(--dndm-rail-w-right);
+
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  color: var(--dndm-text);
+  font-family: var(--font-primary);
+  overflow: hidden;
+  pointer-events: none; /* Let clicks pass to map */
+}
+
+.dnd-mapper-playing--host {
+  --dndm-rail-pad-left: var(--dndm-rail-w-left);
+}
+.dnd-mapper-playing--host.dnd-mapper-playing--left-collapsed {
+  --dndm-rail-pad-left: var(--dndm-rail-collapsed);
+}
+.dnd-mapper-playing--right-collapsed {
+  --dndm-rail-pad-right: var(--dndm-rail-collapsed);
+}
+
+/* ─── Rails ─────────────────────────────────────────────────── */
+.dndm-rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  z-index: 5;
+  box-shadow: 0 0 16px rgba(0, 0, 0, 0.45);
+  pointer-events: auto; /* Rail is interactive */
+}
+
+.dndm-rail::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    var(--dndm-noise),
+    linear-gradient(180deg, rgba(20, 17, 14, 0.72) 0%, rgba(16, 13, 11, 0.78) 100%);
+  background-size:
+    240px 240px,
+    100% 100%;
+  background-repeat: repeat, no-repeat;
+  backdrop-filter: blur(10px) saturate(0.85);
+  -webkit-backdrop-filter: blur(10px) saturate(0.85);
+  z-index: -1;
+  pointer-events: none;
+}
+
+.dndm-rail--left {
+  left: 0;
+  width: var(--dndm-rail-w-left);
+  border-right: 1px solid var(--dndm-border-accent);
+}
+
+.dndm-rail--right {
+  right: 0;
+  width: var(--dndm-rail-w-right);
+  border-left: 1px solid var(--dndm-border-accent);
+}
+
+.dnd-mapper-playing--left-collapsed .dndm-rail--left {
+  width: var(--dndm-rail-collapsed);
+}
+.dnd-mapper-playing--right-collapsed .dndm-rail--right {
+  width: var(--dndm-rail-collapsed);
+}
+
+.dndm-rail-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.5rem;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  container-type: inline-size;
+
+  --dndm-scrollbar-thumb: rgba(196, 116, 56, 0.35);
+  --dndm-scrollbar-track: rgba(12, 10, 8, 0.35);
+  scrollbar-width: thin;
+  scrollbar-color: var(--dndm-scrollbar-thumb) var(--dndm-scrollbar-track);
+}
+
+.dndm-rail-content:hover {
+  --dndm-scrollbar-thumb: rgba(196, 116, 56, 0.65);
+}
+
+/* Slim custom scrollbar for all scrollable containers inside rails */
+.dndm-rail [class*="scroll"],
+.dndm-rail .dndm-panel-body--scroll,
+.dndm-rail .dndm-character-sheet {
+  --dndm-scrollbar-thumb: rgba(196, 116, 56, 0.35);
+  --dndm-scrollbar-track: rgba(12, 10, 8, 0.35);
+  scrollbar-width: thin;
+  scrollbar-color: var(--dndm-scrollbar-thumb) var(--dndm-scrollbar-track);
+}
+
+.dndm-rail [class*="scroll"]:hover,
+.dndm-rail .dndm-panel-body--scroll:hover,
+.dndm-rail .dndm-character-sheet:hover {
+  --dndm-scrollbar-thumb: rgba(196, 116, 56, 0.65);
+}
+
+@supports not (scrollbar-color: auto) {
+  .dndm-rail-content::-webkit-scrollbar,
+  .dndm-rail ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .dndm-rail-content::-webkit-scrollbar-track,
+  .dndm-rail ::-webkit-scrollbar-track {
+    background: rgba(12, 10, 8, 0.35);
+    border-radius: 3px;
+  }
+  .dndm-rail-content::-webkit-scrollbar-thumb,
+  .dndm-rail ::-webkit-scrollbar-thumb {
+    background: rgba(196, 116, 56, 0.35);
+    border-radius: 3px;
+  }
+  .dndm-rail-content::-webkit-scrollbar-thumb:hover,
+  .dndm-rail ::-webkit-scrollbar-thumb:hover {
+    background: rgba(196, 116, 56, 0.65);
+  }
+}
+
+.dnd-mapper-playing--left-collapsed .dndm-rail--left .dndm-rail-content,
+.dnd-mapper-playing--right-collapsed .dndm-rail--right .dndm-rail-content {
+  display: none;
+}
+
+/* ─── Rail Resize Handles ───────────────────────────────────── */
+.dndm-rail-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  background: transparent;
+  cursor: col-resize;
+  z-index: 4;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dndm-ember);
+  font-family: var(--font-primary);
+  font-size: 0.95rem;
+}
+
+.dndm-rail-resize:hover,
+.dndm-rail-resize:active {
+  background: rgba(196, 116, 56, 0.22);
+}
+
+.dndm-rail-resize--left {
+  right: 0;
+}
+.dndm-rail-resize--right {
+  left: 0;
+}
+
+.dnd-mapper-playing--left-collapsed .dndm-rail--left .dndm-rail-resize,
+.dnd-mapper-playing--right-collapsed .dndm-rail--right .dndm-rail-resize {
+  left: 0;
+  right: 0;
+  width: auto;
+  cursor: pointer;
+  background: rgba(196, 116, 56, 0.1);
+}
+
+.dndm-rail-resize::before {
+  content: "";
+  pointer-events: none;
+}
+.dnd-mapper-playing--left-collapsed .dndm-rail--left .dndm-rail-resize::before {
+  content: "›";
+}
+.dnd-mapper-playing--right-collapsed .dndm-rail--right .dndm-rail-resize::before {
+  content: "‹";
+}
+
+/* ─── Canvas Area ───────────────────────────────────────────── */
+.dndm-canvas-area {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.dndm-empty {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dndm-text-muted);
+  font-style: italic;
+  text-align: center;
+  padding: 2rem;
+  pointer-events: auto;
+}
+
+/* ─── Canvas Top Stack ────────────────────────────────────────
+   Single in-flow column holding the header toolbar plus the markup
+   palette. The palette sits below the header and shifts down
+   automatically when the header wraps to 2+ lines. The markup drawing
+   surface is positioned fullscreen behind (see markup.css) and does not
+   participate in flow. */
+.dndm-canvas-top-stack {
+  position: absolute;
+  top: 0.75rem;
+  left: calc(var(--dndm-rail-pad-left, 0px) + 12px);
+  right: calc(var(--dndm-rail-pad-right, 0px) + 12px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  z-index: 6;
+  pointer-events: none;
+  /* Horizontal space kept clear of the floating token rail pinned to the
+     right of the canvas area (40px rail + 8px gap). The markup palette
+     consumes this via markup.css so its centered pill never slides under
+     the rail. */
+  --dndm-token-rail-reserve: 48px;
+}
+
+/* Pass toolbar markup straight through to the stack so the inner
+   .dndm-canvas-toolbar (width: 100%) is the actual flex item. */
+dndm-toolbar {
+  display: contents;
+}
+
+/* ─── Toolbar ───────────────────────────────────────────────── */
+.dndm-canvas-toolbar {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  row-gap: 0.35rem;
+  padding: 0.35rem 0.5rem;
+  box-sizing: border-box;
+  overflow: visible;
+  background: rgba(20, 17, 14, 0.86);
+  border: 1px solid var(--dndm-border-accent);
+  border-radius: 4px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
+  z-index: 6;
+  pointer-events: auto;
+  user-select: none;
+}
+
+.dndm-canvas-toolbar > * {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.dndm-canvas-toolbar .dndm-zoom-readout {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 900px) {
+  .dndm-canvas-toolbar {
+    gap: 0.2rem;
+    row-gap: 0.3rem;
+    padding: 0.3rem 0.4rem;
+  }
+}
+
+.dndm-grid-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--dndm-text-dim);
+  cursor: pointer;
+  margin-right: 0.25rem;
+}
+
+.dndm-zoom-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: var(--dndm-bg-elev);
+  border: 1px solid var(--dndm-border);
+  border-radius: 3px;
+  color: var(--dndm-text);
+  font-size: 0.95rem;
+  cursor: pointer;
+  line-height: 1;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.dndm-zoom-btn:hover {
+  background: var(--dndm-bg-elev-hover);
+  border-color: var(--dndm-border-accent);
+}
+
+.dndm-zoom-btn.active,
+.dndm-zoom-btn--active {
+  background: linear-gradient(180deg, var(--dndm-ember-hi), var(--dndm-ember) 60%, #8a4a22 100%);
+  color: #1a1208;
+  font-weight: 700;
+  border-color: #5a2e14;
+}
+
+.dndm-zoom-readout {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--dndm-text-dim);
+  min-width: 44px;
+  text-align: center;
+}
+
+.dndm-toolbar-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--dndm-ink-soft);
+  margin: 0 0.2rem;
+}
+
+/* ─── Floating Inspector ────────────────────────────────────── */
+.dndm-canvas-inspector {
+  position: absolute;
+  top: 0.75rem;
+  right: calc(0.75rem + var(--dndm-rail-pad-right));
+  width: 260px;
+  z-index: 6;
+  pointer-events: auto;
+}
+
+.dndm-imgi-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+
+.dndm-imgi-grid .dndm-label {
+  margin-bottom: 0;
+}
+
+.dndm-imgi-opacity-readout {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--dndm-text-dim);
+  margin-left: 0.3rem;
+}
+
+.dndm-imgi-aspect {
+  margin-bottom: 0.5rem;
+}
+
+.dndm-imgi-lock {
+  margin-bottom: 0.5rem;
+}
+
+.dndm-imgi-layer {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.75rem;
+}
+
+.dndm-imgi-layer-readout {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--dndm-text);
+  min-width: 24px;
+  text-align: center;
+}
+
+.dndm-imgi-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ─── Map Switcher Panel ────────────────────────────────────── */
+.dndm-mapsw-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.dndm-mapsw-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 3px;
+  background: var(--dndm-bg-deep);
+  border: 1px solid var(--dndm-border);
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.dndm-mapsw-row:hover {
+  border-color: var(--dndm-border-accent);
+  background: var(--dndm-bg-panel-2);
+}
+
+.dndm-mapsw-row--active {
+  border-color: var(--dndm-ember);
+  background: rgba(196, 116, 56, 0.12);
+  box-shadow: inset 0 0 8px rgba(196, 116, 56, 0.15);
+}
+
+.dndm-mapsw-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 2px;
+  background: var(--dndm-bg-panel);
+  border: 1px solid var(--dndm-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--dndm-text-dim);
+  flex: 0 0 auto;
+}
+
+.dndm-mapsw-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dndm-mapsw-name {
+  font-size: 0.95rem;
+  color: var(--dndm-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dndm-mapsw-meta {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--dndm-text-muted);
+}
+
+.dndm-mapsw-rename {
+  padding: 0.2rem 0.4rem;
+  font-size: 0.9rem;
+}
+
+.dndm-mapsw-actions {
+  flex: 0 0 auto;
+}
+
+/* ─── Layer Panel ───────────────────────────────────────────── */
+.dndm-layers-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.dndm-layer-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.5rem;
+  background: var(--dndm-bg-deep);
+  border: 1px solid var(--dndm-border);
+  border-radius: 3px;
+  transition: border-color 120ms ease;
+}
+
+.dndm-layer-row--selected {
+  border-color: var(--dndm-ember);
+  box-shadow: 0 0 6px rgba(196, 116, 56, 0.25);
+}
+
+.dndm-layer-row--hidden {
+  opacity: 0.5;
+}
+
+.dndm-layer-clickarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+}
+
+.dndm-layer-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 2px;
+  object-fit: cover;
+  border: 1px solid var(--dndm-border);
+  flex: 0 0 auto;
+}
+
+.dndm-layer-thumb--placeholder {
+  background: var(--dndm-bg-panel);
+  border: 1px dashed var(--dndm-border);
+}
+
+.dndm-layer-name {
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--dndm-text);
+}
+
+.dndm-layer-name-input {
+  padding: 0.2rem 0.4rem;
+  font-size: 0.85rem;
+}
+
+.dndm-layer-downscale-badge {
+  font-size: 0.8rem;
+  color: var(--dndm-ember-hi);
+  cursor: help;
+}
+
+/* ─── Floating Token Rail ───────────────────────────────────── */
+dndm-token-rail {
+  pointer-events: none;
+  display: contents;
+}
+
+.dndm-token-rail {
+  position: absolute;
+  top: 5rem;
+  right: calc(0.75rem + var(--dndm-rail-pad-right));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow: visible;
+  z-index: 6;
+  pointer-events: none;
+  background: none;
+  border: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  padding: 0;
+  width: 40px;
+}
+
+.dndm-token-rail-arrow {
+  width: 22px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: rgba(12, 10, 8, 0.72);
+  border: 1px solid var(--dndm-border-accent);
+  border-radius: 4px;
+  color: var(--dndm-text-dim);
+  font-size: 0.6rem;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+  flex: 0 0 auto;
+}
+
+.dndm-token-rail-arrow:hover:not(:disabled) {
+  color: var(--dndm-ember-hi);
+  border-color: var(--dndm-ember);
+}
+
+.dndm-token-rail-arrow:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
+.dndm-token-rail-list {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 4px 6px;
+  margin: 0;
+  overflow-y: scroll;
+  overflow-x: visible;
+  max-height: 202px;
+  pointer-events: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.dndm-token-rail-list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.dndm-token-rail-empty {
+  color: var(--dndm-text-muted);
+  font-size: 0.8rem;
+  padding: 0.25rem 0;
+  pointer-events: none;
+}
+
+.dndm-token-rail-avatar {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.25);
+  background: var(--tok-bg, #888);
+  color: var(--tok-fg, #fff);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  flex: 0 0 auto;
+  pointer-events: auto;
+  transition:
+    transform 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.dndm-token-rail-avatar:hover,
+.dndm-token-rail-avatar:focus-visible {
+  transform: scale(1.12);
+  border-color: var(--dndm-ember-hi);
+  box-shadow: 0 0 10px rgba(232, 144, 85, 0.45);
+  outline: none;
+}
+
+.dndm-token-rail-avatar.is-hidden {
+  opacity: 0.45;
+  border-style: dashed;
+}
+
+.dndm-token-rail-avatar.is-mine {
+  box-shadow: 0 0 0 2px var(--dndm-ember-hi);
+}
+
+.dndm-token-rail-initial {
+  font-family: "Cormorant Garamond", Georgia, serif;
+  font-size: 0.85rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.dndm-token-rail-corner {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.55rem;
+  font-weight: 700;
+  border: 1px solid var(--dndm-border-strong);
+}
+
+.dndm-token-rail-corner.is-player {
+  background: var(--dndm-success);
+  color: #101408;
+}
+
+.dndm-token-rail-corner.is-npc {
+  background: var(--dndm-bg-panel);
+  color: var(--dndm-text-dim);
+}
+
+.dndm-token-rail-mine {
+  position: absolute;
+  left: -3px;
+  top: -7px;
+  font-size: 0.65rem;
+  color: var(--dndm-ember-hi);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.dndm-token-rail-hidden-dot {
+  position: absolute;
+  left: -1px;
+  bottom: 1px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dndm-text-muted);
+  border: 1px solid var(--dndm-border-strong);
+}
+
+.dndm-token-rail-tip-float {
+  position: fixed;
+  transform: translate(calc(-100% - 10px), -50%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  white-space: nowrap;
+  background: var(--dndm-bg-deep);
+  color: var(--dndm-text);
+  border: 1px solid var(--dndm-border-accent);
+  border-radius: 3px;
+  padding: 0.3rem 0.55rem;
+  font-size: 0.8rem;
+  pointer-events: none;
+  z-index: 60;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
+}
+
+.dndm-token-rail-tip-name {
+  font-weight: 600;
+}
+
+.dndm-token-rail-tip-hint {
+  font-size: 0.7rem;
+  color: var(--dndm-text-dim);
+}
+
+/* ─── Token Panel ───────────────────────────────────────────── */
+.dndm-tokenp-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.5rem;
+  background: var(--dndm-bg-deep);
+  border: 1px solid var(--dndm-border);
+  border-radius: 3px;
+  margin-bottom: 0.35rem;
+  cursor: pointer;
+}
+
+.dndm-tokenp-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  flex: 0 0 auto;
+}
+
+.dndm-tokenp-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.9rem;
+  color: var(--dndm-text);
+}
+
+.dndm-tokenp-tag {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  background: var(--dndm-bg-panel);
+  color: var(--dndm-text-dim);
+  flex: 0 0 auto;
+}
+
+/* ─── Saves Panel ───────────────────────────────────────────── */
+.dndm-savesp-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.dndm-saves-create {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 0.6rem;
+}
+
+.dndm-saves-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.dndm-saves-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.5rem;
+  background: var(--dndm-bg-deep);
+  border: 1px solid var(--dndm-border);
+  border-radius: 3px;
+}
+
+.dndm-saves-row--loadable {
+  cursor: pointer;
+}
+.dndm-saves-row--loadable:hover {
+  border-color: var(--dndm-border-accent);
+}
+
+.dndm-saves-row--auto {
+  border-left: 3px solid var(--dndm-ember);
+}
+
+.dndm-saves-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dndm-saves-name {
+  font-size: 0.9rem;
+  color: var(--dndm-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dndm-saves-when {
+  font-size: 0.75rem;
+  color: var(--dndm-text-muted);
+}
+
+.dndm-saves-actions {
+  display: flex;
+  gap: 0.2rem;
+  flex: 0 0 auto;
+}
+
+/* ─── My Token Panel ────────────────────────────────────────── */
+.dndm-mytokenp-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.dndm-mytokenp-color {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--dndm-border);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.dndm-mytokenp-name {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--dndm-text);
+}
+
+/* ─── Toast System ──────────────────────────────────────────── */
+.dndm-toast-stack {
+  position: fixed;
+  top: calc(56px + 1rem);
+  right: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  z-index: 200;
+  pointer-events: none;
+  max-width: min(420px, calc(100vw - 2rem));
+}
+
+.dndm-toast {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.85rem;
+  background: var(--dndm-noise), var(--dndm-panel-vignette), var(--dndm-panel-gradient);
+  background-size:
+    240px 240px,
+    100% 100%,
+    100% 100%;
+  background-repeat: repeat, no-repeat, no-repeat;
+  color: var(--dndm-text);
+  border: 1px solid var(--dndm-border);
+  border-left-width: 3px;
+  border-left-color: var(--dndm-ember);
+  border-radius: 3px;
+  font-family: var(--font-primary);
+  font-size: 0.95rem;
+  box-shadow:
+    inset 0 1px 0 var(--dndm-highlight),
+    0 6px 18px rgba(0, 0, 0, 0.65);
+  animation: dndm-toast-in 220ms ease-out;
+}
+
+.dndm-toast-icon {
+  flex: 0 0 auto;
+  font-weight: 700;
+  color: var(--dndm-ember);
+}
+
+.dndm-toast-message {
+  flex: 1 1 auto;
+  line-height: 1.35;
+}
+
+.dndm-toast--success {
+  border-left-color: var(--dndm-success);
+}
+.dndm-toast--success .dndm-toast-icon {
+  color: var(--dndm-success);
+}
+
+.dndm-toast--warn {
+  border-left-color: var(--dndm-ember-hi);
+}
+.dndm-toast--warn .dndm-toast-icon {
+  color: var(--dndm-ember-hi);
+}
+
+.dndm-toast--danger {
+  border-left-color: var(--dndm-danger);
+}
+.dndm-toast--danger .dndm-toast-icon {
+  color: var(--dndm-danger);
+}
+
+@keyframes dndm-toast-in {
+  from {
+    transform: translateX(8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* ─── Map Settings Modal ────────────────────────────────────── */
+.dndm-mapsettings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.dndm-mapsettings-check {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+}
+
+.dndm-mapsettings-hint {
+  font-size: 0.8rem;
+  color: var(--dndm-text-muted);
+  font-style: italic;
+  margin-top: 0.4rem;
+}
+
+/* ─── Permissions Panel ─────────────────────────────────────── */
+.dndm-permp .dndm-panel-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.dndm-dice-hint {
+  font-size: 0.8rem;
+  color: var(--dndm-text-muted);
+  font-style: italic;
+}
+
+/* ─── Lobby View ────────────────────────────────────────────── */
+.dndm-lobby-view {
+  position: fixed;
+  inset: 0;
+  min-height: 100%;
+  box-sizing: border-box;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  color: var(--dndm-text);
+  font-family: var(--font-primary);
+  background:
+    var(--dndm-noise),
+    radial-gradient(ellipse at 50% 18%, rgba(196, 116, 56, 0.1), transparent 60%), var(--dndm-void);
+  background-size:
+    240px 240px,
+    100% 100%,
+    100% 100%;
+  background-repeat: repeat, no-repeat, no-repeat;
+  overflow-y: auto;
+  pointer-events: auto;
+  z-index: 20;
+}
+
+.dndm-lobby-view dndm-permissions {
+  display: block;
+  width: 100%;
+  max-width: 760px;
+  box-sizing: border-box;
+}
+
+.dndm-lobby-view .card {
+  position: relative;
+  width: 100%;
+  max-width: 760px;
+  box-sizing: border-box;
+  background-color: var(--dndm-bg-panel);
+  background-image: var(--dndm-noise), var(--dndm-panel-vignette), var(--dndm-panel-gradient);
+  background-position: center, center, center;
+  background-size:
+    240px 240px,
+    100% 100%,
+    100% 100%;
+  background-repeat: repeat, no-repeat, no-repeat;
+  border: 1px solid var(--dndm-border);
+  border-radius: 6px;
+  padding: 22px 24px;
+  box-shadow:
+    inset 0 1px 0 var(--dndm-highlight),
+    0 4px 14px rgba(0, 0, 0, 0.6);
+}
+
+/* ─── Lobby Game Settings (Responsive Wrapping Row) ─────────── */
+.dndm-lobby-view .dndm-permp .dndm-panel-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 0;
+  margin-top: 12px;
+}
+
+.dndm-lobby-view .dndm-permp .dndm-panel-section {
+  flex: 1 1 calc(50% - 12px);
+  min-width: 280px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 10px 14px;
+  border-top: none;
+  background: var(--dndm-bg-panel-2, #221b16);
+  border: 1px solid var(--dndm-border);
+  border-radius: 4px;
+  box-shadow: inset 0 1px 0 var(--dndm-highlight);
+}
+
+.dndm-lobby-view .dndm-permp .dndm-panel-section:has(.dndm-pillgroup) {
+  justify-content: flex-start;
+}
+
+.dndm-lobby-view .dndm-permp .dndm-pillgroup {
+  display: flex;
+  width: 100%;
+}
+
+.dndm-lobby-view .dndm-permp .dndm-pillgroup button {
+  flex: 1 1 0;
+  text-align: center;
+  padding: 0.45rem 0.4rem;
+  font-size: 0.88rem;
+  white-space: nowrap;
+}
+
+.dndm-lobby-view .dndm-permp .dndm-pillgroup button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.dndm-lobby-view .dndm-permp .dndm-panel-section.dndm-permp-reset {
+  flex: 1 1 100%;
+  min-width: 100%;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--dndm-ink-soft);
+  border-radius: 0;
+  box-shadow: none;
+  padding: 12px 0 0;
+  margin-top: 4px;
+  min-height: auto;
+  align-items: flex-start;
+}
+
+.dndm-lobby-view h3,
+.dndm-lobby-view h4 {
+  color: var(--dndm-ember);
+  font-family: var(--dndm-display);
+  font-style: italic;
+  font-weight: 500;
+  font-size: 1.4rem;
+  letter-spacing: 0.5px;
+  text-transform: none;
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  text-shadow: 0 0 8px rgba(196, 116, 56, 0.2);
+}
+
+.dndm-lobby-view .player-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.dndm-lobby-view .player-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--dndm-bg-elev);
+  color: var(--dndm-text);
+  border: 1px solid var(--dndm-border);
+  border-radius: 999px;
+  padding: 0.4rem 0.9rem;
+  font-family: var(--font-primary);
+  font-size: 0.95rem;
+  line-height: 1.1;
+  box-shadow: inset 0 1px 0 var(--dndm-highlight);
+}
+
+.dndm-lobby-view button.player-chip {
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease;
+}
+
+.dndm-lobby-view button.player-chip:hover {
+  background: rgba(176, 74, 58, 0.18);
+  border-color: var(--dndm-danger);
+  color: #fbe8e0;
+}

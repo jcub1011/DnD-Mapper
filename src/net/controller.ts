@@ -41,5 +41,7 @@ export interface GameController {
   sendIntent(intent: Intent): void;
   /** Owner-only: open or close the lobby to new joins. Ignored for non-owners. */
   setLobbyOpen(open: boolean): void;
+  /** Owner-only: remove a player from the lobby. Ignored for non-owners. */
+  kickPlayer(playerId: string): void;
   destroy(): void;
 }

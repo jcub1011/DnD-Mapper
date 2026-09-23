@@ -1,0 +1,178 @@
+/* src/ui/styles/loaded-dice.css */
+.dndm-loaded-dice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dndm-spacing-sm);
+}
+
+.dndm-loaded-keys-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--dndm-spacing-xs);
+  padding: var(--dndm-spacing-xs) var(--dndm-spacing-sm);
+  background: var(--dndm-color-surface-sunken);
+  border: 1px solid var(--dndm-color-border-subtle);
+  border-radius: var(--dndm-radius-sm);
+  font-size: 0.75rem;
+  color: var(--dndm-color-text-muted);
+}
+
+.dndm-held-key-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: monospace;
+  font-weight: 700;
+  background: var(--dndm-color-surface-elevated);
+  color: var(--dndm-color-accent);
+  padding: 2px 6px;
+  border-radius: var(--dndm-radius-sm);
+  border: 1px solid var(--dndm-color-border);
+}
+
+.dndm-held-key-indicator--active {
+  background: var(--dndm-color-accent);
+  color: var(--dndm-color-surface);
+  border-color: var(--dndm-color-accent);
+}
+
+.dndm-loaded-rule-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dndm-spacing-xs);
+}
+
+.dndm-loaded-rule-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--dndm-spacing-xs) var(--dndm-spacing-sm);
+  background: var(--dndm-color-surface-elevated);
+  border: 1px solid var(--dndm-color-border);
+  border-radius: var(--dndm-radius-sm);
+  gap: var(--dndm-spacing-xs);
+  user-select: none;
+}
+
+.dndm-loaded-rule-card--disabled {
+  opacity: 0.5;
+}
+
+.dndm-loaded-rule-drag-handle {
+  cursor: grab;
+  color: var(--dndm-color-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+}
+
+.dndm-loaded-rule-drag-handle:active {
+  cursor: grabbing;
+}
+
+.dndm-loaded-rule-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+}
+
+.dndm-loaded-rule-name {
+  font-weight: 600;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dndm-loaded-rule-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.dndm-loaded-rule-badge {
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: var(--dndm-radius-pill);
+  background: var(--dndm-color-accent-dim);
+  color: var(--dndm-color-accent);
+}
+
+.dndm-loaded-rule-badge--condition {
+  background: rgba(100, 150, 255, 0.15);
+  color: #70a0ff;
+}
+
+.dndm-loaded-rule-badge--mod {
+  background: rgba(255, 180, 50, 0.15);
+  color: #ffb432;
+}
+
+.dndm-loaded-rule-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Modal Rule Editor */
+.dndm-rule-builder-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dndm-spacing-xs);
+  margin-bottom: var(--dndm-spacing-sm);
+}
+
+.dndm-rule-item-row {
+  display: flex;
+  align-items: center;
+  gap: var(--dndm-spacing-xs);
+  padding: var(--dndm-spacing-xs);
+  background: var(--dndm-color-surface-sunken);
+  border: 1px solid var(--dndm-color-border-subtle);
+  border-radius: var(--dndm-radius-sm);
+}
+
+.dndm-rule-item-row select,
+.dndm-rule-item-row input {
+  font-size: 0.8rem;
+}
+
+/* Roll Log Tampering indicators */
+.dndm-rolllog-cue--subtle {
+  display: inline-block;
+  color: #ff6060;
+  font-size: 0.8rem;
+  margin-left: 6px;
+  cursor: help;
+}
+
+.dndm-rolllog-cue--obvious {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(230, 60, 60, 0.15);
+  border: 1px solid rgba(230, 60, 60, 0.35);
+  color: #ff7070;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: var(--dndm-radius-sm);
+  margin-top: 4px;
+}
+
+.dndm-rolllog-tampered-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.7rem;
+  padding: 1px 5px;
+  border-radius: var(--dndm-radius-pill);
+  background: rgba(240, 160, 40, 0.2);
+  color: #f0a028;
+  border: 1px solid rgba(240, 160, 40, 0.3);
+}

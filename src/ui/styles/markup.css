@@ -1,0 +1,170 @@
+/* Freehand vector markup canvas & palette.
+   The overlay host and wrapper are display:contents so the palette flows
+   as an in-flow item of .dndm-canvas-top-stack (below the header toolbar,
+   shifting when the header wraps), while the drawing surface stays
+   fullscreen behind the stack. */
+
+dndm-markup-overlay {
+  display: contents;
+}
+
+.dndm-markup-overlay {
+  display: contents;
+}
+
+.dndm-markup-canvas {
+  /* Fixed (not absolute): display:contents ancestors provide no containing
+     block, so absolute inset:0 would size to the top-stack. The canvas area
+     is viewport-full, so fixed inset:0 keeps the drawing surface fullscreen. */
+  position: fixed;
+  inset: 0;
+  cursor: crosshair;
+  z-index: 1;
+  touch-action: none;
+  pointer-events: auto;
+  width: 100%;
+  height: 100%;
+}
+
+.dndm-markup-canvas--panning {
+  pointer-events: none !important;
+}
+
+.dndm-markup-canvas--mmb-pan {
+  cursor: grabbing;
+}
+
+.dndm-markup-palette {
+  position: relative;
+  /* Center the pill in the space left of the token rail instead of the full
+     stack width: shifting a centered item left by R/2 (with max-width reduced
+     by R) keeps its right edge exactly R clear of the rail. R comes from
+     --dndm-token-rail-reserve on .dndm-canvas-top-stack. */
+  left: calc(var(--dndm-token-rail-reserve, 48px) / -2);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.25rem;
+  row-gap: 0.35rem;
+  max-width: calc(100% - var(--dndm-token-rail-reserve, 48px));
+  box-sizing: border-box;
+  padding: 0.35rem 0.5rem;
+  /* Toolbar-like chrome (cf. .dndm-canvas-toolbar in shell.css); the ember
+     control accents below stay as the markup color scheme. */
+  background: rgba(20, 17, 14, 0.86);
+  border: 1px solid var(--dndm-border-accent);
+  border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 2;
+  pointer-events: auto;
+  user-select: none;
+}
+
+.dndm-markup-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--dndm-color-text-secondary, #b3a598);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.dndm-markup-btn:hover:not(:disabled) {
+  background: rgba(232, 144, 85, 0.15);
+  color: var(--dndm-color-text-primary, #f5efe6);
+  border-color: rgba(232, 144, 85, 0.3);
+}
+
+.dndm-markup-btn.active {
+  background: rgba(232, 144, 85, 0.25);
+  color: #ffd700;
+  border-color: #e89055;
+}
+
+.dndm-markup-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.dndm-markup-btn svg {
+  display: block;
+}
+
+.dndm-markup-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--dndm-color-border, rgba(232, 144, 85, 0.25));
+  margin: 0 2px;
+}
+
+.dndm-markup-swatch-group,
+.dndm-markup-width-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dndm-markup-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.12s, border-color 0.12s;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+
+.dndm-markup-swatch:hover {
+  transform: scale(1.15);
+}
+
+.dndm-markup-swatch.active {
+  border-color: #ffd700;
+  transform: scale(1.2);
+}
+
+.dndm-markup-width-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
+.dndm-markup-width-btn:hover {
+  background: rgba(232, 144, 85, 0.15);
+}
+
+.dndm-markup-width-btn.active {
+  background: rgba(232, 144, 85, 0.25);
+  border-color: #e89055;
+}
+
+.dndm-markup-width-dot {
+  background: currentColor;
+  border-radius: 50%;
+}
+
+.dndm-markup-preview-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}

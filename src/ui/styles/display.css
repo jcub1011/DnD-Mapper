@@ -1,0 +1,128 @@
+/* Display / Projector Theater Mode */
+
+.dndm-display-view {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  overflow: hidden;
+  user-select: none;
+  z-index: 60;
+  pointer-events: none;
+}
+
+.dndm-display-exit-btn {
+  position: absolute;
+  top: var(--dndm-spacing-md, 12px);
+  right: var(--dndm-spacing-md, 12px);
+  padding: 6px 12px;
+  background: rgba(16, 14, 23, 0.7);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--dndm-color-border, rgba(232, 144, 85, 0.3));
+  border-radius: var(--dndm-radius-pill, 9999px);
+  color: var(--dndm-color-text-secondary, #b3a598);
+  font-size: 12px;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background 0.15s, color 0.15s, opacity 0.2s;
+  opacity: 0.4;
+  z-index: 130;
+}
+
+.dndm-display-exit-btn:hover {
+  opacity: 1;
+  background: rgba(232, 144, 85, 0.2);
+  color: var(--dndm-color-text-primary, #f5efe6);
+  border-color: #e89055;
+}
+
+.dndm-display-roll-ticker {
+  position: absolute;
+  bottom: var(--dndm-spacing-lg, 16px);
+  right: var(--dndm-spacing-lg, 16px);
+  display: flex;
+  flex-direction: column-reverse;
+  gap: var(--dndm-spacing-xs, 6px);
+  max-width: 320px;
+  pointer-events: none;
+  z-index: 120;
+}
+
+.dndm-display-roll-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  background: rgba(16, 14, 23, 0.88);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(232, 144, 85, 0.3);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+  animation: dndm-ticker-fade-in 0.25s ease-out;
+  pointer-events: none;
+}
+
+.dndm-display-roll-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--dndm-color-text-muted, #7c7267);
+}
+
+.dndm-display-roll-roller {
+  font-weight: 600;
+  color: var(--dndm-color-accent-amber, #e89055);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dndm-display-roll-formula {
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.dndm-display-roll-body {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dndm-display-roll-label {
+  font-size: 13px;
+  color: var(--dndm-color-text-primary, #f5efe6);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dndm-display-roll-total {
+  font-size: 20px;
+  font-weight: 700;
+  color: #ffd700;
+  font-family: "Cinzel", Georgia, serif;
+}
+
+.dndm-display-roll-total.crit-success {
+  color: #27ae60;
+  text-shadow: 0 0 8px rgba(39, 174, 96, 0.5);
+}
+
+.dndm-display-roll-total.crit-failure {
+  color: #c0392b;
+  text-shadow: 0 0 8px rgba(192, 57, 43, 0.5);
+}
+
+@keyframes dndm-ticker-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

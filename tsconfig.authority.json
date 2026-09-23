@@ -17,6 +17,19 @@
     "src/authority/kb.ts",
     "src/authority/authority.ts",
     "src/game/types.ts",
-    "src/game/rules.ts"
+    "src/game/rules.ts",
+    "src/game/domain.ts",
+    "src/game/fog.ts",
+    "src/game/snapping.ts",
+    "src/game/stacking.ts",
+    "src/game/dice.ts",
+    "src/game/color.ts",
+    "src/game/visibility.ts",
+    "src/game/ruler.ts",
+    "src/game/wire.ts",
+    "src/game/maps.ts",
+    "src/game/tokens.ts",
+    "src/game/campaignImport.ts"
   ]
 }
+
