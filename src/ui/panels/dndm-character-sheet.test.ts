@@ -851,7 +851,7 @@ describe("<dndm-character-sheet>", () => {
     }
   });
 
-  it("closes the previous popout when reopening instead of orphaning it", async () => {
+  it("focuses the existing popout when reopening the same sheet instead of opening a duplicate", async () => {
     const sheet1 = makeSheet("sheet-1", "Thorin");
     el.sheets = { "sheet-1": sheet1 };
     el.selectedSheetId = "sheet-1";
@@ -865,6 +865,60 @@ describe("<dndm-character-sheet>", () => {
     const makeFake = () => ({
       closed: false,
       close: vi.fn(),
+      focus: vi.fn(),
+      document: { open: vi.fn(), write: vi.fn(), close: vi.fn() },
+    });
+    const first = makeFake();
+    const openSpy = vi
+      .spyOn(window, "open")
+      .mockReturnValueOnce(first as unknown as Window);
+
+    try {
+      const inner = el as unknown as {
+        notesChannel: { postMessage: (...args: unknown[]) => void; close: () => void } | null;
+        notesPopouts: Map<string, unknown>;
+      };
+      const postMessage = vi.fn();
+      inner.notesChannel = { postMessage, close: vi.fn() };
+
+      const popoutBtn = el.querySelector(
+        '.dndm-sheet-notes-container button[aria-label="Open notes in new window"]',
+      ) as HTMLButtonElement;
+      popoutBtn.click();
+      await el.updateComplete;
+      expect(inner.notesPopouts.get("sheet-1")).toBe(first);
+
+      // Reopening the same sheet focuses the live window — no duplicate,
+      // no teardown of the existing window.
+      popoutBtn.click();
+      await el.updateComplete;
+
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      expect(first.focus).toHaveBeenCalledTimes(1);
+      expect(first.close).not.toHaveBeenCalled();
+      expect(inner.notesPopouts.get("sheet-1")).toBe(first);
+      expect(inner.notesPopouts.size).toBe(1);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it("keeps other sheets' popouts open so multiple sheets can be edited concurrently", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin");
+    const sheet2 = makeSheet("sheet-2", "Balin");
+    el.sheets = { "sheet-1": sheet1, "sheet-2": sheet2 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+    el.currentUserId = "dm-1";
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    const makeFake = () => ({
+      closed: false,
+      close: vi.fn(),
+      focus: vi.fn(),
       document: { open: vi.fn(), write: vi.fn(), close: vi.fn() },
     });
     const first = makeFake();
@@ -877,31 +931,62 @@ describe("<dndm-character-sheet>", () => {
     try {
       const inner = el as unknown as {
         notesChannel: { postMessage: (...args: unknown[]) => void; close: () => void } | null;
-        notesPopout: unknown;
+        notesPopouts: Map<string, unknown>;
+        openNotesPopout: (sheet: CharacterSheet, editable: boolean) => void;
       };
-      const postMessage = vi.fn();
-      inner.notesChannel = { postMessage, close: vi.fn() };
+      inner.notesChannel = { postMessage: vi.fn(), close: vi.fn() };
 
-      const popoutBtn = el.querySelector(
-        '.dndm-sheet-notes-container button[aria-label="Open notes in new window"]',
-      ) as HTMLButtonElement;
-      popoutBtn.click();
+      inner.openNotesPopout(sheet1, true);
       await el.updateComplete;
-      expect(inner.notesPopout).toBe(first);
-
-      // Reopening tears down the previous window before installing the new
-      // one, so two live popups never share the same sheetId sync.
-      popoutBtn.click();
+      inner.openNotesPopout(sheet2, true);
       await el.updateComplete;
 
-      expect(first.close).toHaveBeenCalledTimes(1);
-      expect(postMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ type: "notes-close", sheetId: "sheet-1" }),
-      );
-      expect(inner.notesPopout).toBe(second);
+      expect(openSpy).toHaveBeenCalledTimes(2);
+      expect(inner.notesPopouts.get("sheet-1")).toBe(first);
+      expect(inner.notesPopouts.get("sheet-2")).toBe(second);
+      expect(first.close).not.toHaveBeenCalled();
+      expect(second.close).not.toHaveBeenCalled();
     } finally {
       openSpy.mockRestore();
     }
+  });
+
+  it("routes concurrent popout edits to the correct sheet", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin");
+    const sheet2 = makeSheet("sheet-2", "Balin");
+    el.sheets = { "sheet-1": sheet1, "sheet-2": sheet2 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+    el.currentUserId = "dm-1";
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    const onUpdateSheet = vi.fn();
+    el.onUpdateSheet = onUpdateSheet;
+    const inner = el as unknown as {
+      notesChannel: { postMessage: (...args: unknown[]) => void; close: () => void } | null;
+      handleNotesChannelMessage: (msg: unknown) => void;
+    };
+    inner.notesChannel = { postMessage: vi.fn(), close: vi.fn() };
+
+    // Edits arriving from two different popouts converge on their own sheet.
+    inner.handleNotesChannelMessage({
+      type: "notes-edit",
+      sheetId: "sheet-1",
+      notes: "Thorin's saga",
+    });
+    inner.handleNotesChannelMessage({
+      type: "notes-edit",
+      sheetId: "sheet-2",
+      notes: "Balin's saga",
+    });
+    await el.updateComplete;
+    vi.advanceTimersByTime(1000);
+
+    expect(onUpdateSheet).toHaveBeenCalledWith("sheet-1", { notes: "Thorin's saga" });
+    expect(onUpdateSheet).toHaveBeenCalledWith("sheet-2", { notes: "Balin's saga" });
   });
 
   it("ignores forged popout edits when the viewer lacks edit permission", async () => {

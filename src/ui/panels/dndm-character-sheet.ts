@@ -158,10 +158,9 @@ export class DndmCharacterSheet extends GameElement {
   @state() private notesModalTab: NotesTab = "edit";
   @state() private modalDraftNotes: string | null = null;
 
-  // Connected notes popout window (BroadcastChannel live sync).
+  // Connected notes popout windows (BroadcastChannel live sync), one per sheet.
   private notesChannel: BroadcastChannel | null = null;
-  private notesPopout: Window | null = null;
-  private notesPopoutSheetId: string | null = null;
+  private notesPopouts = new Map<string, Window>();
   private notesPopoutPoll: number | null = null;
 
   // Draft inputs for 300ms debouncing
@@ -199,7 +198,7 @@ export class DndmCharacterSheet extends GameElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.clearDebounceTimers();
-    this.closeNotesPopout(true);
+    this.closeAllNotesPopouts(true);
     if (this.notesChannel) {
       this.notesChannel.close();
       this.notesChannel = null;
@@ -254,13 +253,18 @@ export class DndmCharacterSheet extends GameElement {
   override updated(changedProperties: Map<string, unknown>): void {
     super.updated(changedProperties);
     this.autosizeRailNotes();
-    // Live-sync the connected popout (and modal draft mirror) after renders.
-    if (this.notesPopout && this.notesPopoutSheetId) {
-      if (this.notesPopout.closed) {
-        this.notesPopout = null;
-        this.notesPopoutSheetId = null;
-      } else {
-        this.pushNotesState(this.notesPopoutSheetId);
+    // Live-sync every connected popout after renders.
+    if (this.notesPopouts.size > 0) {
+      for (const [sheetId, popout] of [...this.notesPopouts]) {
+        if (popout.closed) {
+          this.notesPopouts.delete(sheetId);
+        } else {
+          this.pushNotesState(sheetId);
+        }
+      }
+      if (this.notesPopouts.size === 0 && this.notesPopoutPoll !== null) {
+        window.clearInterval(this.notesPopoutPoll);
+        this.notesPopoutPoll = null;
       }
     }
   }
@@ -334,6 +338,7 @@ export class DndmCharacterSheet extends GameElement {
   }
 
   private handleDeleteSheet(sheetId: string): void {
+    this.closeNotesPopoutFor(sheetId, true);
     this.settingsModalOpen = false;
     this.dispatchEvent(
       new CustomEvent<{ sheetId: string }>("delete-sheet", {
@@ -483,7 +488,12 @@ export class DndmCharacterSheet extends GameElement {
 
   private pushNotesState(sheetId: string): void {
     if (!this.notesChannel) return;
-    if (!this.notesPopout || this.notesPopout.closed || this.notesPopoutSheetId !== sheetId) return;
+    const popout = this.notesPopouts.get(sheetId);
+    if (!popout) return;
+    if (popout.closed) {
+      this.notesPopouts.delete(sheetId);
+      return;
+    }
     const sheet = this.sheets[sheetId];
     if (!sheet) return;
     const state = this.getEffectiveState();
@@ -509,19 +519,28 @@ export class DndmCharacterSheet extends GameElement {
       if (!mayEditSheet(state, userId, sheet)) return;
       this.applyNotesEdit(data.sheetId, data.notes, true);
     } else if (data.type === "notes-leave") {
-      if (this.notesPopoutSheetId === data.sheetId) {
-        this.notesPopout = null;
-        this.notesPopoutSheetId = null;
-      }
+      this.notesPopouts.delete(data.sheetId);
     }
   }
 
   private openNotesPopout(sheet: CharacterSheet, editable: boolean): void {
+    // One window per sheet: re-clicking focuses the existing window instead
+    // of opening a duplicate. Other sheets' windows are left untouched so
+    // multiple character sheets can be edited concurrently.
+    const existing = this.notesPopouts.get(sheet.id);
+    if (existing && !existing.closed) {
+      try {
+        existing.focus();
+      } catch {
+        // Focus is best-effort — the window is still usable without it.
+      }
+      this.pushNotesState(sheet.id);
+      return;
+    }
+    if (existing) {
+      this.notesPopouts.delete(sheet.id);
+    }
     const notes = this.resolveNotesValue(sheet);
-    // Tear down any previous popout BEFORE opening the replacement: the new
-    // window shares the same sheetId filter, so a post-assign notes-close
-    // would kill the fresh window instead of the orphan.
-    this.closeNotesPopout(true);
     let popout: Window | null;
     try {
       popout = window.open("", "_blank", "width=980,height=680");
@@ -552,45 +571,71 @@ export class DndmCharacterSheet extends GameElement {
       }
       return;
     }
-    this.notesPopout = popout;
-    this.notesPopoutSheetId = sheet.id;
+    this.notesPopouts.set(sheet.id, popout);
     this.pushNotesState(sheet.id);
-    if (this.notesPopoutPoll !== null) {
-      window.clearInterval(this.notesPopoutPoll);
-    }
+    this.ensureNotesPopoutPoll();
+  }
+
+  private ensureNotesPopoutPoll(): void {
+    if (this.notesPopoutPoll !== null) return;
     this.notesPopoutPoll = window.setInterval(() => {
-      if (this.notesPopout?.closed) {
-        this.notesPopout = null;
-        this.notesPopoutSheetId = null;
-        if (this.notesPopoutPoll !== null) {
-          window.clearInterval(this.notesPopoutPoll);
-          this.notesPopoutPoll = null;
+      for (const [sheetId, popout] of [...this.notesPopouts]) {
+        if (popout.closed) {
+          this.notesPopouts.delete(sheetId);
         }
+      }
+      if (this.notesPopouts.size === 0 && this.notesPopoutPoll !== null) {
+        window.clearInterval(this.notesPopoutPoll);
+        this.notesPopoutPoll = null;
       }
     }, 500);
   }
 
-  private closeNotesPopout(notify: boolean): void {
-    if (this.notesPopoutPoll !== null) {
-      window.clearInterval(this.notesPopoutPoll);
-      this.notesPopoutPoll = null;
-    }
-    const old = this.notesPopout;
-    const oldSheetId = this.notesPopoutSheetId;
-    this.notesPopout = null;
-    this.notesPopoutSheetId = null;
-    if (old && !old.closed) {
+  private closeNotesPopoutFor(sheetId: string, notify: boolean): void {
+    const old = this.notesPopouts.get(sheetId);
+    if (!old) return;
+    this.notesPopouts.delete(sheetId);
+    if (!old.closed) {
       try {
         old.close();
       } catch {
         // Popup already gone — nothing to clean up.
       }
     }
-    if (notify && this.notesChannel && oldSheetId) {
+    if (notify && this.notesChannel) {
       try {
-        this.notesChannel.postMessage({ type: "notes-close", sheetId: oldSheetId });
+        this.notesChannel.postMessage({ type: "notes-close", sheetId });
       } catch {
         // Channel already torn down — nothing to notify.
+      }
+    }
+    if (this.notesPopouts.size === 0 && this.notesPopoutPoll !== null) {
+      window.clearInterval(this.notesPopoutPoll);
+      this.notesPopoutPoll = null;
+    }
+  }
+
+  private closeAllNotesPopouts(notify: boolean): void {
+    if (this.notesPopoutPoll !== null) {
+      window.clearInterval(this.notesPopoutPoll);
+      this.notesPopoutPoll = null;
+    }
+    const entries = [...this.notesPopouts];
+    this.notesPopouts.clear();
+    for (const [sheetId, old] of entries) {
+      if (!old.closed) {
+        try {
+          old.close();
+        } catch {
+          // Popup already gone — nothing to clean up.
+        }
+      }
+      if (notify && this.notesChannel) {
+        try {
+          this.notesChannel.postMessage({ type: "notes-close", sheetId });
+        } catch {
+          // Channel already torn down — nothing to notify.
+        }
       }
     }
   }
