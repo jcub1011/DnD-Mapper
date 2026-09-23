@@ -5,6 +5,7 @@ import { isFullMap, toMapSummary } from "../game/domain.js";
 import { deleteDatabase } from "./db.js";
 import { captureFingerprint, isFingerprintEqual, LibraryService } from "./libraryService.js";
 import { AUTO_SLOT_ID } from "./schema.js";
+import { MatchView } from "../game/view.js";
 
 function createMockState(): DndMapperState {
   const map1: GameMap = {
@@ -342,8 +343,40 @@ describe("LibraryService and Sharded Persistence", () => {
       }
     });
 
-    it("still deletes truly removed maps (deleted is not unloaded)", async () => {
+    it("save-after-load persists a complete campaign, including unvisited maps", async () => {
+      // Phase 03: loading swaps the slot directly into the host store, so the
+      // host truth holds every map in full — even ones never made active.
+      // Saving that truth (not a projection) must persist all of them.
       const mapA = createMockState().maps[0] as GameMap;
+      const mapB = makeSecondMap();
+      const slotState: DndMapperState = {
+        ...createMockState(),
+        phase: "Lobby",
+        maps: [mapA, mapB],
+        activeMapId: "map-1",
+        dmPlayerId: null,
+      };
+      const host = new MatchView();
+      host.setRoster([{ id: "dm-1", displayName: "DM" }]);
+      host.applyLoaded(slotState);
+
+      // map-2 was never visited (never active) yet must save completely.
+      await service.saveSlot("manual-after-load", "After Load", host.state);
+
+      expect(service.lastSkippedMapIds).toHaveLength(0);
+
+      const loaded = await service.loadSlot("manual-after-load");
+      expect(loaded).not.toBeNull();
+      expect(loaded!.maps).toHaveLength(2);
+      for (const m of loaded!.maps) {
+        expect(isFullMap(m)).toBe(true);
+      }
+      const reloadedB = loaded!.maps.find((m) => m.id === "map-2") as GameMap;
+      expect(reloadedB.tokens).toHaveLength(1);
+      expect(reloadedB.tokens[0].name).toBe("Rogue");
+    });
+
+    it("still deletes truly removed maps (deleted is not unloaded)", async () => {      const mapA = createMockState().maps[0] as GameMap;
       const mapB = makeSecondMap();
       await service.flushAutoSave({
         ...createMockState(),

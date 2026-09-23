@@ -17,7 +17,6 @@ import type {
   AttributeRow,
   AttributeSchema,
   AttributeValue,
-  CampaignHeader,
   CenterViewportRequest,
   CharacterSheet,
   CustomTemplate,
@@ -142,21 +141,10 @@ export type Intent =
   | { readonly kind: "saveCampaign"; readonly slotName?: string }
   | { readonly kind: "loadCampaign"; readonly slotId: string }
   | { readonly kind: "deleteCampaignSave"; readonly slotId: string }
-  // campaign loading
+  // campaign loading (direct host swap — see MatchView.applyLoaded; the old
+  // chunked beginImport/importChunk/commitImport protocol was removed in
+  // Phase 03: the host holds full maps, so no chunk budget applies)
   | { readonly kind: "requestMap"; readonly mapId: string }
-  | {
-      readonly kind: "beginImport";
-      readonly campaign: CampaignHeader;
-      readonly chunkCount: number;
-      readonly token?: string;
-    }
-  | {
-      readonly kind: "importChunk";
-      readonly token: string;
-      readonly index: number;
-      readonly maps: readonly GameMap[];
-    }
-  | { readonly kind: "commitImport"; readonly token: string }
   | { readonly kind: "startSession" }
   // sheets (10 intents; assignCharacterToPlayer in Phase 11)
   | { readonly kind: "createSheet"; readonly characterName: string; readonly scopedMapId?: string | null; readonly ownerUserId?: string | null; readonly color?: string | null }
@@ -300,9 +288,6 @@ export type Patch =
   | { readonly kind: "hostKeys"; readonly keys: readonly string[] }
   | { readonly kind: "combat"; readonly combat: CombatState | null }
   | { readonly kind: "markup"; readonly mapId: string; readonly markupSvg: string | null };
-
-/** Import chunk budget for campaign streaming (~39% of 512 KiB cap). */
-export const CHUNK_BUDGET = 200_000;
 
 /** Max broadcast frame byte limit guard (~78% of 512 KiB cap). */
 export const MAX_FRAME_BYTES = 400_000;

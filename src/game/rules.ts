@@ -14,7 +14,6 @@ import type {
   AttributeRow,
   AttributeSchema,
   AttributeValue,
-  CampaignHeader,
   CharacterSheet,
   CustomTemplate,
   DndMapperSettings,
@@ -317,8 +316,11 @@ function synthesizeSheetForToken(
  * sheet get a sheet. Sheets without tokens are normal (sheet-only sheets) and
  * are left alone. Missing `colorOverridden` flags on imported sheets default
  * to false.
+ *
+ * Exported for the host direct-load path (`MatchView.applyLoaded`): loaded
+ * slots normalize through the same repair the old chunked `commitImport` ran.
  */
-function ensureBoundPairs(
+export function ensureBoundPairs(
   fullMaps: readonly GameMap[],
   sheets: Readonly<Record<string, CharacterSheet>>,
   _activeMapId: string | null,
@@ -754,41 +756,6 @@ export function projectPatchForPlayer(
   }
 }
 
-// ── Chunked Import Side-Table ────────────────────────────────────────────────
-
-interface PendingImport {
-  readonly campaign: CampaignHeader;
-  readonly totalChunks: number;
-  readonly chunks: Map<number, readonly GameMap[]>;
-  readonly createdAt: number;
-  readonly fromId: string;
-}
-
-const pendingImports = new Map<string, PendingImport>();
-
-/** Stale pending import timeout (5 minutes). */
-const PENDING_IMPORT_TIMEOUT_MS = 5 * 60 * 1000;
-
-export function clearPendingImports(): void {
-  pendingImports.clear();
-}
-
-export function clearPendingImportsForPlayer(playerId: string): void {
-  for (const [token, pending] of pendingImports.entries()) {
-    if (pending.fromId === playerId) {
-      pendingImports.delete(token);
-    }
-  }
-}
-
-function sweepStalePendingImports(now: number): void {
-  for (const [token, pending] of pendingImports.entries()) {
-    if (now - pending.createdAt > PENDING_IMPORT_TIMEOUT_MS) {
-      pendingImports.delete(token);
-    }
-  }
-}
-
 // ── Apply Intent ─────────────────────────────────────────────────────────────
 
 export interface ApplyIntentResult {
@@ -914,8 +881,6 @@ export function applyIntent(
   const intent = action as Record<string, unknown>;
   const kind = intent.kind;
   if (typeof kind !== "string") return null;
-
-  sweepStalePendingImports(now);
 
   switch (kind) {
     // ── Maps ────────────────────────────────────────────────────────────────
@@ -1970,106 +1935,6 @@ export function applyIntent(
         patch: {
           kind: "map",
           map: targetMap,
-        },
-      };
-    }
-
-    // ── Chunked Campaign Import Protocol ────────────────────────────────────
-    case "beginImport": {
-      if (!isDm(state, fromId)) return null;
-      if (
-        !intent.campaign ||
-        typeof intent.campaign !== "object" ||
-        typeof intent.chunkCount !== "number"
-      ) {
-        return null;
-      }
-      const token = typeof intent.token === "string" ? intent.token : generateGuid();
-      pendingImports.set(token, {
-        campaign: intent.campaign as CampaignHeader,
-        totalChunks: intent.chunkCount,
-        chunks: new Map<number, readonly GameMap[]>(),
-        createdAt: now,
-        fromId,
-      });
-      // Broadcast nothing until commitImport
-      return { state, patch: null };
-    }
-
-    case "importChunk": {
-      if (!isDm(state, fromId)) return null;
-      if (
-        typeof intent.token !== "string" ||
-        typeof intent.index !== "number" ||
-        !Array.isArray(intent.maps)
-      ) {
-        return null;
-      }
-      const pending = pendingImports.get(intent.token);
-      if (!pending || pending.fromId !== fromId) return null;
-      pending.chunks.set(intent.index, intent.maps as GameMap[]);
-      return { state, patch: null };
-    }
-
-    case "commitImport": {
-      if (!isDm(state, fromId)) return null;
-      if (typeof intent.token !== "string") return null;
-      const pending = pendingImports.get(intent.token);
-      if (!pending || pending.fromId !== fromId) return null;
-
-      // Ensure all chunks arrived
-      if (pending.chunks.size < pending.totalChunks) {
-        pendingImports.delete(intent.token);
-        return null;
-      }
-
-      const allMaps: GameMap[] = [];
-      for (let i = 0; i < pending.totalChunks; i++) {
-        const chunk = pending.chunks.get(i);
-        if (!chunk) {
-          pendingImports.delete(intent.token);
-          return null;
-        }
-        allMaps.push(...chunk);
-      }
-      pendingImports.delete(intent.token);
-
-      const header = pending.campaign;
-      const activeMapId = header.activeMapId ?? allMaps[0]?.id ?? null;
-      // N:1 binding: imported campaigns may predate sheets entirely —
-      // repair orphan tokens and normalize color flags before going live.
-      // Sheet-only sheets are kept as-is.
-      const repaired = ensureBoundPairs(
-        allMaps,
-        header.sheets ?? {},
-        activeMapId,
-        header.attributeSchema ?? state.attributeSchema,
-      );
-      const nextState: DndMapperState = {
-        ...state,
-        phase: "Playing",
-        settings: header.settings ?? state.settings,
-        attributeSchema: header.attributeSchema ?? state.attributeSchema,
-        activeMapId,
-        sheets: repaired.sheets,
-        customTemplates: header.customTemplates ?? {},
-        globalRollTemplates: header.globalRollTemplates ?? [],
-        activeSchemaTemplateId: header.activeSchemaTemplateId ?? null,
-        initiativeAttributeName: header.initiativeAttributeName ?? null,
-        activeCombat: header.activeCombat ?? null,
-        loadedDiceRules: header.loadedDiceRules ?? [],
-        maps: repaired.maps,
-        // Ephemeral marker so every client can notify once that the DM
-        // loaded a save. Uses the import token as the id (unique per load)
-        // and the authority clock — no `Date` in the sandbox.
-        announcement: { id: intent.token as string, loadedAt: now },
-      };
-
-      return {
-        state: nextState,
-        patch: {
-          kind: "full",
-          state: projectSnapshot(nextState),
         },
       };
     }

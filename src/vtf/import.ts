@@ -467,7 +467,7 @@ export async function importVtf(blob: Blob): Promise<UnpackResult> {
     }
 
     // Pre-pairing exports lack the manual-override flag — default it so the
-    // commitImport backfill can seed colors without recoloring live pairs.
+    // load backfill (ensureBoundPairs) can seed colors without recoloring live pairs.
     sheets.push({ ...sheetVendor, colorOverridden: sheetVendor.colorOverridden ?? false });
   }
 

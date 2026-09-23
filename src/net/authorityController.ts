@@ -111,6 +111,20 @@ export class AuthorityController implements GameController {
     this.authority.sendIntent(intent);
   }
 
+  applyLoadedCampaign(loaded: MatchState): void {
+    // Save/load is a pure-local IndexedDB write with zero network on the way
+    // in: swap the slot directly into the host store (no chunked import
+    // round-trip — the host holds full maps, so no chunk budget applies),
+    // then fan out fresh per-player snapshots to everyone.
+    if (!this.isHost) return;
+    this.view.applyLoaded(loaded);
+    // `broadcastState` is new in the local kb-authority.js and not yet in the
+    // CLI-managed knockbox-phaser.d.ts (do NOT shadow that file — it is
+    // overwritten by `knockbox addon update`). One cast, here, like the
+    // constructor's transport cast above.
+    (this.authority as unknown as { broadcastState(): void }).broadcastState();
+  }
+
   setLobbyOpen(open: boolean): void {
     // Host-enforced: a non-owner's call is ignored rather than failing.
     this.authority.setOpen(open);

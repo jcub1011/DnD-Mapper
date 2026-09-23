@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   applyIntent,
-  clearPendingImports,
   createState,
   isDm,
   mayEditSheet,
@@ -12,7 +11,6 @@ import {
   projectSnapshot,
 } from "./rules";
 import type {
-  CampaignHeader,
   CharacterSheet,
   DndMapperState,
   GameMap,
@@ -29,7 +27,6 @@ const ROSTER = [
 ];
 
 function setupMatch(): DndMapperState {
-  clearPendingImports();
   const state = createState(ROSTER);
   // DM creates initial map
   const res = applyIntent(state, "dm-1", { kind: "createMap", name: "Dungeon Level 1" }, 1000);
@@ -379,74 +376,21 @@ describe("applyIntent — images & fog", () => {
   });
 });
 
-describe("applyIntent — chunked campaign import protocol", () => {
-  it("stages and commits a multi-chunk campaign atomically", () => {
-    const state = createState(ROSTER);
-    const mapA = { ...setupMatch().maps[0], id: "map-a", name: "Map Alpha" };
-    const mapB = { ...mapA, id: "map-b", name: "Map Beta" };
-
-    const campaignHeader: CampaignHeader = {
-      title: "Epic Campaign",
-      activeMapId: "map-b",
-    };
-
-    const token = "test-token-123";
-
-    // 1. beginImport
-    const beginRes = applyIntent(
-      state,
-      "dm-1",
-      { kind: "beginImport", token, campaign: campaignHeader, chunkCount: 2 },
-      6000,
-    );
-    expect(beginRes).not.toBeNull();
-    expect(beginRes!.patch).toBeNull(); // No broadcast during staging
-
-    // 2. importChunk index 0
-    const chunk0Res = applyIntent(
-      state,
-      "dm-1",
-      { kind: "importChunk", token, index: 0, maps: [mapA] },
-      6010,
-    );
-    expect(chunk0Res).not.toBeNull();
-    expect(chunk0Res!.patch).toBeNull();
-
-    // Premature commit before all chunks arrive should be rejected
-    expect(applyIntent(state, "dm-1", { kind: "commitImport", token }, 6015)).toBeNull();
-
-    // Re-stage after rejected commit
-    applyIntent(
-      state,
-      "dm-1",
-      { kind: "beginImport", token, campaign: campaignHeader, chunkCount: 2 },
-      6020,
-    );
-    applyIntent(state, "dm-1", { kind: "importChunk", token, index: 0, maps: [mapA] }, 6025);
-
-    // 3. importChunk index 1
-    const chunk1Res = applyIntent(
-      state,
-      "dm-1",
-      { kind: "importChunk", token, index: 1, maps: [mapB] },
-      6030,
-    );
-    expect(chunk1Res).not.toBeNull();
-    expect(chunk1Res!.patch).toBeNull();
-
-    // 4. commitImport
-    const commitRes = applyIntent(state, "dm-1", { kind: "commitImport", token }, 6040);
-    expect(commitRes).not.toBeNull();
-    expect(commitRes!.patch?.kind).toBe("full");
-
-    const liveState = commitRes!.state;
-    expect(liveState.phase).toBe("Playing");
-    expect(liveState.activeMapId).toBe("map-b");
-    expect(liveState.maps).toHaveLength(2);
-    expect(liveState.maps.map((m) => m.id)).toEqual(["map-a", "map-b"]);
-
-    // Ephemeral save-loaded marker for client notifications (DM loads a save)
-    expect(liveState.announcement).toEqual({ id: token, loadedAt: 6040 });
+describe("applyIntent — removed chunked campaign import protocol", () => {
+  it("rejects beginImport/importChunk/commitImport: loading is a direct host swap", () => {
+    const state = setupMatch();
+    expect(
+      applyIntent(
+        state,
+        "dm-1",
+        { kind: "beginImport", token: "t", campaign: {}, chunkCount: 1 },
+        6000,
+      ),
+    ).toBeNull();
+    expect(
+      applyIntent(state, "dm-1", { kind: "importChunk", token: "t", index: 0, maps: [] }, 6010),
+    ).toBeNull();
+    expect(applyIntent(state, "dm-1", { kind: "commitImport", token: "t" }, 6020)).toBeNull();
   });
 });
 

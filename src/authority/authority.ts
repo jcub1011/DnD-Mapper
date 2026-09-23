@@ -17,7 +17,6 @@
 
 import {
   applyIntent,
-  clearPendingImportsForPlayer,
   createState,
   handlePlayerLeft,
   projectSnapshot,
@@ -64,7 +63,6 @@ export function createAuthority(kb: Kb): Authority {
     },
 
     onPlayerLeft(playerId: string): Patch | null {
-      clearPendingImportsForPlayer(playerId);
       const leavingDm = playerId === state.dmPlayerId;
       roster = roster.filter((p) => p.id !== playerId);
 

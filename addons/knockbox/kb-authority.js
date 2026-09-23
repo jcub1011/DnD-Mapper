@@ -130,6 +130,21 @@
   // Convenience for the host's join policy: open/close the lobby to new players.
   KBAuthority.prototype.setOpen = function (open) { this._net.setLobbyOpen(open); };
 
+  // Host only — re-publish the current host state to everyone. Direct host
+  // mutations (e.g. a save-load swap via the host store) bypass the intent
+  // path, so no broadcast would otherwise fire. Emits 'state-changed' so the
+  // host re-renders its own mutation, mirroring the intent branch.
+  //
+  // Stopgap until KnockBox-Games#62 (per-recipient delta hook) lands: this
+  // fans out full per-player snapshots. With #62, host-local mutations should
+  // project a patch per recipient instead.
+  // https://github.com/jcub1011/KnockBox-Games/issues/62
+  KBAuthority.prototype.broadcastState = function () {
+    if (!this._net.isHost) return;
+    this._broadcastState();
+    this.events.emit('state-changed');
+  };
+
   // Wrap a replicated render copy: frozen when dev checks are on, untouched otherwise.
   KBAuthority.prototype._replica = function (v) {
     return this._devChecks ? deepFreeze(v) : v;

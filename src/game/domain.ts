@@ -576,7 +576,7 @@ export type DndMapperPhase = "Lobby" | "Playing";
 
 /**
  * Ephemeral broadcast marker set when the DM loads a saved campaign into the
- * live session (chunked `commitImport`). It is intentionally NOT part of the
+ * live session (host direct-load via `MatchView.applyLoaded`). It is intentionally NOT part of the
  * persisted fingerprint or slot shards: clients toast it once (tracked by id)
  * and it never round-trips through IndexedDB.
  *

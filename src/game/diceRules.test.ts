@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BUILTIN_ROLL_TEMPLATE_IDS } from "./dice.js";
 import type { DndMapperState, RollTemplate } from "./domain.js";
-import { applyIntent, clearPendingImports, createState } from "./rules.js";
+import { applyIntent, createState } from "./rules.js";
 
 const ROSTER = [
   { id: "dm-1", displayName: "Dungeon Master" },
@@ -10,7 +10,6 @@ const ROSTER = [
 ];
 
 function setupMatch(): DndMapperState {
-  clearPendingImports();
   const state = createState(ROSTER);
   // Start session so phase is Playing
   const res = applyIntent(state, "dm-1", { kind: "startSession" }, 1000);

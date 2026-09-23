@@ -48,6 +48,12 @@ export interface GameController {
 
   /** Ask the host to do something. Fire-and-forget; may be rejected silently. */
   sendIntent(intent: Intent): void;
+  /**
+   * Host only — swap a loaded save slot directly into the live session and
+   * fan out fresh per-player snapshots. Pure-local write, zero network on the
+   * way in; a no-op when this browser is not the host. Save/load path only.
+   */
+  applyLoadedCampaign(loaded: MatchState): void;
   /** Owner-only, host-enforced: open or close the lobby to new joins. Ignored for non-owners. */
   setLobbyOpen(open: boolean): void;
   /** Owner-only, host-enforced: remove a player from the lobby. Ignored for non-owners. */

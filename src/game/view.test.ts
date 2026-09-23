@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MatchView } from "./view";
 import type { DndMapperState, GameMap, MapImage, MapSummary, Token } from "./domain";
 import { createDefaultDndMapperState, createDefaultGridConfig, isFullMap } from "./domain";
+import { toMapSummary } from "./domain";
 import type { Patch } from "./types";
 
 function makeMap(id: string, name: string): GameMap {
@@ -278,5 +279,130 @@ describe("MatchView host half", () => {
     guest.applyPatch(patch!);
     expect(guest.state.maps).toHaveLength(1);
     expect(guest.state.maps[0].name).toBe("The Crypt");
+  });
+});
+
+describe("MatchView.applyLoaded (Phase 03 direct save/load swap)", () => {
+  function loadedState(): DndMapperState {
+    const mapA = makeMap("map-a", "Hall");
+    const mapB = { ...makeMap("map-b", "Crypt"), listOrder: 1 };
+    return {
+      ...createDefaultDndMapperState(),
+      phase: "Lobby",
+      maps: [mapA, mapB],
+      activeMapId: "map-b",
+      // Slot shards persist with no DM owner; the host's roster wins.
+      dmPlayerId: null,
+    };
+  }
+
+  function seededHost(): MatchView {
+    const view = new MatchView();
+    view.setRoster([{ id: "dm-1", displayName: "DM" }]);
+    view.applySnapshot({ ...createDefaultDndMapperState("dm-1"), phase: "Playing" });
+    return view;
+  }
+
+  it("swaps the slot into live state and marks it Playing with an announcement", () => {
+    const view = seededHost();
+    view.applyLoaded(loadedState());
+
+    expect(view.state.phase).toBe("Playing");
+    expect(view.state.maps).toHaveLength(2);
+    expect(view.state.maps.map((m) => m.id)).toEqual(["map-a", "map-b"]);
+    expect(view.state.activeMapId).toBe("map-b");
+    expect(view.state.dmPlayerId).toBe("dm-1");
+    expect(view.state.announcement).toBeDefined();
+    expect(typeof view.state.announcement?.id).toBe("string");
+  });
+
+  it("resets ephemeral session state (roll log, host keys, viewport)", () => {
+    const view = seededHost();
+    view.applyLoaded({
+      ...loadedState(),
+      rollLog: [
+        {
+          id: "r-1",
+          rollerUserId: "dm-1",
+          forcedByUserId: null,
+          rolls: [],
+          total: 12,
+          mode: "Normal",
+          flatModifier: 0,
+          attributeModifier: 0,
+          label: "",
+          timestampUtc: "",
+          formula: "1d20",
+          modifierBreakdown: "",
+          tokenId: null,
+          appliedRules: [],
+        },
+      ],
+      hostHeldKeys: ["Shift"],
+      pendingCenterRequest: { mapId: "map-a", x: 1, y: 1, nonce: "n" },
+      focusRect: { mapId: "map-a", x: 0, y: 0, width: 1, height: 1 },
+    });
+
+    expect(view.state.rollLog).toHaveLength(0);
+    expect(view.state.hostHeldKeys).toHaveLength(0);
+    expect(view.state.pendingCenterRequest).toBeNull();
+    expect(view.state.focusRect).toBeNull();
+  });
+
+  it("drops summary maps and falls back to the first full map", () => {
+    const full = makeMap("full-1", "Full Map");
+    const summary = toMapSummary(makeMap("sum-1", "Stale Summary"));
+    const view = seededHost();
+    view.applyLoaded({
+      ...createDefaultDndMapperState(),
+      maps: [full, summary],
+      // Pre-fix slots may point at a map that no longer has content.
+      activeMapId: "sum-1",
+      dmPlayerId: null,
+    });
+
+    expect(view.state.maps).toHaveLength(1);
+    expect(view.state.maps[0].id).toBe("full-1");
+    expect(view.state.activeMapId).toBe("full-1");
+  });
+
+  it("repairs orphan tokens through ensureBoundPairs", () => {
+    const orphan: Token = {
+      id: "tok-orphan",
+      type: "PlayerToken",
+      ownerUserId: null,
+      representsUserId: null,
+      name: "Orphan",
+      color: "#f00",
+      iconKind: "Initial",
+      mapId: "map-a",
+      x: 1.5,
+      y: 1.5,
+      sheetId: null,
+      hidden: false,
+    };
+    const view = seededHost();
+    view.applyLoaded({
+      ...loadedState(),
+      maps: [{ ...makeMap("map-a", "Hall"), tokens: [orphan] }],
+      activeMapId: "map-a",
+    });
+
+    const sheetIds = Object.keys(view.state.sheets);
+    expect(sheetIds).toHaveLength(1);
+    const liveMap = view.state.maps[0];
+    expect(isFullMap(liveMap) && liveMap.tokens[0].sheetId).toBe(sheetIds[0]);
+  });
+
+  it("snapshot after load projects inactive maps as summaries", () => {
+    const view = seededHost();
+    view.applyLoaded(loadedState());
+
+    const snapshot = view.snapshot();
+    expect(snapshot.maps).toHaveLength(2);
+    const active = snapshot.maps.find((m) => m.id === "map-b")!;
+    const inactive = snapshot.maps.find((m) => m.id === "map-a")!;
+    expect(isFullMap(active)).toBe(true);
+    expect(isFullMap(inactive)).toBe(false);
   });
 });

@@ -20,6 +20,8 @@ import type { KnockBoxPlugin } from "../../addons/knockbox/knockbox-phaser";
 import type { MatchState, Patch } from "../game/types";
 import { MatchView } from "../game/view";
 import { isFullMap } from "../game/domain";
+import type { GameMap } from "../game/domain";
+import { createDefaultDndMapperState, createDefaultGridConfig } from "../game/domain";
 import { AuthorityController } from "./authorityController";
 import type { KnockBoxTransport } from "./transport";
 
@@ -319,6 +321,69 @@ describe("AuthorityController", () => {
     expect(guestBytes).not.toContain(tokenId);
     const hostMap = host.view.state.maps[0];
     expect(isFullMap(hostMap) && hostMap.tokens.length === 1).toBe(true);
+
+    host.destroy();
+    guest.destroy();
+  });
+
+  it("applies a loaded save on the host and converges guests (no chunked import)", async () => {
+    function makeLoadedMap(id: string, name: string, listOrder: number): GameMap {
+      return {
+        id,
+        name,
+        grid: createDefaultGridConfig(),
+        images: [],
+        tokens: [],
+        createdUtc: "2026-09-08T00:00:00.000Z",
+        listOrder,
+        defaultSpawnPosition: null,
+        markupSvg: null,
+        fogMask: "",
+      };
+    }
+
+    const hostPeer = makePeer("dm-1");
+    const host = new AuthorityController(asTransport(hostPeer));
+    hostPeer.start();
+    await vi.waitFor(() => expect(hostPeer.players).toHaveLength(1));
+
+    const guestPeer = makePeer("guest-1");
+    const guest = new AuthorityController(asTransport(guestPeer));
+    guestPeer.start();
+    await vi.waitFor(() => expect(guestPeer.players).toHaveLength(2));
+    await vi.waitFor(() => expect(hostPeer.players).toHaveLength(2));
+
+    // A slot as loadSlot returns it: Lobby phase, no DM owner.
+    const loaded: MatchState = {
+      ...createDefaultDndMapperState(),
+      phase: "Lobby",
+      maps: [makeLoadedMap("m1", "Hall", 0), makeLoadedMap("m2", "Crypt", 1)],
+      activeMapId: "m1",
+      dmPlayerId: null,
+    };
+
+    host.applyLoadedCampaign(loaded);
+
+    // Host swaps directly: full maps live, session Playing, roster DM kept.
+    await vi.waitFor(() => expect(host.view.state.maps).toHaveLength(2));
+    expect(host.view.state.phase).toBe("Playing");
+    expect(host.view.state.activeMapId).toBe("m1");
+    expect(host.view.state.dmPlayerId).toBe("dm-1");
+    expect(host.view.state.announcement).toBeDefined();
+
+    // Guest converges to the projected snapshot: active map full, the other
+    // a summary — same fan-out shape as intent-driven mutations.
+    await vi.waitFor(() => expect(guest.state.maps).toHaveLength(2));
+    const guestActive = guest.state.maps.find((m) => m.id === "m1")!;
+    const guestInactive = guest.state.maps.find((m) => m.id === "m2")!;
+    expect(isFullMap(guestActive)).toBe(true);
+    expect(isFullMap(guestInactive)).toBe(false);
+
+    // A guest has no host store: loading there is a silent no-op.
+    guest.applyLoadedCampaign(loaded);
+    await settle();
+    expect(guest.view.state.maps).toHaveLength(0);
+    expect(host.view.state.maps).toHaveLength(2);
 
     host.destroy();
     guest.destroy();

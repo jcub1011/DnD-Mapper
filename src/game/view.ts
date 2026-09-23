@@ -18,7 +18,8 @@ import {
   MAX_ROLL_LOG,
   reconcileSheetValues,
 } from "./domain.js";
-import { applyIntent as applyIntentRules, projectForPlayer, projectSnapshot } from "./rules.js";
+import { applyIntent as applyIntentRules, ensureBoundPairs, projectForPlayer, projectSnapshot } from "./rules.js";
+import { generateGuid } from "./maps.js";
 import type { Patch, PlayerInfo } from "./types.js";
 import { guardSize } from "./wire.js";
 import { createLogger } from "../log.js";
@@ -57,6 +58,46 @@ export class MatchView {
     if (result === null || result.patch === null) return null;
     this._state = result.state;
     return guardSize(result.patch, (msg) => log.error(msg));
+  }
+
+  /**
+   * Host only — directly swaps a loaded save slot into the live session.
+   * This is a pure-local write with zero network: the caller (the host
+   * controller) fans out fresh per-player snapshots afterwards. It replaces
+   * the old chunked `beginImport`/`importChunk`/`commitImport` round-trip —
+   * the host holds full maps, so no chunk budget applies.
+   *
+   * Normalization mirrors what the old `commitImport` ran: summary maps
+   * (pre-fix slots) are unrecoverable from the slot and dropped, orphan
+   * tokens are repaired via `ensureBoundPairs`, ephemeral session state
+   * (`rollLog`, `hostHeldKeys`, viewport) resets, and roster ownership
+   * (`dmPlayerId`) wins over whatever the slot persisted. Sets an
+   * `announcement` marker so clients toast the load once.
+   */
+  applyLoaded(loaded: DndMapperState): void {
+    const fullMaps = loaded.maps.filter(isFullMap);
+    const activeMapId = fullMaps.some((m) => m.id === loaded.activeMapId)
+      ? loaded.activeMapId
+      : (fullMaps[0]?.id ?? null);
+    const repaired = ensureBoundPairs(
+      fullMaps,
+      loaded.sheets ?? {},
+      activeMapId,
+      loaded.attributeSchema,
+    );
+    this._state = {
+      ...loaded,
+      phase: "Playing",
+      activeMapId,
+      maps: repaired.maps,
+      sheets: repaired.sheets,
+      rollLog: [],
+      hostHeldKeys: [],
+      pendingCenterRequest: null,
+      focusRect: null,
+      dmPlayerId: this._state.dmPlayerId,
+      announcement: { id: generateGuid(), loadedAt: Date.now() },
+    };
   }
 
   /**

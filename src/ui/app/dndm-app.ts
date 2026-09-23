@@ -25,11 +25,7 @@ import {
   type Token,
 } from "../../game/domain";
 import type { Intent, MatchState } from "../../game/types";
-import {
-  buildCampaignHeader,
-  hasCampaignContent,
-  sendChunkedImport,
-} from "../../game/campaignImport";
+import { hasCampaignContent } from "../../game/campaignImport";
 import { AUTO_SLOT_ID, AUTO_SLOT_NAME } from "../../storage/schema";
 import { createLogger } from "../../log";
 import type { GameController } from "../../net/controller";
@@ -185,14 +181,11 @@ export class DndmApp extends GameElement {
   private seenRollIds = new Set<string>();
   // Save-loaded announcements already toasted (ids are import tokens).
   private seenAnnouncementIds = new Set<string>();
-  // Boot auto-restore prompt state. The check runs once per session, only for
-  // the DM, and only after the lobby has started (phase Playing).
+  // Boot auto-restore prompt state. The check runs once per session for the
+  // DM: if the `__auto__` slot holds a campaign at boot, it is staged for the
+  // restore prompt. No lobby-phase coupling and no live-state comparison —
+  // guests never prompt (not DM), and the offer is declinable.
   private autoRestoreChecked = false;
-  // Whether the live session was still empty when the first authority state
-  // arrived. Recorded once: a fresh boot starts empty, while a multiplayer
-  // join's first snapshot already carries the room's campaign — those must
-  // never be offered a local auto-save restore.
-  private bootLiveWasEmpty: boolean | null = null;
   @state() private autoRestoreCandidate: MatchState | null = null;
   /**
    * In-flight `requestMap` fetches for maps currently held as summaries.
@@ -332,9 +325,9 @@ export class DndmApp extends GameElement {
       } else {
         this.hostInputTracker?.detach();
       }
-      // Ownership just resolved after the lobby started: if live state already
-      // arrived, this is the moment the auto-restore check can run for the DM.
-      if (!this.autoRestoreChecked && this.match.phase === "Playing") {
+      // Ownership just resolved: this is a moment the boot auto-restore check
+      // can run for the DM (no lobby-phase coupling — see maybeOfferAutoRestore).
+      if (!this.autoRestoreChecked) {
         void this.maybeOfferAutoRestore();
       }
     });
@@ -342,6 +335,10 @@ export class DndmApp extends GameElement {
     this.wireMapScene();
     this.rafId = requestAnimationFrame(this.frame);
     log.info(`controller attached (launch=${this.launchMode})`);
+    // Boot-local auto-restore check: offer the `__auto__` slot if it holds a
+    // campaign. One-shot via autoRestoreChecked; safe to attempt here even if
+    // ownership hasn't resolved yet (the roster hook retries).
+    void this.maybeOfferAutoRestore();
   }
 
   private initRailWidths(): void {
@@ -356,6 +353,17 @@ export class DndmApp extends GameElement {
       return this.match.dmPlayerId === me;
     }
     return this.isOwner;
+  }
+
+  /**
+   * Full host truth for persistence. The rendered `match` may be a projection
+   * (bandwidth snapshot / per-player view); saves must capture complete
+   * campaigns, so the save/load path always uses the controller's host state
+   * when available. On the host this is the live truth; the summary-guard in
+   * `saveSlotInternal` remains as a backstop, not the routine path.
+   */
+  private get hostTruth(): Readonly<MatchState> {
+    return this.controller?.view.state ?? this.match;
   }
 
   private updateRailCssVars(): void {
@@ -678,9 +686,6 @@ export class DndmApp extends GameElement {
   }
 
   private onStateChanged(state: Readonly<MatchState>): void {
-    if (this.controller && this.bootLiveWasEmpty === null && !this.projectorMode) {
-      this.bootLiveWasEmpty = !hasCampaignContent(state);
-    }
     const prevRollLog = this.match?.rollLog ?? [];
     const prevMapId = this.match.activeMapId;
     this.match = state;
@@ -772,7 +777,14 @@ export class DndmApp extends GameElement {
     }
 
     if (this.isDm) {
-      this.libraryService.onStateChanged(state);
+      // Autosave persists the full host truth, not the rendered (possibly
+      // projected) match — save-after-load stays complete for unvisited maps.
+      this.libraryService.onStateChanged(this.hostTruth);
+    }
+    if (!this.controller?.isHost) {
+      // Remote-only hydration: the host holds full maps and never fetches
+      // from itself. Guests converge to full data by requesting each missing
+      // map once; entries clear when the full `map` patch arrives.
       this.requestMissingMaps(state);
     }
 
@@ -809,9 +821,10 @@ export class DndmApp extends GameElement {
       this.seenRollIds = new Set(currentRollLog.map((r) => r.id));
     }
 
-    // DM-only restore prompt, offered once the lobby has started: the live
-    // session began empty but a previous auto-save holds a campaign.
-    if (!this.autoRestoreChecked && this.controller && state.phase === "Playing") {
+    // Boot-local auto-restore: one shot per session for the DM. No
+    // lobby-phase coupling — the check stages whatever the `__auto__` slot
+    // holds at boot.
+    if (!this.autoRestoreChecked && this.controller) {
       void this.maybeOfferAutoRestore();
     }
 
@@ -858,11 +871,12 @@ export class DndmApp extends GameElement {
   }
 
   /**
-   * DM-only background hydration: request full data for any map currently
-   * held as a MapSummary. The authority (server memory) is the sole complete
-   * holder during a live session; each `requestMap` resolves to a `map`
-   * patch that MatchView merges, after which the next auto-save sees full
-   * maps. One flight per map id; entries clear on arrival (or removal).
+   * Remote-only background hydration: request full data for any map currently
+   * held as a MapSummary. The host never calls this (it holds full maps — a
+   * self-`requestMap` would be a pointless round-trip); each `requestMap`
+   * resolves to a `map` patch that MatchView merges, after which the next
+   * auto-save sees full maps. One flight per map id; entries clear on arrival
+   * (or removal).
    */
   private requestMissingMaps(state: Readonly<MatchState>): void {
     if (this.projectorMode) return;
@@ -883,12 +897,15 @@ export class DndmApp extends GameElement {
 
   /**
    * Map selection always pairs `setActiveMap` with a `requestMap` when the
-   * target is currently a summary — switching alone only broadcasts the id,
-   * leaving the newly active map without tokens/images until fetched.
-   * Requesting an already-full map is harmless (authority re-sends it).
+   * target is currently a summary AND this browser is not the host — switching
+   * alone only broadcasts the id, leaving the newly active map without
+   * tokens/images until fetched. The host holds full maps, so it never
+   * double-sends to itself; requesting an already-full map is harmless
+   * (authority re-sends it).
    */
   private selectMap(id: string): void {
     this.send({ kind: "setActiveMap", mapId: id });
+    if (this.controller?.isHost) return;
     const target = this.match.maps.find((m) => m.id === id);
     if (target && !isFullMap(target) && !this.pendingMapFetches.has(id)) {
       this.pendingMapFetches.add(id);
@@ -898,14 +915,19 @@ export class DndmApp extends GameElement {
 
   /**
    * Applies a loaded slot state to the live session: re-publishes its image
-   * blobs, then streams the full campaign (header + maps) through the chunked
-   * import protocol. Replaces the old beginImport-only flow, which staged an
-   * import but never sent chunks or committed — a silent no-op.
+   * blobs, then swaps the slot directly into the host store (pure-local
+   * write, zero network on the way in) and fans out fresh per-player
+   * snapshots. Host only — guests have no host store to swap.
    */
   private async applyLoadedCampaign(
     loaded: Readonly<MatchState>,
     displayName: string,
   ): Promise<void> {
+    if (!this.controller?.isHost) {
+      log.warn(`ignoring load of "${displayName}": this browser is not the host`);
+      toastService.error(`Could not load save "${displayName}" (not the host).`);
+      return;
+    }
     try {
       for (const map of loaded.maps) {
         if ("images" in map) {
@@ -920,10 +942,11 @@ export class DndmApp extends GameElement {
       // Slot shards should be full maps (the storage guard skips summaries);
       // the state type stays wider because live snapshots project inactive
       // maps, and pre-fix slots may still contain summary shards. Those are
-      // unrecoverable from the slot — drop them loudly instead of silently.
+      // unrecoverable from the slot — the host drops them loudly instead of
+      // silently.
       const fullMaps = loaded.maps.filter(isFullMap);
       const dropped = loaded.maps.length - fullMaps.length;
-      sendChunkedImport((intent) => this.send(intent), buildCampaignHeader(loaded), fullMaps);
+      this.controller.applyLoadedCampaign(loaded);
       if (dropped > 0) {
         const names = loaded.maps
           .filter((m) => !isFullMap(m))
@@ -943,18 +966,15 @@ export class DndmApp extends GameElement {
   }
 
   /**
-   * One-shot check (DM only, after the lobby started): if the live session
-   * began empty but the auto-save slot holds a campaign, stage it for the
-   * restore prompt. Reads the slot fresh at start time so lobby-phase tweaks
-   * are reflected in what gets offered.
+   * One-shot boot check (DM only): if the `__auto__` slot holds a campaign,
+   * stage it for the restore prompt. No lobby-phase coupling and no live-state
+   * comparison — the offer is declinable, and guests never prompt.
    */
   private async maybeOfferAutoRestore(): Promise<void> {
-    if (this.autoRestoreChecked || !this.isDm || this.bootLiveWasEmpty !== true) return;
+    if (this.autoRestoreChecked || !this.isDm) return;
     this.autoRestoreChecked = true;
     // One-shot decision log so a missing prompt is diagnosable from the console.
-    log.info(
-      `auto-restore check: isDm=${String(this.isDm)} bootWasEmpty=${String(this.bootLiveWasEmpty)}`,
-    );
+    log.info(`auto-restore check: isDm=${String(this.isDm)}`);
     try {
       const auto = await this.libraryService.loadSlot(AUTO_SLOT_ID);
       const hasContent = !!auto && hasCampaignContent(auto);
@@ -1015,8 +1035,9 @@ export class DndmApp extends GameElement {
     // A refresh/close inside the 500 ms debounce window would otherwise lose
     // the last edits. Fire-and-forget: the page is going away, but IndexedDB
     // writes issued synchronously in the handler usually still commit.
+    // Flushes the full host truth so unvisited maps persist completely.
     try {
-      void this.libraryService.flushAutoSave(this.match).catch((err: unknown) => {
+      void this.libraryService.flushAutoSave(this.hostTruth).catch((err: unknown) => {
         log.warn(`pagehide auto-save flush failed: ${String(err)}`);
       });
     } catch (err) {
@@ -1161,7 +1182,7 @@ export class DndmApp extends GameElement {
 
                     <dndm-saves-panel
                       .libraryService=${this.libraryService}
-                      .currentState=${this.match}
+                      .currentState=${this.hostTruth}
                       .onLoadSlotState=${(loaded: MatchState, slotName: string) => {
                         void this.applyLoadedCampaign(loaded, slotName);
                       }}

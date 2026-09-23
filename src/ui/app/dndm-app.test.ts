@@ -18,9 +18,13 @@ function createMockController(options: {
   isOwner?: boolean;
   isHost?: boolean;
   state?: Partial<MatchState>;
-}): GameController & { mockSendIntent: ReturnType<typeof vi.fn> } {
+}): GameController & {
+  mockSendIntent: ReturnType<typeof vi.fn>;
+  mockApplyLoadedCampaign: ReturnType<typeof vi.fn>;
+} {
   const events = new Emitter<ControllerEvents>();
   const mockSendIntent = vi.fn();
+  const mockApplyLoadedCampaign = vi.fn();
   const mockSetLobbyOpen = vi.fn();
   const mockKickPlayer = vi.fn();
   const mockDestroy = vi.fn();
@@ -39,10 +43,12 @@ function createMockController(options: {
     state,
     events,
     sendIntent: mockSendIntent,
+    applyLoadedCampaign: mockApplyLoadedCampaign,
     setLobbyOpen: mockSetLobbyOpen,
     kickPlayer: mockKickPlayer,
     destroy: mockDestroy,
     mockSendIntent,
+    mockApplyLoadedCampaign,
   };
 }
 
@@ -496,7 +502,7 @@ describe("<dndm-app> Application Shell", () => {
       await scrubber.detach();
     });
 
-    it("offers the auto-save after the lobby starts when the boot began empty", async () => {
+    it("offers the auto-save at boot when the auto-save holds a campaign", async () => {
       await seedAutoSave();
 
       const controller = createMockController({
@@ -507,25 +513,28 @@ describe("<dndm-app> Application Shell", () => {
       app.attach(controller);
       await app.updateComplete;
 
-      // Boot in the lobby: no prompt yet.
+      // Boot-local check: no lobby-phase coupling — the candidate is staged
+      // straight from the `__auto__` slot, even while still in the lobby.
       controller.events.emit("roster", {
         players: [{ id: "dm-user", displayName: "DM" }],
         ownerId: "dm-user",
         isOwner: true,
       });
-      controller.events.emit("changed", { state: controller.view.state });
       await app.updateComplete;
       await new Promise((r) => setTimeout(r, 50));
       await app.updateComplete;
-      expect(app.querySelector("dndm-lobby")).not.toBeNull();
-      expect(findRestorePrompt()).toBeNull();
 
-      // Lobby starts (still an empty campaign): the prompt appears.
+      const candidate = (
+        app as unknown as { autoRestoreCandidate: MatchState | null }
+      ).autoRestoreCandidate;
+      expect(candidate).not.toBeNull();
+      expect(candidate!.maps.map((m) => m.name)).toContain("Saved Dungeon");
+
+      // The prompt itself renders once the Playing shell exists.
       controller.events.emit("changed", {
         state: { ...controller.view.state, phase: "Playing" },
       });
       await app.updateComplete;
-      await new Promise((r) => setTimeout(r, 50));
       await app.updateComplete;
 
       const confirm = findRestorePrompt();
@@ -533,9 +542,8 @@ describe("<dndm-app> Application Shell", () => {
       expect(confirm?.isOpen).toBe(true);
     });
 
-    it("never prompts when the first snapshot already has campaign content", async () => {
-      await seedAutoSave();
-
+    it("stays closed when the auto-save holds no campaign", async () => {
+      // No seed: the `__auto__` slot is empty.
       const controller = createMockController({
         playerId: "dm-user",
         isOwner: true,
@@ -561,6 +569,38 @@ describe("<dndm-app> Application Shell", () => {
 
       // The prompt element exists in the Playing shell but stays closed.
       expect(findRestorePrompt()?.isOpen).toBe(false);
+    });
+
+    it("never prompts non-DM players even when an auto-save exists", async () => {
+      await seedAutoSave();
+
+      const controller = createMockController({
+        playerId: "player-2",
+        isOwner: false,
+        state: {
+          phase: "Playing",
+          maps: [makeMap("room-1", "Room Map")],
+          activeMapId: "room-1",
+          dmPlayerId: "dm-user",
+        },
+      });
+      app.attach(controller);
+      await app.updateComplete;
+
+      controller.events.emit("roster", {
+        players: [
+          { id: "dm-user", displayName: "DM" },
+          { id: "player-2", displayName: "Bob" },
+        ],
+        ownerId: "dm-user",
+        isOwner: false,
+      });
+      controller.events.emit("changed", { state: controller.view.state });
+      await app.updateComplete;
+      await new Promise((r) => setTimeout(r, 50));
+      await app.updateComplete;
+
+      expect(findRestorePrompt()?.isOpen ?? false).toBe(false);
     });
 
     it("a boot-time empty lobby flush never wipes a populated auto-save", async () => {
@@ -616,12 +656,15 @@ describe("<dndm-app> Application Shell", () => {
         isOwner: true,
       });
       // DM creates a map: new state object, as the authority would publish.
+      // On the host the published state IS the host truth, so the mock's
+      // view.state advances with the event (autosave persists host truth).
       const liveWithMap: MatchState = {
         ...controller.view.state,
         phase: "Playing",
         maps: [makeMap("live-1", "Live Dungeon")],
         activeMapId: "live-1",
       };
+      (controller.view as { state: MatchState }).state = liveWithMap;
       controller.events.emit("changed", { state: liveWithMap });
       await app.updateComplete;
 
@@ -670,12 +713,13 @@ describe("<dndm-app> Application Shell", () => {
       await scrubber.detach();
     });
 
-    it("DM requests full data for summary maps once, then stops after the full map arrives", async () => {
+    it("remote viewer requests full data for summary maps once, then stops after the full map arrives", async () => {
       const mapA = makeMap("map-a", "Hall");
       const fullB = { ...makeMap("map-b", "Crypt"), listOrder: 1 };
       const controller = createMockController({
         playerId: "dm-user",
         isOwner: true,
+        isHost: false,
         state: {
           phase: "Playing",
           maps: [mapA, toMapSummary(fullB)],
@@ -709,6 +753,88 @@ describe("<dndm-app> Application Shell", () => {
         kind: "requestMap",
         mapId: "map-b",
       });
+    });
+
+    it("host never self-fetches summary maps (it holds full maps)", async () => {
+      const mapA = makeMap("map-a", "Hall");
+      const fullB = { ...makeMap("map-b", "Crypt"), listOrder: 1 };
+      const controller = createMockController({
+        playerId: "dm-user",
+        isOwner: true,
+        isHost: true,
+        state: {
+          phase: "Playing",
+          maps: [mapA, toMapSummary(fullB)],
+          activeMapId: "map-a",
+          dmPlayerId: "dm-user",
+        },
+      });
+      app.attach(controller);
+      await app.updateComplete;
+
+      controller.events.emit("changed", { state: controller.view.state });
+      await app.updateComplete;
+
+      expect(controller.mockSendIntent).not.toHaveBeenCalledWith({
+        kind: "requestMap",
+        mapId: "map-b",
+      });
+    });
+  });
+
+  describe("Save loading (Phase 03 direct host swap)", () => {
+    function loadedSlot(): MatchState {
+      const map = makeMap("slot-1", "Slot Dungeon");
+      return {
+        ...createDefaultDndMapperState(),
+        phase: "Lobby",
+        maps: [map],
+        activeMapId: "slot-1",
+      };
+    }
+
+    it("delegates a loaded slot to the host store with zero import intent traffic", async () => {
+      const controller = createMockController({
+        playerId: "dm-user",
+        isOwner: true,
+        isHost: true,
+        state: { phase: "Playing", dmPlayerId: "dm-user" },
+      });
+      app.attach(controller);
+      await app.updateComplete;
+
+      const loaded = loadedSlot();
+      await (
+        app as unknown as {
+          applyLoadedCampaign(s: MatchState, n: string): Promise<void>;
+        }
+      ).applyLoadedCampaign(loaded, "Test Slot");
+      await app.updateComplete;
+
+      expect(controller.mockApplyLoadedCampaign).toHaveBeenCalledWith(loaded);
+      // No beginImport/importChunk/commitImport round-trip.
+      expect(controller.mockSendIntent).not.toHaveBeenCalled();
+    });
+
+    it("refuses to load when this browser is not the host", async () => {
+      const controller = createMockController({
+        playerId: "dm-user",
+        isOwner: true,
+        isHost: false,
+        state: { phase: "Playing", dmPlayerId: "dm-user" },
+      });
+      app.attach(controller);
+      await app.updateComplete;
+
+      await (
+        app as unknown as {
+          applyLoadedCampaign(s: MatchState, n: string): Promise<void>;
+        }
+      ).applyLoadedCampaign(loadedSlot(), "Test Slot");
+      await app.updateComplete;
+
+      expect(controller.mockApplyLoadedCampaign).not.toHaveBeenCalled();
+      expect(controller.mockSendIntent).not.toHaveBeenCalled();
     });
   });
 

@@ -9,7 +9,8 @@ import { createFakeKb } from "./fakeKb";
 import type { FakeKb } from "./fakeKb";
 import type { Authority } from "./kb";
 import type { CharacterSheet, GameMap, GridConfig, MapImage, Token } from "../game/domain";
-import { isFullMap } from "../game/domain";
+import { createDefaultDndMapperState, isFullMap } from "../game/domain";
+import { MatchView } from "../game/view";
 import { encodeFog, fillFog } from "../game/fog";
 import { utf8Length } from "../game/wire";
 import { MAX_FRAME_BYTES } from "../game/types";
@@ -218,15 +219,13 @@ describe("snapshot-size budget test (worst-case campaign)", () => {
   }
 
   it("proves fixture size would exceed 512 KiB without narrowing, but snapshot fits under budget", () => {
-    const { authority } = started();
-
     // 24 realistic heavy maps: 24 × ~33 KB = ~790 KB
     const maps: GameMap[] = [];
     for (let i = 0; i < 24; i++) {
       maps.push(buildHeavyMap(`heavy-map-${i}`, `Massive Dungeon Level ${i}`));
     }
 
-    // N:1 binding: every token ships its character sheet, so the commit
+    // N:1 binding: every token ships its character sheet, so the load
     // backfill synthesizes nothing and the frame stays small.
     const sheets: Record<string, CharacterSheet> = {};
     for (const map of maps) {
@@ -251,34 +250,22 @@ describe("snapshot-size budget test (worst-case campaign)", () => {
       }
     }
 
-    // Stage campaign into authority via chunked import
-    const token = "budget-import";
-    authority.applyIntent("dm-1", {
-      kind: "beginImport",
-      token,
-      campaign: { title: "Huge 24-Map Campaign", activeMapId: maps[0].id, sheets },
-      chunkCount: 24,
+    // Stage the campaign the way a save-load does: direct host swap (Phase
+    // 03). No chunked import round-trip — the host holds full maps.
+    const view = new MatchView();
+    view.setRoster(ROSTER);
+    view.applyLoaded({
+      ...createDefaultDndMapperState(),
+      phase: "Playing",
+      maps,
+      activeMapId: maps[0].id,
+      sheets,
     });
-
-    for (let i = 0; i < 24; i++) {
-      authority.applyIntent("dm-1", {
-        kind: "importChunk",
-        token,
-        index: i,
-        maps: [maps[i]],
-      });
-    }
-
-    const commitPatch = authority.applyIntent("dm-1", {
-      kind: "commitImport",
-      token,
-    });
-    expect(commitPatch).not.toBeNull();
 
     // 1. ASSERT UN-NARROWED STATE FAILS:
     // If we were broadcasting all 24 full maps, it would exceed 512 KiB (524,288 bytes)
     const unNarrowedState = {
-      ...authority.snapshot(null),
+      ...view.snapshot(),
       maps, // all 24 full maps
     };
     const unNarrowedBytes = utf8Length(JSON.stringify(unNarrowedState));
@@ -286,7 +273,7 @@ describe("snapshot-size budget test (worst-case campaign)", () => {
 
     // 2. ASSERT NARROWED SNAPSHOT PASSES:
     // With active-map-only narrowing, snapshot fits comfortably within the 400 KB guardrail
-    const snapshot = authority.snapshot(null);
+    const snapshot = view.snapshot();
     expect(snapshot.maps).toHaveLength(24);
 
     // Active map is full
