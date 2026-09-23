@@ -72,8 +72,9 @@ export function snapImageResize(
   lockAspectRatio = false,
   aspectRatio = 1.0,
   minDimension = 0.1,
+  bypassSnap = false,
 ): ImageResizeResult {
-  const snappedDrag = snapCorner(dragX, dragY, grid);
+  const snappedDrag = bypassSnap ? { x: dragX, y: dragY } : snapCorner(dragX, dragY, grid);
 
   let rawWidth = Math.abs(snappedDrag.x - anchorX);
   let rawHeight = Math.abs(snappedDrag.y - anchorY);
@@ -95,4 +96,33 @@ export function snapImageResize(
   const y = snappedDrag.y < anchorY ? anchorY - height : anchorY;
 
   return { x, y, width, height };
+}
+
+/** Default rotation snap step for image handles (degrees). */
+export const IMAGE_ROTATION_SNAP_DEGREES = 5;
+
+/**
+ * Normalizes any angle to [0, 360).
+ */
+export function normalizeDegrees(degrees: number): number {
+  let normalized = degrees % 360;
+  if (normalized < 0) normalized += 360;
+  // Treat 360 as 0 for a clean range.
+  if (normalized >= 360) normalized -= 360;
+  return normalized;
+}
+
+/**
+ * Snaps a rotation in degrees to the nearest absolute step multiple,
+ * normalized to [0, 360). Ctrl bypass returns the raw angle normalized.
+ */
+export function snapRotation(
+  degrees: number,
+  step: number = IMAGE_ROTATION_SNAP_DEGREES,
+  bypassSnap = false,
+): number {
+  const normalized = normalizeDegrees(degrees);
+  if (bypassSnap) return normalized;
+  const snapped = Math.round(normalized / step) * step;
+  return snapped >= 360 ? 0 : snapped;
 }

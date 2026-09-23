@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GridConfig } from "./domain.js";
-import { snapCorner, snapImageResize, snapToken } from "./snapping.js";
+import { snapCorner, snapImageResize, snapRotation, snapToken } from "./snapping.js";
 
 function makeGrid(snapToGrid: boolean, widthCells = 30, heightCells = 20): GridConfig {
   return {
@@ -105,6 +105,41 @@ describe("snapping", () => {
       const res = snapImageResize(2, 3, 2.01, 3.01, grid, false, 1.0, 0.1);
       expect(res.width).toBe(0.1);
       expect(res.height).toBe(0.1);
+    });
+
+    it("bypasses grid snap when bypassSnap is true (Ctrl free-form resize)", () => {
+      const grid = makeGrid(true, 20, 20);
+      const res = snapImageResize(2, 3, 7.3, 8.7, grid, false, 1.0, 0.1, true);
+      expect(res.x).toBe(2);
+      expect(res.y).toBe(3);
+      expect(res.width).toBeCloseTo(5.3);
+      expect(res.height).toBeCloseTo(5.7);
+    });
+  });
+
+  describe("snapRotation", () => {
+    it("snaps to 5-degree increments by default", () => {
+      expect(snapRotation(12)).toBe(10);
+      expect(snapRotation(13)).toBe(15);
+      expect(snapRotation(12.4)).toBe(10);
+    });
+
+    it("returns raw angle normalized when bypassed (Ctrl)", () => {
+      expect(snapRotation(12.4, 5, true)).toBeCloseTo(12.4);
+    });
+
+    it("normalizes wraparound to [0, 360)", () => {
+      expect(snapRotation(359)).toBe(0);
+      expect(snapRotation(-3)).toBe(355);
+      expect(snapRotation(-1)).toBe(0);
+      expect(snapRotation(362.4, 5, true)).toBeCloseTo(2.4);
+    });
+
+    it("snaps non-multiples to the nearest absolute multiple", () => {
+      expect(snapRotation(7)).toBe(5);
+      expect(snapRotation(8)).toBe(10);
+      expect(snapRotation(12)).toBe(10);
+      expect(snapRotation(13)).toBe(15);
     });
   });
 });

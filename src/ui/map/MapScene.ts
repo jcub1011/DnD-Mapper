@@ -26,7 +26,14 @@ import {
   zoomAtAnchor,
   type ViewportState,
 } from "./viewport";
-import type { CharacterSheet, GameMap, GridConfig, MapImage, Token, FocusRect } from "../../game/domain";
+import type {
+  CharacterSheet,
+  GameMap,
+  GridConfig,
+  MapImage,
+  Token,
+  FocusRect,
+} from "../../game/domain";
 import type { FogMaskB64 } from "../../game/fog";
 import type { AssetSource } from "../../assets/assetSource";
 import { FogLayer } from "./fogLayer";
@@ -346,6 +353,19 @@ export class MapScene extends Phaser.Scene {
     return false;
   }
 
+  /** True when the pointer is over image-layer content (sprite or transform handle). */
+  private isPointerOverImage(pointer: Phaser.Input.Pointer): boolean {
+    try {
+      const hits = this.input.hitTestPointer(pointer) as unknown[];
+      for (const h of hits) {
+        if (this.imageLayer.isImageObject(h)) return true;
+      }
+    } catch {
+      // Headless / unsupported environments: fall back to panning.
+    }
+    return false;
+  }
+
   // ── Camera Navigation ──────────────────────────────────────────────────────
 
   /** Screen point (px) that content should center on: midpoint of the visible canvas between rails. */
@@ -544,9 +564,11 @@ export class MapScene extends Phaser.Scene {
 
       // Middle-click ALWAYS pans from anywhere
       if (isMiddle || (isLeft && mode === "none")) {
-        // Don't steal the gesture from a token (or stack chip) drag: if the
-        // press began on token-layer content, the TokenLayer handlers own it.
+        // Don't steal the gesture from a token (or stack chip) drag, nor from
+        // an image move/resize/rotate gesture: if the press began on
+        // token- or image-layer content, those handlers own it.
         if (isLeft && !isMiddle && this.isPointerOverToken(pointer)) return;
+        if (isLeft && !isMiddle && this.isPointerOverImage(pointer)) return;
         this.isPanning = true;
         this.didMoveDuringPan = false;
         this.panStartX = pointer.x;
