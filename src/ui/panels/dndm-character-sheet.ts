@@ -23,7 +23,7 @@ import {
   resolveEffectiveMaxHp,
   toMapSummary,
 } from "../../game/domain";
-import { mayEditSheet, mayViewSheet, mayViewSheetNotesAndHp } from "../../game/rules";
+import { mayEditSheet, mayViewSheetNotesAndHp } from "../../game/rules";
 import { GameElement } from "../app/GameElement";
 import {
   copyIcon,
@@ -1044,8 +1044,11 @@ export class DndmCharacterSheet extends GameElement {
     const state = this.getEffectiveState();
     const userId = this.currentUserId ?? (this.isDm ? (state.dmPlayerId ?? "") : "");
 
-    // Visible sheets per permission policy
-    const visibleSheets = Object.values(this.sheets).filter((s) => mayViewSheet(state, userId, s));
+    // Sheet visibility is owned by host projection (`projectForPlayer`):
+    // guests only ever receive sheets they may view, so the roster lists
+    // everything it is given. Private-field redaction below stays: the DM
+    // renders the full truth here.
+    const visibleSheets = Object.values(this.sheets);
 
     // Filter by scope and search
     const filteredSheets = visibleSheets.filter((s) => {
@@ -1061,16 +1064,14 @@ export class DndmCharacterSheet extends GameElement {
     });
 
     const activeSheet = this.selectedSheetId ? this.sheets[this.selectedSheetId] : null;
-    const canViewActive = activeSheet ? mayViewSheet(state, userId, activeSheet) : false;
     // The open sheet must stay a member of the roster list: a sheet filtered
     // out by scope or search is not shown open (the selection id is retained,
     // so it reopens when the filter changes back). Popouts are pinned to one
-    // sheet, so scope/search filtering is bypassed there.
+    // sheet, so scope/search filtering is bypassed there. (Visibility itself
+    // is host-projected, so no mayViewSheet gate runs here.)
     const pool = this.isSheetPopout ? visibleSheets : filteredSheets;
     const selectedSheet =
-      canViewActive && activeSheet && pool.some((s) => s.id === activeSheet.id)
-        ? activeSheet
-        : null;
+      activeSheet && pool.some((s) => s.id === activeSheet.id) ? activeSheet : null;
 
     const details = selectedSheet
       ? this.renderSheetDetails(selectedSheet, state, userId)

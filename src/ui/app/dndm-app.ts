@@ -283,7 +283,7 @@ export class DndmApp extends GameElement {
     void this.libraryService.attach();
     this.pendingMapFetches.clear();
     this.controller = controller;
-    this.match = controller.view.state;
+    this.match = controller.state;
     this.seenRollIds = new Set((this.match.rollLog ?? []).map((r) => r.id));
     this.isOwner = controller.isOwner;
     this.assetSource = createAssetSource(
@@ -792,21 +792,17 @@ export class DndmApp extends GameElement {
     for (const roll of newRolls) {
       this.seenRollIds.add(roll.id);
 
-      const isVisible =
-        this.isDm ||
-        state.settings.rollsVisibleToPlayers ||
-        roll.rollerUserId === this.controller?.playerId;
+      // Roll visibility is owned by host projection (`projectForPlayer`):
+      // guests only ever receive rolls they may see, so every new roll in
+      // the replicated log animates.
+      const diceColor = roll.tokenId
+        ? resolveDiceColorForToken(state, roll.tokenId)
+        : resolveDiceColor(state, roll.rollerUserId, this.roster);
+      const fontColor = getReadableTextColor(diceColor);
 
-      if (isVisible) {
-        const diceColor = roll.tokenId
-          ? resolveDiceColorForToken(state, roll.tokenId)
-          : resolveDiceColor(state, roll.rollerUserId, this.roster);
-        const fontColor = getReadableTextColor(diceColor);
-
-        diceOverlay.roll(roll, diceColor, fontColor).catch((err) => {
-          log.warn("Dice roll animation error:", err);
-        });
-      }
+      diceOverlay.roll(roll, diceColor, fontColor).catch((err) => {
+        log.warn("Dice roll animation error:", err);
+      });
     }
 
     if (this.seenRollIds.size > 200) {

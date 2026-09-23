@@ -36,6 +36,7 @@ function createMockController(options: {
     isOwner: options.isOwner ?? true,
     isHost: options.isHost ?? true,
     view: { state },
+    state,
     events,
     sendIntent: mockSendIntent,
     setLobbyOpen: mockSetLobbyOpen,

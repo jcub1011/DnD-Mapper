@@ -18,7 +18,7 @@
  *   6. Strict JSON compatibility; pure TypeScript with no DOM or Node globals.
  */
 
-import type { CharacterSheet, DndMapperState, Token } from "./domain.js";
+import type { CharacterSheet, DndMapperState, MapImage, Token } from "./domain.js";
 
 /** Checks if a user id matches the DM / host id. */
 export function isDm(state: DndMapperState, userId: string | null): boolean {
@@ -70,6 +70,12 @@ export function isTokenVisibleToPlayer(
 ): boolean {
   if (isDmUser) return true;
   return !token.hidden;
+}
+
+/** Determines if a map image is visible to a user. */
+export function isImageVisibleToPlayer(image: MapImage, isDmUser: boolean): boolean {
+  if (isDmUser) return true;
+  return !image.hidden;
 }
 
 /** Determines if a character sheet is visible to a user. */

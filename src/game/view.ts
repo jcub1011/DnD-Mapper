@@ -18,7 +18,7 @@ import {
   MAX_ROLL_LOG,
   reconcileSheetValues,
 } from "./domain.js";
-import { applyIntent as applyIntentRules, projectSnapshot } from "./rules.js";
+import { applyIntent as applyIntentRules, projectForPlayer, projectSnapshot } from "./rules.js";
 import type { Patch, PlayerInfo } from "./types.js";
 import { guardSize } from "./wire.js";
 import { createLogger } from "../log.js";
@@ -60,14 +60,15 @@ export class MatchView {
   }
 
   /**
-   * Host only — full state for sync / join / reconnect.
-   * Phase 1 returns the SHARED projected snapshot for every player; true
-   * per-player filtering lives in Phase 2 (`docs/architecture-rewrite/
-   * phase-02-projection.md`: `projectForPlayer` + per-recipient `guardSize`
-   * fan-out + `perRecipient:true` flip).
+   * Host only — the state projected for one player (sync / join / reconnect,
+   * roster-change re-push). The DM gets the shared snapshot unchanged; every
+   * other player gets `projectForPlayer` filtering (hidden tokens/images
+   * dropped, sheets gated + redacted, rolls/combat/dice gated). Fog stays
+   * broadcast (documented legacy leak).
    */
-  snapshot(_forPlayerId?: string): DndMapperState {
-    return projectSnapshot(this._state);
+  snapshot(forPlayerId?: string): DndMapperState {
+    if (forPlayerId === undefined) return projectSnapshot(this._state);
+    return projectForPlayer(this._state, forPlayerId);
   }
 
   /** Full state snapshot, on join / reconnect. */

@@ -2,7 +2,6 @@ import { html, nothing, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { CharacterSheet, Token } from "../../game/domain";
 import { getReadableTextColor } from "../../game/color";
-import { isTokenVisibleToPlayer } from "../../game/visibility";
 import { GameElement } from "../app/GameElement";
 import { toastService } from "../toast/toastService";
 import "../modals/dndm-token-details-modal";
@@ -71,8 +70,11 @@ export class DndmTokenRail extends GameElement {
 
   private static readonly LONG_PRESS_MS = 500;
 
+  /** Tokens to list. Hiding is owned by host projection
+   *  (`projectForPlayer`): guests never receive hidden tokens, and the DM
+   *  manages the full truth here — so no client-side filter runs. */
   private get visibleTokens(): readonly Token[] {
-    return (this.tokens ?? []).filter((t) => isTokenVisibleToPlayer(t, this.isDm));
+    return (this.tokens ?? []);
   }
 
   private get selectedToken(): Token | null {

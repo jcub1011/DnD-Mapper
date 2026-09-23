@@ -53,7 +53,12 @@ import {
   resolveEffectiveMaxHp,
   toMapSummary,
 } from "./domain.js";
-import { BUILTIN_ROLL_TEMPLATES, executeRoll, validateDiceTerms } from "./dice.js";
+import {
+  BUILTIN_ROLL_TEMPLATES,
+  executeRoll,
+  filterVisibleRolls,
+  validateDiceTerms,
+} from "./dice.js";
 import { seedColorForName } from "./color.js";
 import { snapToken } from "./snapping.js";
 import { clearFog, decodeFog, encodeFog, fillFog, setCellsFogged } from "./fog.js";
@@ -82,6 +87,7 @@ import {
   updateTokenOnMap,
 } from "./tokens.js";
 import type { Patch, PlayerInfo } from "./types.js";
+import { isImageVisibleToPlayer } from "./visibility.js";
 
 // ── Permission Policies ──────────────────────────────────────────────────────
 
@@ -563,6 +569,189 @@ export function projectSnapshot(state: DndMapperState): DndMapperState {
     ...state,
     maps: projectedMaps,
   };
+}
+
+// ── Per-Player Projection (Phase 02) ──────────────────────────────────────────
+//
+// Host-side pure projection: each guest receives only what they may see.
+// AUTHORITY is these functions. Client mirrors (`visibility.ts`, UI filters)
+// are prediction-only or DM-local rendering and must not win.
+//
+// Known leak, kept for legacy parity: fog masks stay broadcast. Documented
+// for DMs; see projectForPlayer.
+
+/** Whether players may see loaded-dice rules at all. Anything but an explicit
+ *  player-visible setting (`VisibleToAll` / legacy `AllPlayers`) is DM-only —
+ *  this gates both `Hidden` and host-only variants without leaking. */
+function areLoadedDiceRulesVisibleToPlayers(state: DndMapperState): boolean {
+  const v = state.settings.loadedDiceRuleVisibility;
+  return v === "VisibleToAll" || v === "AllPlayers";
+}
+
+/** Ids of tokens hidden from non-DM viewers, across all full maps. */
+function hiddenTokenIds(state: DndMapperState): Set<string> {
+  const ids = new Set<string>();
+  for (const m of state.maps) {
+    if (!isFullMap(m)) continue;
+    for (const t of m.tokens) {
+      if (t.hidden) ids.add(t.id);
+    }
+  }
+  return ids;
+}
+
+function projectMapForPlayer(map: GameMap | MapSummary, dm: boolean): GameMap | MapSummary {
+  if (dm || !isFullMap(map)) return map;
+  return {
+    ...map,
+    tokens: map.tokens.filter((t) => !t.hidden),
+    images: map.images.filter((img) => isImageVisibleToPlayer(img, false)),
+  };
+}
+
+/** Projects one sheet: null means "drop" (caller emits `sheetRemoved`). */
+function projectSheetForPlayer(
+  sheet: CharacterSheet,
+  viewer: string,
+  state: DndMapperState,
+): CharacterSheet | null {
+  if (!mayViewSheet(state, viewer, sheet)) return null;
+  if (mayViewSheetNotesAndHp(state, viewer, sheet)) return sheet;
+  return { ...sheet, notes: "", hp: null };
+}
+
+function projectCombatForPlayer(
+  combat: CombatState | null,
+  hiddenIds: Set<string>,
+  dm: boolean,
+): CombatState | null {
+  if (combat === null || dm) return combat;
+  const turnOrder = combat.turnOrder
+    .filter((c) => !hiddenIds.has(c.tokenId))
+    .map((c) => (c.pendingInitiative === null ? c : { ...c, pendingInitiative: null }));
+  return {
+    ...combat,
+    turnOrder,
+    currentTurnIndex:
+      turnOrder.length === 0 ? 0 : Math.min(combat.currentTurnIndex, turnOrder.length - 1),
+  };
+}
+
+/**
+ * Projects authoritative state for one player. The DM fast path returns the
+ * shared bandwidth snapshot unchanged. A null/unknown playerId projects as a
+ * stranger (default-deny).
+ */
+export function projectForPlayer(state: DndMapperState, playerId: string | null): DndMapperState {
+  const viewer = playerId ?? "";
+  const dm = isDm(state, viewer);
+  const snapshot = projectSnapshot(state);
+  if (dm) return snapshot;
+
+  const hiddenIds = hiddenTokenIds(state);
+  const maps = snapshot.maps.map((m) => projectMapForPlayer(m, false));
+  const sheets: Record<string, CharacterSheet> = {};
+  for (const [id, sheet] of Object.entries(snapshot.sheets)) {
+    const projected = projectSheetForPlayer(sheet, viewer, state);
+    if (projected !== null) sheets[id] = projected;
+  }
+  return {
+    ...snapshot,
+    maps,
+    sheets,
+    rollLog: filterVisibleRolls(snapshot.rollLog, viewer, false, state.settings.rollsVisibleToPlayers),
+    activeCombat: projectCombatForPlayer(snapshot.activeCombat, hiddenIds, false),
+    loadedDiceRules: areLoadedDiceRulesVisibleToPlayers(state) ? snapshot.loadedDiceRules : [],
+  };
+}
+
+function hadVisibleToken(prevState: DndMapperState, tokenId: string): boolean {
+  for (const m of prevState.maps) {
+    if (!isFullMap(m)) continue;
+    const token = m.tokens.find((t) => t.id === tokenId);
+    if (token) return !token.hidden;
+  }
+  return false;
+}
+
+function hadVisibleImage(prevState: DndMapperState, imageId: string): boolean {
+  for (const m of prevState.maps) {
+    if (!isFullMap(m)) continue;
+    const image = m.images.find((img) => img.id === imageId);
+    if (image) return isImageVisibleToPlayer(image, false);
+  }
+  return false;
+}
+
+/**
+ * Projects one patch for one player. Returns null when the player learns
+ * nothing from it: a roll they may not see, or a hide-tombstone for something
+ * they never had.
+ *
+ * Tombstones: a newly-hidden token/image projects to `tokenRemoved` /
+ * `imageRemoved` for viewers who had it, null for those who didn't — decided
+ * from `prevState` (pre-mutation). Without `prevState` the safe direction is
+ * assumed (had it): a `tokenRemoved` for an unseen id is a no-op in
+ * `applyPatch`, while withholding from a viewer who had it would leave a
+ * ghost. Future caller: MatchView / the upstream per-recipient delta hook
+ * (KnockBox-Games#62) should pass the pre-mutation state.
+ */
+export function projectPatchForPlayer(
+  patch: Patch,
+  playerId: string | null,
+  state: DndMapperState,
+  prevState: DndMapperState | null = null,
+): Patch | null {
+  const viewer = playerId ?? "";
+  if (isDm(state, viewer)) return patch;
+  switch (patch.kind) {
+    case "full":
+      return { kind: "full", state: projectForPlayer(state, playerId) };
+    case "map":
+      return { ...patch, map: projectMapForPlayer(patch.map, false) as GameMap };
+    case "token": {
+      if (!patch.token.hidden) return patch;
+      const had = prevState ? hadVisibleToken(prevState, patch.token.id) : true;
+      return had ? { kind: "tokenRemoved", tokenId: patch.token.id } : null;
+    }
+    case "tokenRemoved":
+      return patch;
+    case "sheet": {
+      const projected = projectSheetForPlayer(patch.sheet, viewer, state);
+      if (projected === null) return { kind: "sheetRemoved", sheetId: patch.sheet.id };
+      return projected === patch.sheet ? patch : { kind: "sheet", sheet: projected };
+    }
+    case "sheetRemoved":
+      return patch;
+    case "combat":
+      return patch.combat === null
+        ? patch
+        : {
+            kind: "combat",
+            combat: projectCombatForPlayer(patch.combat, hiddenTokenIds(state), false),
+          };
+    case "roll": {
+      const visible =
+        state.settings.rollsVisibleToPlayers || patch.roll.rollerUserId === viewer;
+      return visible ? patch : null;
+    }
+    case "image": {
+      if (isImageVisibleToPlayer(patch.image, false)) return patch;
+      const had = prevState ? hadVisibleImage(prevState, patch.image.id) : true;
+      return had ? { kind: "imageRemoved", imageId: patch.image.id } : null;
+    }
+    case "imageRemoved":
+      return patch;
+    case "loadedDiceRules":
+      return areLoadedDiceRulesVisibleToPlayers(state)
+        ? patch
+        : { kind: "loadedDiceRules", rules: [] };
+    default:
+      // Fog (documented broadcast leak), grid, settings, markup, mapList,
+      // schema, templates, hostKeys, rollLogCleared, viewport, dm, phase —
+      // broadcast as-is.
+      return patch;
+  }
 }
 
 // ── Chunked Import Side-Table ────────────────────────────────────────────────

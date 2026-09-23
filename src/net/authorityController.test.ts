@@ -257,4 +257,70 @@ describe("AuthorityController", () => {
     await settle();
     expect(changes).toBe(0);
   });
+
+  it("projects per player: guests never receive hidden tokens", async () => {
+    const hostPeer = makePeer("dm-1");
+    const host = new AuthorityController(asTransport(hostPeer));
+    hostPeer.start();
+    await vi.waitFor(() => expect(hostPeer.players).toHaveLength(1));
+
+    const guestPeer = makePeer("guest-1");
+    const guest = new AuthorityController(asTransport(guestPeer));
+    guestPeer.start();
+    await vi.waitFor(() => expect(guestPeer.players).toHaveLength(2));
+    await vi.waitFor(() => expect(hostPeer.players).toHaveLength(2));
+
+    host.sendIntent({ kind: "createMap", name: "Dungeon" });
+    await vi.waitFor(() => expect(host.view.state.maps).toHaveLength(1));
+    await vi.waitFor(() => expect(guest.state.maps).toHaveLength(1));
+
+    const mapId = (host.view.state.maps[0] as { id: string }).id;
+
+    // Guest spawns a token (creates a bound sheet pair via full-state sync).
+    guest.sendIntent({
+      kind: "spawnToken",
+      mapId,
+      token: {
+        type: "PlayerToken",
+        name: "Ranger",
+        color: "#0f0",
+        iconKind: "Initial",
+        x: 4.5,
+        y: 4.5,
+        sheetId: null,
+        hidden: false,
+      },
+    });
+    await vi.waitFor(() => {
+      const map = guest.state.maps[0];
+      expect(isFullMap(map) && map.tokens.length === 1).toBe(true);
+    });
+
+    const tokenId = ((): string => {
+      const map = host.view.state.maps[0];
+      if (!isFullMap(map)) throw new Error("expected a full map");
+      return map.tokens[0].id;
+    })();
+
+    // DM hides the token.
+    host.sendIntent({ kind: "setTokenHidden", tokenId, hidden: true });
+    await vi.waitFor(() => {
+      const map = host.view.state.maps[0];
+      expect(isFullMap(map) && map.tokens[0].hidden).toBe(true);
+    });
+
+    // The guest's projected view drops the token entirely — no hidden bytes
+    // cross the wire — while the host keeps the truth.
+    await vi.waitFor(() => {
+      const map = guest.state.maps[0];
+      expect(isFullMap(map) && map.tokens.length === 0).toBe(true);
+    });
+    const guestBytes = JSON.stringify(guest.state);
+    expect(guestBytes).not.toContain(tokenId);
+    const hostMap = host.view.state.maps[0];
+    expect(isFullMap(hostMap) && hostMap.tokens.length === 1).toBe(true);
+
+    host.destroy();
+    guest.destroy();
+  });
 });

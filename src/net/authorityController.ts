@@ -39,9 +39,13 @@ export class AuthorityController implements GameController {
     this.net = net;
 
     // MatchView implements BOTH halves of the model contract. On the host
-    // (DM browser) KBAuthority calls applyIntent/snapshot; on guests it calls
-    // applyPatch/applySnapshot. Broadcast mode until Phase 02 flips
-    // perRecipient on (see docs/architecture-rewrite/phase-02-projection.md).
+    // (DM browser) KBAuthority calls applyIntent/snapshot(forPlayerId); on
+    // guests in per-recipient mode there is no shared model — each guest
+    // renders its own projected view (`currentView`). Deltas are gone in this
+    // mode: every accepted intent re-projects a full per-player snapshot.
+    // Per-recipient patch fan-out (`projectPatchForPlayer` in
+    // `src/game/rules.ts`) activates with the upstream delta hook
+    // (KnockBox-Games#62); until then snapshot fan-out carries it.
     const model: KBModel<MatchState, Patch> = this.view;
 
     // The addon types this parameter as the concrete KnockBoxPlugin. The local
@@ -51,7 +55,7 @@ export class AuthorityController implements GameController {
     // no-server path. Do NOT "fix" this by shadowing the addon's .d.ts: that file
     // is CLI-managed and would be overwritten by `knockbox addon update`.
     this.authority = new KBAuthority<MatchState, Patch>(net as unknown as KnockBoxPlugin, model, {
-      perRecipient: false,
+      perRecipient: true,
     });
 
     this.authority.events.on("state-changed", this.onStateChanged);
@@ -89,6 +93,18 @@ export class AuthorityController implements GameController {
     return this.net.isHost;
   }
 
+  /**
+   * What the local player may render. On the host this is the live truth; on
+   * guests it is the host's per-player projection (`currentView`), which is
+   * null until the first snapshot lands (fall back to the empty local model).
+   */
+  get state(): Readonly<MatchState> {
+    if (!this.isHost && this.authority.currentView) {
+      return this.authority.currentView;
+    }
+    return this.view.state;
+  }
+
   sendIntent(intent: Intent): void {
     // Fire-and-forget. The host validates against ITS state, not ours, and a
     // rejected intent broadcasts nothing at all — we simply never see a change.
@@ -117,7 +133,7 @@ export class AuthorityController implements GameController {
   }
 
   private readonly onStateChanged = (): void => {
-    this.events.emit("changed", { state: this.view.state });
+    this.events.emit("changed", { state: this.state });
   };
 
   private readonly onReady = (): void => {

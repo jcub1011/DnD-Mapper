@@ -197,7 +197,7 @@ export class DndmToolbar extends GameElement {
                   ? "active"
                   : ""}"
                 type="button"
-                title="Paint fog — drag on the map to hide cells"
+                title="Paint fog — drag on the map to hide cells (fog layout is visible to all players; hide tokens/images to conceal them)"
                 @click=${() => this.selectFogPaint()}
               >
                 ${fogPaintIcon()}

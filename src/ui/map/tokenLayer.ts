@@ -10,7 +10,6 @@ import { CELL } from "./viewport";
 import type { CharacterSheet, GridConfig, Token } from "../../game/domain";
 import { TOKEN_RADIUS, TOKEN_OWNER_HALO_RADIUS, TOKEN_STACK_CHIP_RADIUS } from "../../game/domain";
 import { snapToken } from "../../game/snapping";
-import { isTokenVisibleToPlayer } from "../../game/visibility";
 import {
   groupTokensIntoStacks,
   getStackChipPositions,
@@ -99,14 +98,15 @@ export class TokenLayer {
     this.rebuildTokens();
   }
 
-  /** Tokens the current viewer may see. Players exclude hidden tokens so a
-   *  hidden stack-top never masks the visible tokens beneath it. */
+  /** Tokens to stack and render. Hiding is owned by host projection
+   *  (`projectForPlayer`): guests never receive hidden tokens, so no
+   *  client-side filter runs here. The DM renders the full truth, with hidden
+   *  tokens ghosted in `updateVisibility`. */
   private visibleTokens(): readonly Token[] {
-    if (this.isDm) return this.tokens;
-    return this.tokens.filter((t) => isTokenVisibleToPlayer(t, false));
+    return this.tokens;
   }
 
-  /** Stacks built from viewer-visible tokens only, plus a cell-key lookup. */
+  /** Stacks built from the projected tokens, plus a cell-key lookup. */
   private stacksForViewer(): { stacks: TokenStack[]; byCell: Map<string, TokenStack> } {
     const stacks = groupTokensIntoStacks(this.visibleTokens());
     const byCell = new Map<string, TokenStack>();
@@ -159,10 +159,11 @@ export class TokenLayer {
       if (isStackedBehind) {
         container.setVisible(false);
       } else if (!topVisibleById.has(token.id)) {
-        // Hidden from this viewer (players only — DM sees everything).
+        // Stacked behind another token — hidden regardless of viewer.
         container.setVisible(false);
       } else if (token.hidden) {
-        // DM-only branch: DM sees hidden tokens ghosted.
+        // DM-only branch: the DM renders the full truth, so hidden tokens
+        // arrive here and render ghosted. Guests never receive them.
         container.setVisible(true);
         container.setAlpha(0.5);
       } else {

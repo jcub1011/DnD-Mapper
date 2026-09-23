@@ -31,6 +31,13 @@ export interface ControllerEvents {
 export interface GameController {
   /** The replicated state. Read-only: mutating it would just be overwritten. */
   readonly view: { readonly state: Readonly<MatchState> };
+  /**
+   * What the local player may render. On the host this is the live truth
+   * (`view.state`); on guests it is the host's per-player projection, null
+   * until the first snapshot lands (then the empty local model). Prefer this
+   * over `view.state` for rendering.
+   */
+  readonly state: Readonly<MatchState>;
   readonly events: Emitter<ControllerEvents>;
   /** The local player's id ("" until the transport is ready). */
   readonly playerId: string;

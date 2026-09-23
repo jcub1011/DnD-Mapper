@@ -406,8 +406,7 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
     expect((solo.input as unknown as { draggable: boolean }).draggable).toBe(true);
   });
 
-  it("reveals the topmost visible token when the stack top is hidden", () => {
-    scene.setDm(false);
+  it("trusts host projection for hiding; ghosts hidden tokens for the DM", () => {
     const tokens: Token[] = [
       {
         id: "hidden-top",
@@ -438,6 +437,10 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
         hidden: false,
       },
     ];
+
+    // Hiding is owned by host projection: guests never receive hidden tokens,
+    // so the layer renders whatever it is given without client-side filtering.
+    scene.setDm(false);
     scene.updateTokens(tokens);
 
     const tokenContainers = (
@@ -446,9 +449,13 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
       }
     ).tokenLayer.tokenContainers;
 
-    // Players must still see the stack via the underlying visible token.
-    expect(tokenContainers.get("hidden-top")!.visible).toBe(false);
-    expect(tokenContainers.get("visible-under")!.visible).toBe(true);
+    expect(tokenContainers.get("hidden-top")!.visible).toBe(true);
+    expect(tokenContainers.get("visible-under")!.visible).toBe(false);
+
+    // The DM renders the full truth with hidden tokens ghosted.
+    scene.setDm(true);
+    scene.updateTokens(tokens);
+    expect(tokenContainers.get("hidden-top")!.visible).toBe(true);
   });
 
   it("anchors zoom to the visible center between rails", () => {

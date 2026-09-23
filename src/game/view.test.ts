@@ -223,7 +223,7 @@ describe("MatchView host half", () => {
     expect(view.state.maps).toHaveLength(0);
   });
 
-  it("snapshot returns the shared projected snapshot for any player", () => {
+  it("snapshot projects per player: guests lose hidden content, DM keeps all", () => {
     const view = new MatchView();
     view.setRoster([{ id: "dm-1", displayName: "DM" }]);
     view.applySnapshot({ ...createDefaultDndMapperState("dm-1"), phase: "Playing" });
@@ -233,6 +233,37 @@ describe("MatchView host half", () => {
     const forGuest = view.snapshot("guest-1");
     expect(forGuest).toEqual(forDm);
     expect(forGuest.maps).toHaveLength(1);
+  });
+
+  it("snapshot strips hidden tokens for guests but not the DM", () => {
+    const view = new MatchView();
+    view.setRoster([{ id: "dm-1", displayName: "DM" }]);
+    const map = makeMap("map-1", "Dungeon");
+    const hidden: Token = {
+      id: "tok-hidden",
+      type: "NPCToken",
+      ownerUserId: null,
+      representsUserId: null,
+      name: "Secret",
+      color: "#000",
+      iconKind: "Initial",
+      mapId: "map-1",
+      x: 1.5,
+      y: 1.5,
+      sheetId: null,
+      hidden: true,
+    };
+    view.applySnapshot({
+      ...createDefaultDndMapperState("dm-1"),
+      phase: "Playing",
+      maps: [{ ...map, tokens: [hidden] }],
+      activeMapId: "map-1",
+    });
+
+    const dmMap = view.snapshot("dm-1").maps[0] as GameMap;
+    expect(isFullMap(dmMap) && dmMap.tokens).toHaveLength(1);
+    const guestMap = view.snapshot("guest-1").maps[0] as GameMap;
+    expect(isFullMap(guestMap) && guestMap.tokens).toHaveLength(0);
   });
 
   it("host patch converges on a guest via applyPatch", () => {

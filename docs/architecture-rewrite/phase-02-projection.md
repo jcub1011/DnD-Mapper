@@ -38,12 +38,32 @@ fan-out, and flips `perRecipient:true` in `AuthorityController`.
 
 ## Completion checklist
 
-- [ ] `projectForPlayer` + `projectPatchForPlayer` implemented (strict-JSON,
+- [x] `projectForPlayer` + `projectPatchForPlayer` implemented (strict-JSON,
       per-recipient `guardSize` passes)
-- [ ] Tombstone semantics verified (`setTokenHidden(true)` → `tokenRemoved`
+- [x] Tombstone semantics verified (`setTokenHidden(true)` → `tokenRemoved`
       for players who had it, `null` for those who didn't; same for images)
-- [ ] Sheet redaction verified (`notes`/`hp` withheld unless owner/DM)
-- [ ] Roll/combat/loaded-dice gating verified per settings
-- [ ] Permission-matrix unit tests pass (DM/owner/stranger × hidden/private)
-- [ ] Leak test passes: guest snapshot contains no hidden bytes
-- [ ] Fog-broadcast leak documented for DMs
+- [x] Sheet redaction verified (`notes`/`hp` withheld unless owner/DM)
+- [x] Roll/combat/loaded-dice gating verified per settings
+- [x] Permission-matrix unit tests pass (DM/owner/stranger × hidden/private)
+- [x] Leak test passes: guest snapshot contains no hidden bytes
+- [x] Fog-broadcast leak documented for DMs
+
+## Implementation notes (2026-09-23)
+
+- Fan-out is per-recipient **snapshots** (`perRecipient:true` in
+  `AuthorityController` + `MatchView.snapshot(forPlayerId)`), not
+  per-recipient deltas: `kb-authority.js` ignores patches in per-recipient
+  mode, so `projectPatchForPlayer` is implemented, unit-tested, and ready,
+  but activates with the upstream delta hook (KnockBox-Games#62).
+- `AuthorityController.state` exposes the guest projection (`currentView`);
+  `dndm-app` renders from it instead of `view.state`.
+- Client hiding branches deleted where provably no-ops post-projection
+  (token layer/rail filters, sheet roster filter, roll animation gate).
+  Kept deliberately: `displayProjection` hidden branches (the projector
+  consumes DM-full state via `displaySyncChannel`), sheet edit gates (627)
+  + notes/hp render redaction (1571), roll-ticker filter (projector
+  consumer), DM token ghosting.
+- `loadedDiceRuleVisibility`: players receive rules only for
+  `VisibleToAll`/`AllPlayers`; `Hidden` and host-only variants are DM-only.
+- Fog stays broadcast (legacy parity); DM-facing note on the paint-fog
+  toolbar tooltip.
