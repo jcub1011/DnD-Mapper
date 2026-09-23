@@ -19,11 +19,15 @@ Goal: confirm the platform's host-mode contract before deleting anything.
 
 ## Completion checklist
 
-- [ ] Host-mode truth table written (who is `isHost`, where `sendToHost` goes,
+- [x] Host-mode truth table written (who is `isHost`, where `sendToHost` goes,
       who enforces kick/open-close, what `from` stamps look like)
-- [ ] DM intent → guest convergence demonstrated on scratch branch
-- [ ] Forgery posture (any peer can forge `delta`/`state`) documented and
-      accepted under DM-trusted model
-- [ ] Live-relay limits vs. save-path exemption documented (replaces `docs/02`
-      relay section)
-- [ ] No product files changed on main; spike confined to scratch branch
+      → folded into `docs/blazor-port/02-target-platform.md` ("Host mode" section)
+- [x] DM intent → guest convergence demonstrated on scratch branch
+      → `spike/phase-00-host-mode` (manifest key absent, throwaway
+      `process`-peer harness 5/5 green, branch deleted)
+- [x] Forgery posture (any peer can forge `delta`/`state`) documented and
+      accepted under DM-trusted model → `02-target-platform.md`
+- [x] Live-relay limits vs. save-path exemption documented (replaces `docs/02`
+      relay section) → `02-target-platform.md` ("Host mode" section)
+- [x] No product files changed on main; spike confined to scratch branch
+      → verified: scratch branch deleted, `main` untouched

@@ -284,6 +284,62 @@ client-sent `_kb:"delta"|"state"` frames** — only the server may publish state
 raw peer-to-peer messages on the same socket that bypass the authority entirely. Useful for
 presence, cursors, or transfer signalling — but **not** for bulk bytes, per the numbers above.
 
+## Host mode (Phase 0 spike findings)
+
+Removing `"serverAuthority": "authority.js"` (`export/GAME.json:18`) opts the lobby out of the
+server sandbox. Verified on scratch branch `spike/phase-00-host-mode` (manifest key absent, boot
+path code-cited, harness green, branch deleted — `main` untouched): the platform falls back to the
+host contract in `normalizeReady` (`addons/knockbox/kb-core.js:145-158` — `authority` defaults to
+`'host'`, owner derivable only when we ARE the host). This section replaces the relay description
+above for host-mode lobbies.
+
+### Truth table
+
+| | Server-authority (today) | Host mode (rewrite target) |
+| --- | --- | --- |
+| `authority` on `ready` | `'server'` | `'host'` (the default when the server sends no `authority` field) |
+| `isHost` | `false` on **every** client, incl. creator | `true` on the lobby creator (DM), `false` on guests |
+| `ownerId` / `isOwner` | creator until `kb.setOwner` moves it | creator (DM) initially; same `setOwner` / `owner-changed` mechanism |
+| `sendToHost` goes to | the server actor, never a player (`knockbox-plugin.js:164-177`) | the DM player's browser — `Hub.deliver` targets `peers[0]` (`knockbox-local.js:115-126`); tabs deliver only when `isHost()` (`_onGame:306-311`, self-echo `send:316-326`) |
+| `sendToAll` from the authority | server broadcast | DM broadcast (same relay `case "all"` fan-out, new sender) |
+| Kick / open-close enforced by | server (non-owner sends ignored) | DM host client (same opcodes, host-enforced) |
+| `from` on state frames | `'server'` (reserved sender id) | DM's `playerId` — there is no `'server'` sender |
+
+### What activates in `KBAuthority`
+
+With `authority:'host'`, the branches that are dead code today come alive (`kb-authority.js`):
+
+* Guest sync on ready (`157-162`), host renders own view + re-pushes on reconnect (`163-169`).
+* Host re-broadcasts full state on any roster change (`174-181`, `_broadcastState:185-200`).
+* Host-only intent handling → `sendToAll(delta)` (`210-229`); host-only sync answers (`230-232`).
+* The `from !== 'server'` forgery guards (`237, 246`) go **inert** — the check requires
+  `net.authority === 'server'`, so in host mode it never fires.
+
+DM intent → guest convergence was demonstrated with two `KnockBoxLocalPeer` `process` peers and
+**no** `authority:` option (true host mode, no virtual server actor): guest intent validates via
+the host and converges both replicas; DM intent converges the guest; late-join sync converges via
+`_kb:'sync'`/`_kb:'state'`. 5/5 green on the throwaway spike harness (deleted after the run).
+
+### Forgery posture — accepted under DM-trusted model
+
+In host mode **any peer can forge `_kb:'delta'`/`_kb:'state'`** — the harness proves a delta
+stamped `from:'evil-peer'` is adopted, and the relay no longer drops client state frames in
+host lobbies. This is accepted: the rewrite's locked decisions are **DM trusted** (no server
+anti-cheat) and **freeze on DM leave**. Do not reintroduce per-frame authentication later; the
+answer to malicious guests is the lobby kick, not the wire protocol.
+
+### Live-relay limits still bind host→guest; saves are exempt
+
+Only the *sender* of state changes (DM browser instead of server actor). The path is the same
+relay, so all of the above still applies to host→guest fan-out: the 512 KiB ceiling (silent drop
+on oversized broadcast), 30 msg/s + 60 burst with terminal 1008 on violation, and
+`OutboundCapacity 1024 / DropOldest` with no acks or sequencing. Size discipline (`guardSize`,
+narrowed absolute patches, chunked import) survives the rewrite unchanged.
+
+Saves are exempt: `src/storage/` holds zero references to `sendTo*`, `KnockBox`, `WebSocket`,
+`fetch(` or the transport — persistence is pure-local IndexedDB writes with no network leg.
+Phase 3 collapses save/load onto that path precisely so the relay budget never sees it.
+
 ## Launch modes
 
 ```ts
