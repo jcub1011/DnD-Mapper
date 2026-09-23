@@ -574,6 +574,20 @@ export interface CampaignHeader {
 
 export type DndMapperPhase = "Lobby" | "Playing";
 
+/**
+ * Ephemeral broadcast marker set when the DM loads a saved campaign into the
+ * live session (chunked `commitImport`). It is intentionally NOT part of the
+ * persisted fingerprint or slot shards: clients toast it once (tracked by id)
+ * and it never round-trips through IndexedDB.
+ *
+ * `loadedAt` uses the authority clock (`kb.now()`, ms epoch) — the authority
+ * sandbox has no `Date`.
+ */
+export interface SaveLoadedAnnouncement {
+  readonly id: string;
+  readonly loadedAt: number;
+}
+
 export interface DndMapperState {
   readonly phase: DndMapperPhase;
   readonly settings: DndMapperSettings;
@@ -593,6 +607,11 @@ export interface DndMapperState {
   readonly loadedDiceRules: readonly LoadedDiceRule[];
   readonly hostHeldKeys: readonly string[];
   readonly dmPlayerId: string | null;
+  /**
+   * Ephemeral save-loaded marker. Optional so older persisted snapshots and
+   * test fixtures without it stay valid; absent means "no announcement".
+   */
+  readonly announcement?: SaveLoadedAnnouncement | null;
 }
 
 export function createDefaultDndMapperState(dmPlayerId: string | null = null): DndMapperState {

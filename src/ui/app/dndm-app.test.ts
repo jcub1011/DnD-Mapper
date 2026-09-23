@@ -10,6 +10,8 @@ import "./dndm-app";
 import type { DndmApp } from "./dndm-app";
 import { fx } from "../fx/fx";
 import type { MapScene } from "../map/MapScene";
+import { LibraryService } from "../../storage/libraryService";
+import type { DndmConfirm } from "../modals/dndm-confirm";
 
 function createMockController(options: {
   playerId?: string;
@@ -440,6 +442,198 @@ describe("<dndm-app> Application Shell", () => {
       expect(uploadComponent).not.toBeNull();
       const uploadBtn = uploadComponent?.querySelector('label[aria-label="Upload images"]');
       expect(uploadBtn).not.toBeNull();
+    });
+  });
+
+  describe("Auto-save restore prompt", () => {
+    function findRestorePrompt(): DndmConfirm | null {
+      // Other panels (map list, saves, …) render their own dndm-confirms, so
+      // scope by title instead of matching the first confirm in the DOM.
+      const confirms = [...app.querySelectorAll("dndm-confirm")] as DndmConfirm[];
+      return confirms.find((c) => c.modalTitle === "Restore auto-save?") ?? null;
+    }
+    async function seedAutoSave(): Promise<void> {
+      const seeder = new LibraryService(10);
+      await seeder.attach();
+      const seedState: MatchState = {
+        ...createDefaultDndMapperState("dm-user"),
+        phase: "Playing",
+        maps: [makeMap("saved-1", "Saved Dungeon")],
+        activeMapId: "saved-1",
+      };
+      await seeder.flushAutoSave(seedState);
+      await seeder.detach();
+    }
+
+    afterEach(async () => {
+      // Scrub the seeded auto-save shards so later tests start clean. Each
+      // test re-seeds deterministically; the app's own instance only reads.
+      const scrubber = new LibraryService(10);
+      await scrubber.attach();
+      const db = (scrubber as unknown as { db: IDBDatabase }).db;
+      const { STORE_LIBRARY } = await import("../../storage/schema");
+      const { deleteBatch } = await import("../../storage/db");
+      const keys = await new Promise<string[]>((resolve, reject) => {
+        try {
+          const tx = db.transaction(STORE_LIBRARY, "readonly");
+          const req = tx.objectStore(STORE_LIBRARY).getAllKeys();
+          req.onsuccess = () => resolve((req.result as string[]).map(String));
+          req.onerror = () => reject(req.error);
+        } catch (err) {
+          reject(err);
+        }
+      });
+      await deleteBatch(
+        db,
+        STORE_LIBRARY,
+        keys.filter((k) => k.startsWith("__auto__")),
+      );
+      await scrubber.detach();
+    });
+
+    it("offers the auto-save after the lobby starts when the boot began empty", async () => {
+      await seedAutoSave();
+
+      const controller = createMockController({
+        playerId: "dm-user",
+        isOwner: true,
+        state: { phase: "Lobby", dmPlayerId: "dm-user" },
+      });
+      app.attach(controller);
+      await app.updateComplete;
+
+      // Boot in the lobby: no prompt yet.
+      controller.events.emit("roster", {
+        players: [{ id: "dm-user", displayName: "DM" }],
+        ownerId: "dm-user",
+        isOwner: true,
+      });
+      controller.events.emit("changed", { state: controller.view.state });
+      await app.updateComplete;
+      await new Promise((r) => setTimeout(r, 50));
+      await app.updateComplete;
+      expect(app.querySelector("dndm-lobby")).not.toBeNull();
+      expect(findRestorePrompt()).toBeNull();
+
+      // Lobby starts (still an empty campaign): the prompt appears.
+      controller.events.emit("changed", {
+        state: { ...controller.view.state, phase: "Playing" },
+      });
+      await app.updateComplete;
+      await new Promise((r) => setTimeout(r, 50));
+      await app.updateComplete;
+
+      const confirm = findRestorePrompt();
+      expect(confirm).not.toBeNull();
+      expect(confirm?.isOpen).toBe(true);
+    });
+
+    it("never prompts when the first snapshot already has campaign content", async () => {
+      await seedAutoSave();
+
+      const controller = createMockController({
+        playerId: "dm-user",
+        isOwner: true,
+        state: {
+          phase: "Playing",
+          maps: [makeMap("room-1", "Room Map")],
+          activeMapId: "room-1",
+          dmPlayerId: "dm-user",
+        },
+      });
+      app.attach(controller);
+      await app.updateComplete;
+
+      controller.events.emit("roster", {
+        players: [{ id: "dm-user", displayName: "DM" }],
+        ownerId: "dm-user",
+        isOwner: true,
+      });
+      controller.events.emit("changed", { state: controller.view.state });
+      await app.updateComplete;
+      await new Promise((r) => setTimeout(r, 50));
+      await app.updateComplete;
+
+      // The prompt element exists in the Playing shell but stays closed.
+      expect(findRestorePrompt()?.isOpen).toBe(false);
+    });
+
+    it("a boot-time empty lobby flush never wipes a populated auto-save", async () => {
+      await seedAutoSave();
+
+      // Fresh boot: roster ownership resolves, then the empty lobby snapshot
+      // arrives while already counting as DM state. The debounced flush of
+      // that empty state must not clobber the seeded campaign.
+      const controller = createMockController({
+        playerId: "dm-user",
+        isOwner: true,
+        state: { phase: "Lobby", dmPlayerId: "dm-user" },
+      });
+      app.attach(controller);
+      await app.updateComplete;
+
+      controller.events.emit("roster", {
+        players: [{ id: "dm-user", displayName: "DM" }],
+        ownerId: "dm-user",
+        isOwner: true,
+      });
+      controller.events.emit("changed", { state: controller.view.state });
+      await app.updateComplete;
+
+      // Past the 500 ms auto-save debounce: the empty flush has fired (and
+      // must have been refused by the refresh-wipe guard).
+      await new Promise((r) => setTimeout(r, 800));
+      await app.updateComplete;
+
+      const reader = new LibraryService(10);
+      await reader.attach();
+      try {
+        const loaded = await reader.loadSlot("__auto__");
+        expect(loaded).not.toBeNull();
+        expect(loaded!.maps.map((m) => m.name)).toContain("Saved Dungeon");
+      } finally {
+        await reader.detach();
+      }
+    });
+
+    it("auto-saves live DM edits to the __auto__ slot after the debounce", async () => {
+      const controller = createMockController({
+        playerId: "dm-user",
+        isOwner: true,
+        state: { phase: "Lobby", dmPlayerId: "dm-user" },
+      });
+      app.attach(controller);
+      await app.updateComplete;
+
+      controller.events.emit("roster", {
+        players: [{ id: "dm-user", displayName: "DM" }],
+        ownerId: "dm-user",
+        isOwner: true,
+      });
+      // DM creates a map: new state object, as the authority would publish.
+      const liveWithMap: MatchState = {
+        ...controller.view.state,
+        phase: "Playing",
+        maps: [makeMap("live-1", "Live Dungeon")],
+        activeMapId: "live-1",
+      };
+      controller.events.emit("changed", { state: liveWithMap });
+      await app.updateComplete;
+
+      // Scrub any prompt candidacy: this test is about the write path.
+      // Wait past the 500 ms debounce for the flush to land.
+      await new Promise((r) => setTimeout(r, 800));
+      await app.updateComplete;
+
+      const reader = new LibraryService(10);
+      await reader.attach();
+      try {
+        const loaded = await reader.loadSlot("__auto__");
+        expect(loaded).not.toBeNull();
+        expect(loaded!.maps.map((m) => m.name)).toContain("Live Dungeon");
+      } finally {
+        await reader.detach();
+      }
     });
   });
 

@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { packCampaignChunks, sendChunkedImport } from "./campaignImport";
-import type { CampaignHeader, GameMap } from "./domain";
-import { createDefaultGridConfig } from "./domain";
+import {
+  buildCampaignHeader,
+  hasCampaignContent,
+  packCampaignChunks,
+  sendChunkedImport,
+  shouldOfferAutoRestore,
+} from "./campaignImport";
+import type { CampaignHeader, DndMapperState, GameMap } from "./domain";
+import { createDefaultDndMapperState, createDefaultGridConfig } from "./domain";
 import type { Intent } from "./types";
 
 function makeMap(id: string, name: string, tokenCount = 0): GameMap {
@@ -86,5 +92,57 @@ describe("sendChunkedImport", () => {
       kind: "commitImport",
       token: "custom-token-999",
     });
+  });
+});
+
+describe("buildCampaignHeader", () => {
+  it("carries every persisted campaign field so a re-import restores the slot", () => {
+    const state: DndMapperState = {
+      ...createDefaultDndMapperState(),
+      maps: [makeMap("1", "Map 1")],
+      activeMapId: "1",
+    };
+    const header = buildCampaignHeader(state);
+    expect(header.settings).toBe(state.settings);
+    expect(header.attributeSchema).toBe(state.attributeSchema);
+    expect(header.activeMapId).toBe("1");
+    expect(header.sheets).toBe(state.sheets);
+    expect(header.customTemplates).toBe(state.customTemplates);
+    expect(header.statusEffectTemplates).toBe(state.statusEffectTemplates);
+    expect(header.globalRollTemplates).toBe(state.globalRollTemplates);
+    expect(header.activeSchemaTemplateId).toBe(state.activeSchemaTemplateId);
+    expect(header.initiativeAttributeName).toBe(state.initiativeAttributeName);
+    expect(header.activeCombat).toBe(state.activeCombat);
+    expect(header.loadedDiceRules).toBe(state.loadedDiceRules);
+  });
+});
+
+describe("shouldOfferAutoRestore", () => {
+  const empty = (): DndMapperState => createDefaultDndMapperState();
+  const withContent = (): DndMapperState => ({
+    ...createDefaultDndMapperState(),
+    maps: [makeMap("1", "Map 1")],
+    activeMapId: "1",
+  });
+
+  it("treats maps or sheets as content", () => {
+    expect(hasCampaignContent(empty())).toBe(false);
+    expect(hasCampaignContent(withContent())).toBe(true);
+  });
+
+  it("offers only when live is empty and the auto-save holds a campaign", () => {
+    expect(shouldOfferAutoRestore(empty(), withContent())).toBe(true);
+  });
+
+  it("declines when there is no auto-save", () => {
+    expect(shouldOfferAutoRestore(empty(), null)).toBe(false);
+  });
+
+  it("declines when the auto-save is empty", () => {
+    expect(shouldOfferAutoRestore(empty(), empty())).toBe(false);
+  });
+
+  it("declines when live state already has content", () => {
+    expect(shouldOfferAutoRestore(withContent(), withContent())).toBe(false);
   });
 });

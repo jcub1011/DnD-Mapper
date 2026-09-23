@@ -43,6 +43,7 @@ import {
   STORE_LIBRARY,
   STORE_SLOTS_INDEX,
 } from "./schema.js";
+import { hasCampaignContent } from "../game/campaignImport.js";
 import type { LibraryCoreSnapshot, SlotIndexEntry, SlotInfo, SlotsIndex } from "./schema.js";
 import type { UnpackResult } from "../vtf/types.js";
 
@@ -118,6 +119,11 @@ export class LibraryService {
   private pendingDirty = false;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private lastFlushedFingerprint: PersistedFingerprint | null = null;
+
+  // Consecutive auto-save flush failures. Caps the failure retry re-arm so a
+  // permanently broken backend can't spin the debounce loop forever.
+  private flushFailureCount = 0;
+  private static readonly MAX_FLUSH_FAILURES = 3;
 
   // Key -> SHA-256 hash of last written JSON for AUTO_SLOT_ID
   private readonly autoFlushHashes = new Map<string, string>();
@@ -215,6 +221,7 @@ export class LibraryService {
     this.db = null;
     this.liveState = null;
     this.lastFlushedFingerprint = null;
+    this.flushFailureCount = 0;
     this.autoFlushHashes.clear();
     this.setSaving(false);
   }
@@ -287,14 +294,51 @@ export class LibraryService {
   }
 
   private async executeFlush(state: DndMapperState): Promise<void> {
-    if (!this.db) return;
+    // Open on demand: state changes can arrive before attach() resolves, and
+    // silently returning here would drop those edits (pendingDirty was already
+    // cleared above).
+    await this.ensureDb();
 
     this.pendingDirty = false;
     const currentFingerprint = captureFingerprint(state);
 
     try {
+      // Refresh-wipe guard: a fresh boot publishes an empty lobby state, and
+      // roster ownership typically resolves BEFORE the first snapshot arrives
+      // — so the empty boot state is already "DM state" and would be flushed
+      // over the previous session's campaign ~500 ms after every refresh,
+      // silently destroying it (and its restore prompt). Never let an
+      // incoming content-empty state clobber a stored campaign. Trade-off: a
+      // deliberate delete-everything keeps the last restorable snapshot, and
+      // the next boot offers it (declinable) instead of offering nothing.
+      // Explicit manual saves are unaffected — only the auto slot is guarded.
+      if (!hasCampaignContent(state)) {
+        const storedDb = await this.ensureDb();
+        const stored = await getFromStore<LibraryCoreSnapshot>(
+          storedDb,
+          STORE_LIBRARY,
+          coreKey(AUTO_SLOT_ID),
+        );
+        const storedHasContent =
+          !!stored &&
+          ((stored.mapIds?.length ?? 0) > 0 || (stored.sheetIds?.length ?? 0) > 0);
+        if (storedHasContent) {
+          this.lastFlushedFingerprint = currentFingerprint;
+          return;
+        }
+      }
+
       await this.saveSlotInternal(AUTO_SLOT_ID, AUTO_SLOT_NAME, state, true);
       this.lastFlushedFingerprint = currentFingerprint;
+      this.flushFailureCount = 0;
+    } catch (err) {
+      // Leave the state marked dirty so the debounce re-arm below retries
+      // instead of losing the campaign — but only up to MAX_FLUSH_FAILURES
+      // consecutive failures, so a permanently broken backend can't spin
+      // the debounce loop forever.
+      this.flushFailureCount += 1;
+      this.pendingDirty = this.flushFailureCount <= LibraryService.MAX_FLUSH_FAILURES;
+      throw err;
     } finally {
       if (this.pendingDirty) {
         // Edits arrived mid-flush: re-arm debounce

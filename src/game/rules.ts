@@ -1870,6 +1870,10 @@ export function applyIntent(
         activeCombat: header.activeCombat ?? null,
         loadedDiceRules: header.loadedDiceRules ?? [],
         maps: repaired.maps,
+        // Ephemeral marker so every client can notify once that the DM
+        // loaded a save. Uses the import token as the id (unique per load)
+        // and the authority clock — no `Date` in the sandbox.
+        announcement: { id: intent.token as string, loadedAt: now },
       };
 
       return {

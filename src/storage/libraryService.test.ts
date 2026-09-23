@@ -232,6 +232,43 @@ describe("LibraryService and Sharded Persistence", () => {
       expect(loaded!.maps.length).toBe(1);
       expect(loaded!.maps[0].id).toBe("map-1");
     });
+
+    it("refuses to overwrite a populated auto-save with an empty state", async () => {
+      await service.flushAutoSave(createMockState());
+      let loaded = await service.loadSlot(AUTO_SLOT_ID);
+      expect(loaded!.maps.length).toBe(1);
+
+      // Simulate a fresh boot flushing its empty lobby state: roster
+      // ownership resolves before the first snapshot, so the empty boot
+      // state already counts as DM state. Without the guard this wipes the
+      // previous session ~500 ms after every refresh.
+      const emptyBoot: DndMapperState = {
+        ...createMockState(),
+        maps: [],
+        activeMapId: null,
+        sheets: {},
+      };
+      await service.flushAutoSave(emptyBoot);
+
+      loaded = await service.loadSlot(AUTO_SLOT_ID);
+      expect(loaded!.maps.length).toBe(1);
+      expect(loaded!.maps[0].name).toBe("Dungeon");
+      expect(loaded!.sheets["sheet-1"].characterName).toBe("Valeros");
+    });
+
+    it("writes an empty state when the auto-save slot holds nothing yet", async () => {
+      const emptyBoot: DndMapperState = {
+        ...createMockState(),
+        maps: [],
+        activeMapId: null,
+        sheets: {},
+      };
+      await service.flushAutoSave(emptyBoot);
+
+      const loaded = await service.loadSlot(AUTO_SLOT_ID);
+      expect(loaded).not.toBeNull();
+      expect(loaded!.maps).toHaveLength(0);
+    });
   });
 
   describe("Slot CRUD Operations", () => {
@@ -310,6 +347,22 @@ describe("LibraryService and Sharded Persistence", () => {
       expect(slots.some((s) => s.id === "auto-attach-slot" && s.name === "Auto Attached")).toBe(true);
 
       const loaded = await unattachedService.loadSlot("auto-attach-slot");
+      expect(loaded).not.toBeNull();
+      expect(loaded!.maps[0].name).toBe("Dungeon");
+
+      await unattachedService.detach();
+    });
+
+    it("persists debounced auto-save when onStateChanged fires before attach()", async () => {
+      const unattachedService = new LibraryService(30);
+      const state = createMockState();
+
+      // Edits arriving before attach() resolves used to be silently dropped
+      // by an early return in executeFlush.
+      unattachedService.onStateChanged(state);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      const loaded = await unattachedService.loadSlot(AUTO_SLOT_ID);
       expect(loaded).not.toBeNull();
       expect(loaded!.maps[0].name).toBe("Dungeon");
 

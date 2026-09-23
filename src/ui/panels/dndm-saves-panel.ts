@@ -44,7 +44,7 @@ export class DndmSavesPanel extends GameElement {
   currentState?: DndMapperState;
 
   @property({ attribute: false })
-  onLoadSlotState?: (state: DndMapperState) => void;
+  onLoadSlotState?: (state: DndMapperState, slotName: string) => void;
 
   @state() private slots: readonly SlotInfo[] = [];
   @state() private bytesUsed = 0;
@@ -153,7 +153,12 @@ export class DndmSavesPanel extends GameElement {
             detail: loaded,
           }),
         );
-        this.onLoadSlotState?.(loaded);
+        this.onLoadSlotState?.(loaded, slot.name);
+      } else {
+        // Core shard missing (e.g. slot never finished saving): previously a
+        // silent no-op. Surface it so the user isn't left guessing.
+        this.error = `Save "${slot.name}" has no campaign data to load.`;
+        toastService.error(`Could not load "${slot.name}": no campaign data found.`);
       }
     } catch (err) {
       this.error = String(err);

@@ -6,7 +6,7 @@
  * preventing 1009 socket close loops.
  */
 
-import type { CampaignHeader, GameMap } from "./domain.js";
+import type { CampaignHeader, DndMapperState, GameMap } from "./domain.js";
 import type { Intent } from "./types.js";
 import { CHUNK_BUDGET } from "./types.js";
 import { utf8Length } from "./wire.js";
@@ -46,6 +46,51 @@ export function packCampaignChunks(
   }
 
   return chunks;
+}
+
+/**
+ * Builds a complete campaign header from a loaded slot state so a
+ * chunked re-import restores everything the slot persisted — not just
+ * settings and sheets. Used by the manual-load and auto-restore flows.
+ */
+export function buildCampaignHeader(state: DndMapperState): CampaignHeader {
+  return {
+    settings: state.settings,
+    attributeSchema: state.attributeSchema,
+    activeMapId: state.activeMapId,
+    sheets: state.sheets,
+    customTemplates: state.customTemplates,
+    statusEffectTemplates: state.statusEffectTemplates,
+    globalRollTemplates: state.globalRollTemplates,
+    activeSchemaTemplateId: state.activeSchemaTemplateId,
+    initiativeAttributeName: state.initiativeAttributeName,
+    activeCombat: state.activeCombat,
+    loadedDiceRules: state.loadedDiceRules,
+  };
+}
+
+/**
+ * True when the state holds any campaign content worth restoring or
+ * protecting from an overwrite prompt (maps or character sheets).
+ */
+export function hasCampaignContent(state: DndMapperState): boolean {
+  return state.maps.length > 0 || Object.keys(state.sheets).length > 0;
+}
+
+/**
+ * Boot-restore gate: offer the auto-save prompt only when the live session
+ * is still empty (fresh boot, nothing received from the server) and the
+ * auto-save slot actually holds a campaign. Prevents prompting multiplayer
+ * joiners whose live state already has content, and first-run users with
+ * nothing saved.
+ */
+export function shouldOfferAutoRestore(
+  liveState: DndMapperState,
+  autoState: DndMapperState | null,
+): boolean {
+  if (!autoState) return false;
+  if (!hasCampaignContent(autoState)) return false;
+  return !hasCampaignContent(liveState);
 }
 
 /**

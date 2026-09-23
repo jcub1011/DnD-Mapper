@@ -25,6 +25,12 @@ import {
   type Token,
 } from "../../game/domain";
 import type { Intent, MatchState } from "../../game/types";
+import {
+  buildCampaignHeader,
+  hasCampaignContent,
+  sendChunkedImport,
+} from "../../game/campaignImport";
+import { AUTO_SLOT_ID, AUTO_SLOT_NAME } from "../../storage/schema";
 import { createLogger } from "../../log";
 import type { GameController } from "../../net/controller";
 import type { LaunchMode } from "../../net/launch";
@@ -42,6 +48,7 @@ import "../canvas/dndm-image-inspector";
 import "../canvas/dndm-toolbar";
 import "../lobby/dndm-lobby";
 import "../modals/dndm-permissions";
+import "../modals/dndm-confirm";
 import "../modals/dndm-roll-history";
 import "../modals/dndm-roll-template-library";
 import "../panels/dndm-character-sheet";
@@ -176,6 +183,17 @@ export class DndmApp extends GameElement {
       : { isSheetPopout: false as boolean, sheetId: null as string | null };
 
   private seenRollIds = new Set<string>();
+  // Save-loaded announcements already toasted (ids are import tokens).
+  private seenAnnouncementIds = new Set<string>();
+  // Boot auto-restore prompt state. The check runs once per session, only for
+  // the DM, and only after the lobby has started (phase Playing).
+  private autoRestoreChecked = false;
+  // Whether the live session was still empty when the first authority state
+  // arrived. Recorded once: a fresh boot starts empty, while a multiplayer
+  // join's first snapshot already carries the room's campaign — those must
+  // never be offered a local auto-save restore.
+  private bootLiveWasEmpty: boolean | null = null;
+  @state() private autoRestoreCandidate: MatchState | null = null;
   private displaySyncChannel?: BroadcastChannel;
   // MapScene instance the canvas callbacks are wired to. Phaser boots
   // asynchronously, so attach() can run before fx.map() exists — wiring is
@@ -213,6 +231,7 @@ export class DndmApp extends GameElement {
     document.addEventListener("click", this.onGlobalPanelCollapseClick);
     window.addEventListener("dndm-open-sheet", this.onOpenSheet);
     window.addEventListener("keydown", this.onEscapeKey);
+    window.addEventListener("pagehide", this.onPageHide);
     diceOverlay.setDiceScale(this.diceScale);
     void this.libraryService.attach();
 
@@ -231,6 +250,7 @@ export class DndmApp extends GameElement {
     document.removeEventListener("click", this.onGlobalPanelCollapseClick);
     window.removeEventListener("dndm-open-sheet", this.onOpenSheet);
     window.removeEventListener("keydown", this.onEscapeKey);
+    window.removeEventListener("pagehide", this.onPageHide);
     window.removeEventListener("pointermove", this.onWindowPointerMove);
     window.removeEventListener("pointerup", this.onWindowPointerUp);
     window.removeEventListener("pointercancel", this.onWindowPointerUp);
@@ -302,6 +322,11 @@ export class DndmApp extends GameElement {
         this.hostInputTracker?.attach();
       } else {
         this.hostInputTracker?.detach();
+      }
+      // Ownership just resolved after the lobby started: if live state already
+      // arrived, this is the moment the auto-restore check can run for the DM.
+      if (!this.autoRestoreChecked && this.match.phase === "Playing") {
+        void this.maybeOfferAutoRestore();
       }
     });
 
@@ -644,6 +669,9 @@ export class DndmApp extends GameElement {
   }
 
   private onStateChanged(state: Readonly<MatchState>): void {
+    if (this.controller && this.bootLiveWasEmpty === null && !this.projectorMode) {
+      this.bootLiveWasEmpty = !hasCampaignContent(state);
+    }
     const prevRollLog = this.match?.rollLog ?? [];
     const prevMapId = this.match.activeMapId;
     this.match = state;
@@ -774,6 +802,27 @@ export class DndmApp extends GameElement {
     if (this.seenRollIds.size > 200) {
       this.seenRollIds = new Set(currentRollLog.map((r) => r.id));
     }
+
+    // DM-only restore prompt, offered once the lobby has started: the live
+    // session began empty but a previous auto-save holds a campaign.
+    if (!this.autoRestoreChecked && this.controller && state.phase === "Playing") {
+      void this.maybeOfferAutoRestore();
+    }
+
+    // Notify once per save load. The DM gets explicit feedback (with the save
+    // name) from the load flow itself; other players get this generic notice
+    // without the save name.
+    const announcement = state.announcement;
+    if (announcement && !this.seenAnnouncementIds.has(announcement.id)) {
+      this.seenAnnouncementIds.add(announcement.id);
+      if (this.seenAnnouncementIds.size > 50) {
+        const oldest = this.seenAnnouncementIds.values().next().value;
+        if (oldest !== undefined) this.seenAnnouncementIds.delete(oldest);
+      }
+      if (!this.isDm) {
+        toastService.info("The DM loaded a save.");
+      }
+    }
   }
 
   public get activeMap(): GameMap | null {
@@ -801,6 +850,112 @@ export class DndmApp extends GameElement {
   private send(intent: Intent): void {
     this.controller?.sendIntent(intent);
   }
+
+  /**
+   * Applies a loaded slot state to the live session: re-publishes its image
+   * blobs, then streams the full campaign (header + maps) through the chunked
+   * import protocol. Replaces the old beginImport-only flow, which staged an
+   * import but never sent chunks or committed — a silent no-op.
+   */
+  private async applyLoadedCampaign(
+    loaded: Readonly<MatchState>,
+    displayName: string,
+  ): Promise<void> {
+    try {
+      for (const map of loaded.maps) {
+        if ("images" in map) {
+          for (const img of map.images) {
+            const blob = await this.libraryService.getImage(img.id);
+            if (blob) {
+              await this.assetSource.publish(img.id, blob);
+            }
+          }
+        }
+      }
+      // Slot shards always persist full maps; the state type is wider because
+      // live snapshots project inactive maps to summaries.
+      const fullMaps = loaded.maps.filter(isFullMap);
+      sendChunkedImport((intent) => this.send(intent), buildCampaignHeader(loaded), fullMaps);
+      toastService.success(`Loaded save "${displayName}".`);
+    } catch (err) {
+      log.warn(`failed to apply loaded campaign "${displayName}": ${String(err)}`, err);
+      toastService.error(`Could not load save "${displayName}".`);
+    }
+  }
+
+  /**
+   * One-shot check (DM only, after the lobby started): if the live session
+   * began empty but the auto-save slot holds a campaign, stage it for the
+   * restore prompt. Reads the slot fresh at start time so lobby-phase tweaks
+   * are reflected in what gets offered.
+   */
+  private async maybeOfferAutoRestore(): Promise<void> {
+    if (this.autoRestoreChecked || !this.isDm || this.bootLiveWasEmpty !== true) return;
+    this.autoRestoreChecked = true;
+    // One-shot decision log so a missing prompt is diagnosable from the console.
+    log.info(
+      `auto-restore check: isDm=${String(this.isDm)} bootWasEmpty=${String(this.bootLiveWasEmpty)}`,
+    );
+    try {
+      const auto = await this.libraryService.loadSlot(AUTO_SLOT_ID);
+      const hasContent = !!auto && hasCampaignContent(auto);
+      log.info(
+        `auto-restore check: auto-save ${auto ? `${auto.maps.length} map(s), ${Object.keys(auto.sheets).length} sheet(s)` : "missing"} → ${hasContent ? "prompting" : "skipping"}`,
+      );
+      if (hasContent && auto) {
+        this.autoRestoreCandidate = auto;
+      }
+    } catch (err) {
+      log.warn(`auto-save restore check failed: ${String(err)}`, err);
+    }
+  }
+
+  private async confirmAutoRestore(): Promise<void> {
+    const candidate = this.autoRestoreCandidate;
+    this.autoRestoreCandidate = null;
+    if (!candidate) return;
+    await this.applyLoadedCampaign(candidate, AUTO_SLOT_NAME);
+  }
+
+  private cancelAutoRestore(): void {
+    this.autoRestoreCandidate = null;
+  }
+
+  private renderAutoRestorePrompt(): TemplateResult {
+    const candidate = this.autoRestoreCandidate;
+    const mapCount = candidate?.maps.length ?? 0;
+    const sheetCount = candidate ? Object.keys(candidate.sheets).length : 0;
+    const parts = [
+      `${mapCount} map${mapCount === 1 ? "" : "s"}`,
+      `${sheetCount} character sheet${sheetCount === 1 ? "" : "s"}`,
+    ];
+    return html`
+      <dndm-confirm
+        ?isOpen=${candidate !== null}
+        modalTitle="Restore auto-save?"
+        message=${`An auto-save was found (${parts.join(", ")}). Load it into the current session?`}
+        confirmText="Load"
+        .onConfirm=${() => void this.confirmAutoRestore()}
+        .onCancel=${() => this.cancelAutoRestore()}
+        .onClose=${() => this.cancelAutoRestore()}
+        @cancel=${() => this.cancelAutoRestore()}
+        @close=${() => this.cancelAutoRestore()}
+      ></dndm-confirm>
+    `;
+  }
+
+  private readonly onPageHide = (): void => {
+    // A refresh/close inside the 500 ms debounce window would otherwise lose
+    // the last edits. Fire-and-forget: the page is going away, but IndexedDB
+    // writes issued synchronously in the handler usually still commit.
+    try {
+      void this.libraryService.flushAutoSave(this.match).catch((err: unknown) => {
+        log.warn(`pagehide auto-save flush failed: ${String(err)}`);
+      });
+    } catch (err) {
+      log.warn(`pagehide auto-save flush failed: ${String(err)}`);
+    }
+  };
 
   private readonly frame = (_ts: number): void => {
     this.rafId = requestAnimationFrame(this.frame);
@@ -940,28 +1095,9 @@ export class DndmApp extends GameElement {
                     <dndm-saves-panel
                       .libraryService=${this.libraryService}
                       .currentState=${this.match}
-                      .onLoadSlotState=${async (loaded: MatchState) => {
-                      for (const map of loaded.maps) {
-                        if ("images" in map) {
-                          for (const img of map.images) {
-                            const blob = await this.libraryService.getImage(img.id);
-                            if (blob) {
-                              await this.assetSource.publish(img.id, blob);
-                            }
-                          }
-                        }
-                      }
-                      this.send({
-                        kind: "beginImport",
-                        campaign: {
-                          settings: loaded.settings,
-                          attributeSchema: loaded.attributeSchema,
-                          activeMapId: loaded.activeMapId,
-                          sheets: loaded.sheets,
-                        },
-                        chunkCount: 1,
-                      });
-                    }}
+                      .onLoadSlotState=${(loaded: MatchState, slotName: string) => {
+                        void this.applyLoadedCampaign(loaded, slotName);
+                      }}
                     ></dndm-saves-panel>
 
                     ${
@@ -1535,6 +1671,7 @@ export class DndmApp extends GameElement {
         ></dndm-roll-history>
 
         <dndm-toast></dndm-toast>
+        ${this.isDm ? this.renderAutoRestorePrompt() : nothing}
       </div>
     `;
   }

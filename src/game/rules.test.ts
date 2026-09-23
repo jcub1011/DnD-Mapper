@@ -444,6 +444,9 @@ describe("applyIntent — chunked campaign import protocol", () => {
     expect(liveState.activeMapId).toBe("map-b");
     expect(liveState.maps).toHaveLength(2);
     expect(liveState.maps.map((m) => m.id)).toEqual(["map-a", "map-b"]);
+
+    // Ephemeral save-loaded marker for client notifications (DM loads a save)
+    expect(liveState.announcement).toEqual({ id: token, loadedAt: 6040 });
   });
 });
 
