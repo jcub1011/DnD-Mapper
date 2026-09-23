@@ -89,4 +89,28 @@ describe("buildNotesPopoutHtml", () => {
     expect(html).not.toContain("</script><script>");
     expect(html).toContain("<\\/script>");
   });
+
+  it("matches the shared renderer link policy (relative links, unsafe fallback)", () => {
+    const html = buildNotesPopoutHtml({
+      sheetId: "sheet-1",
+      sheetName: "Thorin",
+      notes: "lore",
+      editable: true,
+    });
+    // Parity with isSafeUrl() in markdown.ts: /… and ./… links stay links…
+    expect(html).toContain('url.charAt(0) === "/"');
+    expect(html).toContain('url.indexOf("./") === 0');
+    // …and unsafe schemes fall back to `text (url)` instead of bare text.
+    expect(html).toContain('t2 + " (" + url + ")"');
+  });
+
+  it("normalizes lone carriage returns like the shared renderer", () => {
+    const html = buildNotesPopoutHtml({
+      sheetId: "sheet-1",
+      sheetName: "Thorin",
+      notes: "lore",
+      editable: true,
+    });
+    expect(html).toContain('.replace(/\\r/g, "\\n")');
+  });
 });

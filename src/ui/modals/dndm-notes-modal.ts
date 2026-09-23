@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { GameElement } from "../app/GameElement";
 import { eyeIcon, penIcon } from "../icons";
@@ -36,10 +36,14 @@ export class DndmNotesModal extends GameElement {
   onNotesInput?: (value: string) => void;
 
   @property({ attribute: false })
-  onCancel?: () => void;
-
-  @property({ attribute: false })
   onClose?: () => void;
+
+  /**
+   * Deprecated alias — still invoked for back-compat, prefer `onClose`.
+   * The modal now emits a single `close` event per dismissal.
+   */
+  @property({ attribute: false })
+  onCancel?: () => void;
 
   private handleTabFlip(): void {
     if (!this.editable) return;
@@ -64,13 +68,47 @@ export class DndmNotesModal extends GameElement {
       }),
     );
     this.onNotesInput?.(value);
+    // Grow immediately for responsiveness; updated() re-fits after render.
+    this.autosizeEditor();
   }
 
   private handleClose(): void {
+    // Single canonical dismissal signal. `onCancel` is still invoked so
+    // callers bound to either property keep working; only one DOM event
+    // is emitted to avoid duplicate bubbled notifications per gesture.
     this.dispatchEvent(new CustomEvent("close", { bubbles: true, composed: true }));
-    this.dispatchEvent(new CustomEvent("cancel", { bubbles: true, composed: true }));
     this.onClose?.();
     this.onCancel?.();
+  }
+
+  protected override updated(changedProperties: PropertyValues): void {
+    super.updated(changedProperties);
+    // The editor is stamped by the inner dndm-modal from the .body
+    // property, so it may not exist until the child has updated.
+    const inner = this.querySelector("dndm-modal") as unknown as {
+      updateComplete: Promise<unknown>;
+    } | null;
+    if (inner) {
+      void inner.updateComplete.then(() => this.autosizeEditor());
+    } else {
+      this.autosizeEditor();
+    }
+  }
+
+  /** Grow the editor to fit its content, up to the 60vh CSS cap (beyond
+   * that it scrolls internally). The textarea is not user-resizable —
+   * sizing is fully content-driven. Mirrors autosizeRailNotes. */
+  private autosizeEditor(): void {
+    const area = this.querySelector(
+      ".dndm-notes-modal-textarea",
+    ) as HTMLTextAreaElement | null;
+    if (!area) return;
+    area.style.height = "auto";
+    // No layout engine (e.g. happy-dom tests) reports scrollHeight 0 —
+    // leave the stylesheet height alone in that case.
+    if (area.scrollHeight > 0) {
+      area.style.height = `${area.scrollHeight}px`;
+    }
   }
 
   private renderToggle(showingEdit: boolean): TemplateResult {
@@ -98,6 +136,9 @@ export class DndmNotesModal extends GameElement {
     const effectiveTab: NotesTab = this.editable ? this.activeTab : "preview";
     const showingEdit = effectiveTab === "edit";
     return html`
+      <!-- Single channel: the inner modal fires its close event and onClose
+        callback atomically per dismissal, so listening to both would run
+        handleClose twice per gesture. -->
       <dndm-modal
         .isOpen=${this.isOpen}
         .modalTitle=${html`
@@ -108,9 +149,6 @@ export class DndmNotesModal extends GameElement {
         `}
         cardClass="dndm-notes-modal"
         @close=${() => this.handleClose()}
-        @cancel=${() => this.handleClose()}
-        .onClose=${() => this.handleClose()}
-        .onCancel=${() => this.handleClose()}
         .body=${html`
           ${showingEdit
             ? html`

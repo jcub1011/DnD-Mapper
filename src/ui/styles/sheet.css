@@ -711,7 +711,7 @@
 .dndm-notes-modal-textarea {
   min-height: 320px;
   max-height: 60vh;
-  resize: vertical;
+  resize: none;
 }
 
 /* Notes modal header: title text takes available width, toggle pins right

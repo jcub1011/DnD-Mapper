@@ -216,18 +216,22 @@ body {
     e = e.replace(/_([^_]+)_/g, "<em>$1</em>");
     e = e.replace(/~~([^~]+)~~/g, "<del>$1</del>");
     e = e.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, function (m, t2, u) {
+      // Mirrors isSafeUrl() in markdown.ts: the input e is already
+      // HTML-escaped, so u/t2 are safe to interpolate directly
+      // (re-escaping would double-encode &amp; in query strings).
       var url = t2 && u ? String(u).trim() : "";
       var low = url.toLowerCase();
-      if (low.indexOf("http://") === 0 || low.indexOf("https://") === 0 || low.indexOf("mailto:") === 0) {
-        return '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer">' + t2 + "</a>";
+      if (low.indexOf("http://") === 0 || low.indexOf("https://") === 0 || low.indexOf("mailto:") === 0 ||
+          url.charAt(0) === "/" || url.indexOf("./") === 0) {
+        return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + t2 + "</a>";
       }
-      return t2;
+      return t2 + " (" + url + ")";
     });
     return e;
   }
   function toSafeHtml(markdown) {
     if (!markdown) return "";
-    var lines = String(markdown).replace(/\\r\\n/g, "\\n").split("\\n");
+    var lines = String(markdown).replace(/\\r\\n/g, "\\n").replace(/\\r/g, "\\n").split("\\n");
     var out = []; var inUl = false, inOl = false, inQ = false;
     function close() {
       if (inUl) { out.push("</ul>"); inUl = false; }

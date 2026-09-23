@@ -851,6 +851,91 @@ describe("<dndm-character-sheet>", () => {
     }
   });
 
+  it("closes the previous popout when reopening instead of orphaning it", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin");
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = true;
+    el.currentUserId = "dm-1";
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    const makeFake = () => ({
+      closed: false,
+      close: vi.fn(),
+      document: { open: vi.fn(), write: vi.fn(), close: vi.fn() },
+    });
+    const first = makeFake();
+    const second = makeFake();
+    const openSpy = vi
+      .spyOn(window, "open")
+      .mockReturnValueOnce(first as unknown as Window)
+      .mockReturnValueOnce(second as unknown as Window);
+
+    try {
+      const inner = el as unknown as {
+        notesChannel: { postMessage: (...args: unknown[]) => void; close: () => void } | null;
+        notesPopout: unknown;
+      };
+      const postMessage = vi.fn();
+      inner.notesChannel = { postMessage, close: vi.fn() };
+
+      const popoutBtn = el.querySelector(
+        '.dndm-sheet-notes-container button[aria-label="Open notes in new window"]',
+      ) as HTMLButtonElement;
+      popoutBtn.click();
+      await el.updateComplete;
+      expect(inner.notesPopout).toBe(first);
+
+      // Reopening tears down the previous window before installing the new
+      // one, so two live popups never share the same sheetId sync.
+      popoutBtn.click();
+      await el.updateComplete;
+
+      expect(first.close).toHaveBeenCalledTimes(1);
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "notes-close", sheetId: "sheet-1" }),
+      );
+      expect(inner.notesPopout).toBe(second);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it("ignores forged popout edits when the viewer lacks edit permission", async () => {
+    const sheet1 = makeSheet("sheet-1", "Thorin", "player-1");
+    el.sheets = { "sheet-1": sheet1 };
+    el.selectedSheetId = "sheet-1";
+    el.attributeSchema = createDefaultAttributeSchema("DnD5eCore");
+    el.isDm = false;
+    el.currentUserId = "player-2";
+
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    const onUpdateSheet = vi.fn();
+    el.onUpdateSheet = onUpdateSheet;
+    const inner = el as unknown as {
+      notesChannel: { postMessage: (...args: unknown[]) => void; close: () => void } | null;
+      handleNotesChannelMessage: (msg: unknown) => void;
+    };
+    inner.notesChannel = { postMessage: vi.fn(), close: vi.fn() };
+
+    // Default policy is HostOnly: player-2 may not edit player-1's sheet,
+    // so a notes-edit arriving over the unauthenticated channel is dropped.
+    inner.handleNotesChannelMessage({
+      type: "notes-edit",
+      sheetId: "sheet-1",
+      notes: "Forged by attacker",
+    });
+    await el.updateComplete;
+    vi.advanceTimersByTime(1000);
+
+    expect(onUpdateSheet).not.toHaveBeenCalled();
+  });
+
   it("calls onCreateSheet with the active map scope when the + button is clicked", async () => {
     const onCreateSheet = vi.fn();
     el.sheets = {};

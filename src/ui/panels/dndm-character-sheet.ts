@@ -199,7 +199,7 @@ export class DndmCharacterSheet extends GameElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.clearDebounceTimers();
-    this.closeNotesPopout(false);
+    this.closeNotesPopout(true);
     if (this.notesChannel) {
       this.notesChannel.close();
       this.notesChannel = null;
@@ -456,6 +456,9 @@ export class DndmCharacterSheet extends GameElement {
   }
 
   private closeNotesModal(): void {
+    // Dedupe: the modal can signal dismissal via both the `close` event
+    // and the `onClose` callback for a single gesture.
+    if (!this.notesModalOpen && this.modalDraftNotes === null) return;
     if (this.notesModalSheetId) {
       this.flushNotesDraft(this.notesModalSheetId);
     }
@@ -499,7 +502,11 @@ export class DndmCharacterSheet extends GameElement {
     const data = msg as { type?: string; sheetId?: string; notes?: string };
     if (typeof data.sheetId !== "string") return;
     if (data.type === "notes-edit" && typeof data.notes === "string") {
-      if (!this.sheets[data.sheetId]) return;
+      const sheet = this.sheets[data.sheetId];
+      if (!sheet) return;
+      const state = this.getEffectiveState();
+      const userId = this.currentUserId ?? (this.isDm ? (state.dmPlayerId ?? "") : "");
+      if (!mayEditSheet(state, userId, sheet)) return;
       this.applyNotesEdit(data.sheetId, data.notes, true);
     } else if (data.type === "notes-leave") {
       if (this.notesPopoutSheetId === data.sheetId) {
@@ -511,6 +518,10 @@ export class DndmCharacterSheet extends GameElement {
 
   private openNotesPopout(sheet: CharacterSheet, editable: boolean): void {
     const notes = this.resolveNotesValue(sheet);
+    // Tear down any previous popout BEFORE opening the replacement: the new
+    // window shares the same sheetId filter, so a post-assign notes-close
+    // would kill the fresh window instead of the orphan.
+    this.closeNotesPopout(true);
     let popout: Window | null;
     try {
       popout = window.open("", "_blank", "width=980,height=680");
@@ -534,9 +545,13 @@ export class DndmCharacterSheet extends GameElement {
       popout.document.close();
     } catch {
       console.warn("[dndm-character-sheet] failed to initialize notes popout document");
+      try {
+        popout.close();
+      } catch {
+        // Popup already gone — nothing to clean up.
+      }
       return;
     }
-    this.closeNotesPopout(false);
     this.notesPopout = popout;
     this.notesPopoutSheetId = sheet.id;
     this.pushNotesState(sheet.id);
@@ -560,15 +575,24 @@ export class DndmCharacterSheet extends GameElement {
       window.clearInterval(this.notesPopoutPoll);
       this.notesPopoutPoll = null;
     }
-    if (notify && this.notesChannel && this.notesPopoutSheetId) {
+    const old = this.notesPopout;
+    const oldSheetId = this.notesPopoutSheetId;
+    this.notesPopout = null;
+    this.notesPopoutSheetId = null;
+    if (old && !old.closed) {
       try {
-        this.notesChannel.postMessage({ type: "notes-close", sheetId: this.notesPopoutSheetId });
+        old.close();
+      } catch {
+        // Popup already gone — nothing to clean up.
+      }
+    }
+    if (notify && this.notesChannel && oldSheetId) {
+      try {
+        this.notesChannel.postMessage({ type: "notes-close", sheetId: oldSheetId });
       } catch {
         // Channel already torn down — nothing to notify.
       }
     }
-    this.notesPopout = null;
-    this.notesPopoutSheetId = null;
   }
 
   private onAttributeInput(sheet: CharacterSheet, row: AttributeRow, val: AttributeValue): void {
@@ -1048,9 +1072,6 @@ export class DndmCharacterSheet extends GameElement {
             .onClose=${() => {
               this.closeNotesModal();
             }}
-            .onCancel=${() => {
-              this.closeNotesModal();
-            }}
             @tab-change=${(e: CustomEvent<{ tab: NotesTab }>) => {
               this.notesModalTab = e.detail.tab;
             }}
@@ -1058,9 +1079,6 @@ export class DndmCharacterSheet extends GameElement {
               this.onModalNotesInput(modalSheet.id, e.detail.value);
             }}
             @close=${() => {
-              this.closeNotesModal();
-            }}
-            @cancel=${() => {
               this.closeNotesModal();
             }}
           ></dndm-notes-modal>

@@ -55,4 +55,17 @@ describe("toSafeHtml Notes Markdown Parser", () => {
     expect(dangerousResult).not.toContain("<a href");
     expect(dangerousResult).toContain("Malicious (javascript:alert(1))");
   });
+
+  it("renders relative links as links (popup renderer parity)", () => {
+    expect(toSafeHtml("[Local](/docs/lore)")).toBe(
+      '<p><a href="/docs/lore" target="_blank" rel="noopener noreferrer">Local</a></p>',
+    );
+    expect(toSafeHtml("[Rel](./lore)")).toBe(
+      '<p><a href="./lore" target="_blank" rel="noopener noreferrer">Rel</a></p>',
+    );
+  });
+
+  it("normalizes lone carriage returns (popup renderer parity)", () => {
+    expect(toSafeHtml("a\rb")).toBe("<p>a</p><p>b</p>");
+  });
 });
