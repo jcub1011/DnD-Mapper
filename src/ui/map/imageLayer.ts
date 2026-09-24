@@ -98,6 +98,9 @@ export class ImageLayer {
   private selectedImageId: string | null = null;
   private activeDragHandle: string | null = null;
   private activeSpriteDragId: string | null = null;
+  // Sticky tool lock: while a map tool is selected, images stay
+  // non-interactive across rebuilds (setImages on every state sync).
+  private interactionsEnabled = true;
 
   public onImageTransformEnd?: (event: ImageTransformEvent) => void;
   public onImageSelect?: (imageId: string | null) => void;
@@ -131,6 +134,8 @@ export class ImageLayer {
 
   selectImage(imageId: string | null): void {
     if (this.selectedImageId === imageId) return;
+    // While a tool is selected, block new selections (deselect always allowed).
+    if (imageId !== null && !this.interactionsEnabled) return;
     this.selectedImageId = imageId;
     if (imageId === null) {
       // External deselect (empty click, tool switch) must not leave a stale
@@ -197,7 +202,8 @@ export class ImageLayer {
       // Setup interaction (drop stale listeners first: setImages() runs on
       // every state sync, otherwise DRAG_END handlers accumulate with stale
       // closures that fight over sprite position — same bug class as tokens).
-      if (!img.locked) {
+      // A selected tool locks all images: stay non-interactive across rebuilds.
+      if (this.interactionsEnabled && !img.locked) {
         sprite!.removeAllListeners();
         sprite!.disableInteractive();
         sprite!.setInteractive();
@@ -306,6 +312,7 @@ export class ImageLayer {
     });
 
     sprite.on(Phaser.Input.Events.POINTER_UP, (pointer: Phaser.Input.Pointer) => {
+      if (!this.interactionsEnabled) return;
       if (
         !didDrag &&
         Math.hypot(pointer.worldX - startPointerX, pointer.worldY - startPointerY) <= 3
@@ -319,6 +326,7 @@ export class ImageLayer {
     this.scene.input.setDraggable(sprite);
 
     sprite.on(Phaser.Input.Events.DRAG_START, (_pointer: Phaser.Input.Pointer) => {
+      if (!this.interactionsEnabled) return;
       didDrag = false;
       this.activeSpriteDragId = img.id;
       this.selectImage(img.id);
@@ -327,6 +335,7 @@ export class ImageLayer {
     sprite.on(
       Phaser.Input.Events.DRAG,
       (pointer: Phaser.Input.Pointer, dragX: number, dragY: number) => {
+        if (!this.interactionsEnabled) return;
         if (Math.hypot(pointer.worldX - startPointerX, pointer.worldY - startPointerY) > 3) {
           didDrag = true;
         }
@@ -339,6 +348,11 @@ export class ImageLayer {
 
     sprite.on(Phaser.Input.Events.DRAG_END, (pointer: Phaser.Input.Pointer) => {
       this.activeSpriteDragId = null;
+      if (!this.interactionsEnabled) {
+        sprite.setPosition((img.x + img.width / 2) * CELL, (img.y + img.height / 2) * CELL);
+        this.redrawSelectionHandles();
+        return;
+      }
       if (!didDrag) {
         sprite.setPosition((img.x + img.width / 2) * CELL, (img.y + img.height / 2) * CELL);
         this.redrawSelectionHandles();
@@ -484,6 +498,13 @@ export class ImageLayer {
   }
 
   private redrawSelectionHandles(): void {
+    // While a tool is selected no selection outline or handles may exist.
+    if (!this.interactionsEnabled) {
+      this.selectionGfx.clear();
+      for (const h of this.handleContainers.values()) h.destroy(true);
+      this.handleContainers.clear();
+      return;
+    }
     // While a transform drag is active the dragged container must survive;
     // just reposition instead of destroy/recreate.
     if (this.activeDragHandle !== null || this.activeSpriteDragId !== null) {
@@ -568,16 +589,19 @@ export class ImageLayer {
     };
 
     rotContainer.on(Phaser.Input.Events.DRAG_START, () => {
+      if (!this.interactionsEnabled) return;
       this.activeDragHandle = "rot";
     });
 
     rotContainer.on(Phaser.Input.Events.DRAG, (pointer: Phaser.Input.Pointer) => {
+      if (!this.interactionsEnabled) return;
       sprite.setAngle(resolveRotation(pointer));
       this.repositionHandles();
     });
 
     rotContainer.on(Phaser.Input.Events.DRAG_END, (pointer: Phaser.Input.Pointer) => {
       this.activeDragHandle = null;
+      if (!this.interactionsEnabled) return;
       // Recompute from the release point so the commit matches the preview
       // even if Ctrl was pressed/released between the last move tick and drop.
       const finalRotation = resolveRotation(pointer);
@@ -642,10 +666,12 @@ export class ImageLayer {
     const aspectRatio = img.width / Math.max(0.001, img.height);
 
     handle.on(Phaser.Input.Events.DRAG_START, () => {
+      if (!this.interactionsEnabled) return;
       this.activeDragHandle = cornerId;
     });
 
     handle.on(Phaser.Input.Events.DRAG, (pointer: Phaser.Input.Pointer) => {
+      if (!this.interactionsEnabled) return;
       const dragCellX = pointer.worldX / CELL;
       const dragCellY = pointer.worldY / CELL;
 
@@ -677,6 +703,7 @@ export class ImageLayer {
 
     handle.on(Phaser.Input.Events.DRAG_END, (pointer: Phaser.Input.Pointer) => {
       this.activeDragHandle = null;
+      if (!this.interactionsEnabled) return;
       const dragCellX = pointer.worldX / CELL;
       const dragCellY = pointer.worldY / CELL;
       const shiftHeld = pointer.event ? (pointer.event as MouseEvent).shiftKey : false;
@@ -707,6 +734,7 @@ export class ImageLayer {
   }
 
   setInteractiveState(enabled: boolean): void {
+    this.interactionsEnabled = enabled;
     for (const [id, sprite] of this.sprites.entries()) {
       const img = this.images.find((i) => i.id === id);
       if (enabled && img && !img.locked) {
@@ -715,8 +743,14 @@ export class ImageLayer {
         sprite.disableInteractive();
       }
     }
+    for (const handle of this.handleContainers.values()) {
+      handle.disableInteractive();
+    }
     if (!enabled) {
       this.selectImage(null);
+      // selectImage(null) already clears via redrawSelectionHandles, but
+      // ensure no stale handle survives if selection was already null.
+      this.redrawSelectionHandles();
     }
   }
 

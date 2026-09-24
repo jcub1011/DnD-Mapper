@@ -369,6 +369,17 @@ export class DndmMarkupOverlay extends GameElement {
     this.onCommitMarkup?.(nextSvg);
   }
 
+  /**
+   * Mouse-clicking a palette button leaves keyboard focus on it, so a later
+   * Space-to-pan would re-activate the focused button instead of panning.
+   * Drop focus so Space pans. (Keyboard users who Tab to a button and press
+   * Space still get normal button activation.)
+   */
+  private blurPaletteControl(e: Event): void {
+    const control = (e.target as Element | null)?.closest?.("button");
+    (control as HTMLElement | null)?.blur?.();
+  }
+
   private clearAll(): void {
     if (this.strokes.length === 0) return;
     if (window.confirm("Clear all markup from this map?")) {
@@ -389,7 +400,12 @@ export class DndmMarkupOverlay extends GameElement {
     return html`
       <div class="dndm-markup-overlay">
         <!-- Floating Palette -->
-        <div class="dndm-markup-palette" role="toolbar" aria-label="Markup tools">
+        <div
+          class="dndm-markup-palette"
+          role="toolbar"
+          aria-label="Markup tools"
+          @click=${this.blurPaletteControl}
+        >
           <button
             class="dndm-markup-btn ${this.activeTool === "pen" ? "active" : ""}"
             type="button"

@@ -335,9 +335,12 @@ export class MapScene extends Phaser.Scene {
   }
 
   private applyInteractiveState(): void {
-    const isNone = this.effectiveMode === "none";
-    this.imageLayer.setInteractiveState(isNone);
-    this.tokenLayer.setInteractiveState(isNone);
+    // Lock on the selected tool itself, not the Space-to-pan override:
+    // holding Space still pans (via effectiveMode) but must not re-enable
+    // image selection/resize or token move/click until the tool is cleared.
+    const toolSelected = this.currentToolMode !== "none";
+    this.imageLayer.setInteractiveState(!toolSelected);
+    this.tokenLayer.setInteractiveState(!toolSelected);
   }
 
   /** True when the pointer is over token-layer content (map token or popover chip). */

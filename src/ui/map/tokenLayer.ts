@@ -47,6 +47,9 @@ export class TokenLayer {
   // current user (wired from dndm-app via MapScene). Denied tokens render
   // click-only and never emit onTokenMoveEnd.
   private canMoveToken: (token: Token) => boolean = () => true;
+  // Sticky tool lock: while a map tool is selected, tokens stay
+  // non-interactive across rebuilds (setTokens on every state sync).
+  private interactionsEnabled = true;
 
   public onTokenMoveEnd?: (event: TokenDragEvent) => void;
   public onTokenDoubleClick?: (tokenId: string) => void;
@@ -222,8 +225,11 @@ export class TokenLayer {
       const cellKey = this.cellKeyOf(token);
       const stack = stackMap.get(cellKey);
       this.populateTokenContainer(container!, token, {
-        draggable: this.isDirectlyMovable(token, stack),
+        draggable: this.interactionsEnabled && this.isDirectlyMovable(token, stack),
       });
+      if (!this.interactionsEnabled) {
+        container!.disableInteractive();
+      }
 
       // Add stack count badge if multiple *visible* tokens share this cell
       if (stack && stack.tokens.length > 1 && stack.tokens[0].id === token.id) {
@@ -311,8 +317,12 @@ export class TokenLayer {
 
     // Hit Area & Interactivity. Stacked tops and tokens the viewer may not
     // move are click-only (open popover / sheet); singles the viewer may move
-    // are draggable.
+    // are draggable. While a tool is selected everything is fully disabled.
     container.setSize(radius * 2, radius * 2);
+    if (!this.interactionsEnabled) {
+      container.disableInteractive();
+      return;
+    }
     this.applyDraggable(container, opts.draggable);
 
     this.setupContainerInput(container, token, opts);
@@ -341,6 +351,7 @@ export class TokenLayer {
 
   /** Shared click behavior: toggle the stack popover for multi-token stacks. */
   private handleTokenClick(token: Token): void {
+    if (!this.interactionsEnabled) return;
     const cellKey = this.cellKeyOf(token);
     if (this.expandedStackCell === cellKey) {
       this.closePopover();
@@ -354,6 +365,7 @@ export class TokenLayer {
   }
 
   private openTokenSheet(tokenId: string, sheetId: string | null): void {
+    if (!this.interactionsEnabled) return;
     this.onTokenDoubleClick?.(tokenId);
     if (sheetId) {
       window.dispatchEvent(
@@ -389,11 +401,13 @@ export class TokenLayer {
     token: Token,
     opts: { draggable: boolean },
   ): void {
+    if (!this.interactionsEnabled) return;
     if (!opts.draggable) {
       // Click-only token (stack top or no move permission): single click
       // toggles the stack popover, double-click opens the sheet.
       let lastClickTime = 0;
       container.on(Phaser.Input.Events.POINTER_UP, () => {
+        if (!this.interactionsEnabled) return;
         const now = Date.now();
         if (now - lastClickTime < 350) {
           this.openTokenSheet(token.id, token.sheetId);
@@ -411,6 +425,7 @@ export class TokenLayer {
     let dragStartY = 0;
 
     container.on(Phaser.Input.Events.DRAG_START, (_pointer: Phaser.Input.Pointer) => {
+      if (!this.interactionsEnabled) return;
       didDrag = false;
       dragStartX = container.x;
       dragStartY = container.y;
@@ -419,6 +434,7 @@ export class TokenLayer {
     container.on(
       Phaser.Input.Events.DRAG,
       (_pointer: Phaser.Input.Pointer, dragX: number, dragY: number) => {
+        if (!this.interactionsEnabled) return;
         if (Math.hypot(dragX - dragStartX, dragY - dragStartY) > 3) {
           didDrag = true;
           this.closePopover();
@@ -428,6 +444,7 @@ export class TokenLayer {
     );
 
     container.on(Phaser.Input.Events.DRAG_END, (pointer: Phaser.Input.Pointer) => {
+      if (!this.interactionsEnabled) return;
       if (!didDrag) {
         // Handle click / stack toggle / double click
         const now = Date.now();
@@ -456,6 +473,7 @@ export class TokenLayer {
   // ── Stack Popover & Chips Fan-out ──────────────────────────────────────────
 
   openPopover(stack: TokenStack): void {
+    if (!this.interactionsEnabled) return;
     this.expandedStackCell = `${stack.cell.cellX},${stack.cell.cellY}`;
     this.renderPopover(stack);
   }
@@ -467,6 +485,10 @@ export class TokenLayer {
   }
 
   private renderPopover(stack: TokenStack): void {
+    if (!this.interactionsEnabled) {
+      this.closePopover();
+      return;
+    }
     this.popoverContainer.removeAll(true);
     this.popoverGfx.clear();
 
@@ -516,7 +538,7 @@ export class TokenLayer {
         chipContainer.add(txt);
       }
 
-      const movable = this.canMoveToken(t);
+      const movable = this.interactionsEnabled && this.canMoveToken(t);
       if (!movable) chipContainer.setAlpha(0.65);
       chipContainer.setSize(chipRadius * 2, chipRadius * 2);
       this.applyDraggable(chipContainer, movable);
@@ -527,6 +549,7 @@ export class TokenLayer {
         let chipStartX = 0;
         let chipStartY = 0;
         chipContainer.on(Phaser.Input.Events.DRAG_START, () => {
+          if (!this.interactionsEnabled) return;
           didChipDrag = false;
           chipStartX = chipContainer.x;
           chipStartY = chipContainer.y;
@@ -534,6 +557,7 @@ export class TokenLayer {
         chipContainer.on(
           Phaser.Input.Events.DRAG,
           (_pointer: Phaser.Input.Pointer, dragX: number, dragY: number) => {
+            if (!this.interactionsEnabled) return;
             if (Math.hypot(dragX - chipStartX, dragY - chipStartY) > 3) {
               didChipDrag = true;
             }
@@ -541,6 +565,7 @@ export class TokenLayer {
           },
         );
         chipContainer.on(Phaser.Input.Events.DRAG_END, (pointer: Phaser.Input.Pointer) => {
+          if (!this.interactionsEnabled) return;
           if (!didChipDrag) return;
           const finalPos = this.resolveDrop(chipContainer, pointer);
           this.onTokenMoveEnd?.({ tokenId: t.id, x: finalPos.x, y: finalPos.y });
@@ -550,6 +575,7 @@ export class TokenLayer {
 
       let lastChipClick = 0;
       chipContainer.on(Phaser.Input.Events.POINTER_UP, () => {
+        if (!this.interactionsEnabled) return;
         const now = Date.now();
         if (now - lastChipClick < 350) {
           this.openTokenSheet(t.id, t.sheetId);
@@ -562,6 +588,7 @@ export class TokenLayer {
   }
 
   setInteractiveState(enabled: boolean): void {
+    this.interactionsEnabled = enabled;
     if (!enabled) {
       for (const container of this.tokenContainers.values()) {
         container.disableInteractive();
