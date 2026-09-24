@@ -8,6 +8,7 @@ import Phaser from "phaser";
 import { DEPTH } from "./depth";
 import { CELL } from "./viewport";
 import type { CharacterSheet, GridConfig, Token } from "../../game/domain";
+import { decodeFog, isFogged, type FogMaskBytes } from "../../game/fog";
 import { TOKEN_RADIUS, TOKEN_OWNER_HALO_RADIUS, TOKEN_STACK_CHIP_RADIUS } from "../../game/domain";
 import { snapToken } from "../../game/snapping";
 import {
@@ -40,6 +41,8 @@ export class TokenLayer {
     lineColor: "#222",
   };
   private isDm = false;
+  private viewerUserId: string | null = null;
+  private fogBytes: FogMaskBytes = new Uint8Array(0);
   private tweenMoves = false;
   private expandedStackCell: string | null = null;
   private activeTurnTokenId: string | null = null;
@@ -91,6 +94,33 @@ export class TokenLayer {
     this.grid = grid;
   }
 
+  /** Identity of the viewing player; fogged tokens they don't own are hidden. */
+  setViewerUserId(userId: string | null): void {
+    if (this.viewerUserId === userId) return;
+    this.viewerUserId = userId;
+    this.updateVisibility();
+  }
+
+  /** Current fog bitset (base64); empty means all-revealed. */
+  setFogMask(maskB64: string): void {
+    this.fogBytes = decodeFog(maskB64 ?? "");
+    this.updateVisibility();
+  }
+
+  /**
+   * Whether this token's cell is concealed from the current viewer: standing
+   * on fog while the viewer is neither DM nor owner (owner or represented
+   * user — NPC tokens with no owner are DM-only in fog).
+   */
+  private isFogConcealed(token: Token): boolean {
+    if (this.isDm) return false;
+    if (this.fogBytes.length === 0) return false;
+    if (!isFogged(this.fogBytes, this.grid, Math.floor(token.x), Math.floor(token.y))) {
+      return false;
+    }
+    return token.ownerUserId !== this.viewerUserId && token.representsUserId !== this.viewerUserId;
+  }
+
   setSheets(sheets: Readonly<Record<string, CharacterSheet>>): void {
     this.sheets = sheets;
     this.rebuildTokens();
@@ -102,9 +132,10 @@ export class TokenLayer {
   }
 
   /** Tokens to stack and render. Hiding is owned by host projection
-   *  (`projectForPlayer`): guests never receive hidden tokens, so no
-   *  client-side filter runs here. The DM renders the full truth, with hidden
-   *  tokens ghosted in `updateVisibility`. */
+   *  (`projectForPlayer`): guests never receive hidden tokens. Fog concealment
+   *  is enforced server-side too, with `updateVisibility` re-checking it
+   *  client-side (covers patch races). The DM renders the full truth, with
+   *  hidden tokens ghosted in `updateVisibility`. */
   private visibleTokens(): readonly Token[] {
     return this.tokens;
   }
@@ -163,6 +194,11 @@ export class TokenLayer {
         container.setVisible(false);
       } else if (!topVisibleById.has(token.id)) {
         // Stacked behind another token — hidden regardless of viewer.
+        container.setVisible(false);
+      } else if (this.isFogConcealed(token)) {
+        // Standing on fog the viewer neither DMs nor owns: concealed.
+        // (Server projection already strips these for guests; this covers
+        // the host DM's own view state and any race between patches.)
         container.setVisible(false);
       } else if (token.hidden) {
         // DM-only branch: the DM renders the full truth, so hidden tokens

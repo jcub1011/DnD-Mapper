@@ -60,7 +60,7 @@ import {
 } from "./dice.js";
 import { seedColorForName } from "./color.js";
 import { snapToken } from "./snapping.js";
-import { clearFog, decodeFog, encodeFog, fillFog, setCellsFogged } from "./fog.js";
+import { clearFog, decodeFog, encodeFog, fillFog, isFogged, setCellsFogged } from "./fog.js";
 import {
   addImageToMap,
   createNewMap,
@@ -580,7 +580,9 @@ export function projectSnapshot(state: DndMapperState): DndMapperState {
 // are prediction-only or DM-local rendering and must not win.
 //
 // Known leak, kept for legacy parity: fog masks stay broadcast. Documented
-// for DMs; see projectForPlayer.
+// for DMs; see projectForPlayer. Tokens standing on fogged cells, however,
+// are stripped for viewers who neither DM nor own them (see
+// isTokenRevealedToViewer).
 
 /** Whether players may see loaded-dice rules at all. Anything but an explicit
  *  player-visible setting (`VisibleToAll` / legacy `AllPlayers`) is DM-only —
@@ -602,11 +604,39 @@ function hiddenTokenIds(state: DndMapperState): Set<string> {
   return ids;
 }
 
-function projectMapForPlayer(map: GameMap | MapSummary, dm: boolean): GameMap | MapSummary {
+/**
+ * Whether a viewer's client may know a token exists at its current cell.
+ * Tokens on fogged cells are visible only to the DM and to the token's owner
+ * (matched on either `ownerUserId` or `representsUserId`, mirroring sheet
+ * ownership). NPC tokens with no owner are DM-only while fogged. Tokens on
+ * revealed cells (or when no fog is painted) stay visible to everyone, subject
+ * to the `hidden` flag handled by the caller.
+ */
+export function isTokenRevealedToViewer(
+  map: GameMap,
+  token: Token,
+  viewer: string,
+): boolean {
+  if (!map.fogMask || map.fogMask.length === 0) return true;
+  const fogged = isFogged(
+    decodeFog(map.fogMask),
+    map.grid,
+    Math.floor(token.x),
+    Math.floor(token.y),
+  );
+  if (!fogged) return true;
+  return token.ownerUserId === viewer || token.representsUserId === viewer;
+}
+
+function projectMapForPlayer(
+  map: GameMap | MapSummary,
+  dm: boolean,
+  viewer = "",
+): GameMap | MapSummary {
   if (dm || !isFullMap(map)) return map;
   return {
     ...map,
-    tokens: map.tokens.filter((t) => !t.hidden),
+    tokens: map.tokens.filter((t) => !t.hidden && isTokenRevealedToViewer(map, t, viewer)),
     images: map.images.filter((img) => isImageVisibleToPlayer(img, false)),
   };
 }
@@ -624,12 +654,12 @@ function projectSheetForPlayer(
 
 function projectCombatForPlayer(
   combat: CombatState | null,
-  hiddenIds: Set<string>,
+  removedIds: Set<string>,
   dm: boolean,
 ): CombatState | null {
   if (combat === null || dm) return combat;
   const turnOrder = combat.turnOrder
-    .filter((c) => !hiddenIds.has(c.tokenId))
+    .filter((c) => !removedIds.has(c.tokenId))
     .map((c) => (c.pendingInitiative === null ? c : { ...c, pendingInitiative: null }));
   return {
     ...combat,
@@ -650,8 +680,10 @@ export function projectForPlayer(state: DndMapperState, playerId: string | null)
   const snapshot = projectSnapshot(state);
   if (dm) return snapshot;
 
-  const hiddenIds = hiddenTokenIds(state);
-  const maps = snapshot.maps.map((m) => projectMapForPlayer(m, false));
+  const maps = snapshot.maps.map((m) => projectMapForPlayer(m, false, viewer));
+  // Combatants whose tokens are hidden OR fog-stripped for this viewer drop
+  // out of the turn order (same set the map projection above removes).
+  const removedIds = removedTokenIdsForViewer(state, viewer);
   const sheets: Record<string, CharacterSheet> = {};
   for (const [id, sheet] of Object.entries(snapshot.sheets)) {
     const projected = projectSheetForPlayer(sheet, viewer, state);
@@ -662,7 +694,7 @@ export function projectForPlayer(state: DndMapperState, playerId: string | null)
     maps,
     sheets,
     rollLog: filterVisibleRolls(snapshot.rollLog, viewer, false, state.settings.rollsVisibleToPlayers),
-    activeCombat: projectCombatForPlayer(snapshot.activeCombat, hiddenIds, false),
+    activeCombat: projectCombatForPlayer(snapshot.activeCombat, removedIds, false),
     loadedDiceRules: areLoadedDiceRulesVisibleToPlayers(state) ? snapshot.loadedDiceRules : [],
   };
 }
@@ -674,6 +706,66 @@ function hadVisibleToken(prevState: DndMapperState, tokenId: string): boolean {
     if (token) return !token.hidden;
   }
   return false;
+}
+
+/** Full map holding a token, looked up by the token's mapId. */
+function mapForToken(state: DndMapperState, token: Token): GameMap | null {
+  for (const m of state.maps) {
+    if (isFullMap(m) && m.id === token.mapId) return m;
+  }
+  return null;
+}
+
+/**
+ * Whether a non-DM viewer may know about this token at its current cell:
+ * the `hidden` flag aside, fogged cells are owner-only (see
+ * `isTokenRevealedToViewer`). Unknown maps fail open — without the map we
+ * cannot judge fog, so the token passes through.
+ */
+function isTokenKnownToViewer(
+  state: DndMapperState,
+  token: Token,
+  viewer: string,
+): boolean {
+  const map = mapForToken(state, token);
+  if (!map) return true;
+  return isTokenRevealedToViewer(map, token, viewer);
+}
+
+/**
+ * Tombstone decision for fog-stripped tokens: did the viewer know about this
+ * token before the mutation? Judged from the previous position/record when
+ * available (a token that just moved onto fog was had; one that sat in fog
+ * was not).
+ */
+function wasTokenKnownToViewer(
+  prevState: DndMapperState,
+  token: Token,
+  viewer: string,
+): boolean {
+  let prev: Token = token;
+  for (const m of prevState.maps) {
+    if (!isFullMap(m)) continue;
+    const found = m.tokens.find((t) => t.id === token.id);
+    if (found) {
+      prev = found;
+      break;
+    }
+  }
+  if (prev.hidden) return false;
+  return isTokenKnownToViewer(prevState, prev, viewer);
+}
+
+/** Ids of tokens stripped from a non-DM viewer: hidden or fog-concealed. */
+function removedTokenIdsForViewer(state: DndMapperState, viewer: string): Set<string> {
+  const ids = hiddenTokenIds(state);
+  for (const m of state.maps) {
+    if (!isFullMap(m)) continue;
+    for (const t of m.tokens) {
+      if (!t.hidden && !isTokenRevealedToViewer(m, t, viewer)) ids.add(t.id);
+    }
+  }
+  return ids;
 }
 
 function hadVisibleImage(prevState: DndMapperState, imageId: string): boolean {
@@ -710,9 +802,17 @@ export function projectPatchForPlayer(
     case "full":
       return { kind: "full", state: projectForPlayer(state, playerId) };
     case "map":
-      return { ...patch, map: projectMapForPlayer(patch.map, false) as GameMap };
+      return { ...patch, map: projectMapForPlayer(patch.map, false, viewer) as GameMap };
     case "token": {
-      if (!patch.token.hidden) return patch;
+      if (!patch.token.hidden) {
+        // Fog strip: a non-hidden token the viewer may not know about (on
+        // fog they don't own through) tombstones exactly like a hidden one.
+        if (!isTokenKnownToViewer(state, patch.token, viewer)) {
+          const had = prevState ? wasTokenKnownToViewer(prevState, patch.token, viewer) : true;
+          return had ? { kind: "tokenRemoved", tokenId: patch.token.id } : null;
+        }
+        return patch;
+      }
       const had = prevState ? hadVisibleToken(prevState, patch.token.id) : true;
       return had ? { kind: "tokenRemoved", tokenId: patch.token.id } : null;
     }
@@ -730,7 +830,11 @@ export function projectPatchForPlayer(
         ? patch
         : {
             kind: "combat",
-            combat: projectCombatForPlayer(patch.combat, hiddenTokenIds(state), false),
+            combat: projectCombatForPlayer(
+              patch.combat,
+              removedTokenIdsForViewer(state, viewer),
+              false,
+            ),
           };
     case "roll": {
       const visible =

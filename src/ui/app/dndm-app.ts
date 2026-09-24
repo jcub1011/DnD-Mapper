@@ -646,6 +646,7 @@ export class DndmApp extends GameElement {
 
     map.setDm(this.isDm);
     map.setAssetSource(this.assetSource);
+    map.setViewerUserId(this.controller?.playerId ?? null);
     this.updateTokenMovePolicy();
 
     const activeMap = this.activeMap;
@@ -730,9 +731,9 @@ export class DndmApp extends GameElement {
             map.updateTokens(displayTokens);
             map.updateImages(displayImages);
             map.updateSheets(state.sheets);
-            if (activeMap.fogMask) {
-              map.updateFog(activeMap.fogMask);
-            }
+            // Always apply — an empty mask is a real state (all revealed)
+            // that must clear the texture, not be skipped.
+            map.updateFog(activeMap.fogMask ?? "");
             map.updateMarkup(activeMap.markupSvg ?? null);
           }
           if (state.focusRect) {
@@ -755,15 +756,16 @@ export class DndmApp extends GameElement {
             map.updateTokens(activeMap.tokens);
             map.updateImages(activeMap.images);
             map.updateSheets(state.sheets);
-            if (activeMap.fogMask) {
-              map.updateFog(activeMap.fogMask);
-            }
+            // Always apply — an empty mask is a real state (all revealed)
+            // that must clear the texture, not be skipped.
+            map.updateFog(activeMap.fogMask ?? "");
             map.updateMarkup(activeMap.markupSvg ?? null);
           }
         }
       }
       map.setActiveTurnTokenId(resolveActiveTurnTokenId(state.activeCombat));
       map.setFocusRect(state.focusRect);
+      map.setViewerUserId(this.controller?.playerId ?? null);
       this.updateTokenMovePolicy();
 
       if (

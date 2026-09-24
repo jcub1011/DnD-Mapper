@@ -190,12 +190,14 @@ export class MapScene extends Phaser.Scene {
 
     this.fogLayer.setDm(this.isDm);
     this.fogLayer.setupGrid(map.grid);
-    if (map.fogMask) {
-      this.fogLayer.updateMask(map.fogMask);
-    }
+    // Always apply — an empty mask means all-revealed and must clear the
+    // texture rather than leave stale fog behind.
+    this.fogLayer.updateMask(map.fogMask ?? "");
+    this.fogLayer.setFogToolActive(this.currentToolMode === "fog");
 
     this.tokenLayer.setDm(this.isDm);
     this.tokenLayer.setGrid(map.grid);
+    this.tokenLayer.setFogMask(map.fogMask ?? "");
     this.tokenLayer.setTokens(map.tokens);
 
     this.focusOverlay.setFocusRect(null);
@@ -284,7 +286,13 @@ export class MapScene extends Phaser.Scene {
   }
 
   updateFog(mask: FogMaskB64): void {
-    this.fogLayer.updateMask(mask);
+    this.fogLayer.updateMask(mask ?? "");
+    this.tokenLayer.setFogMask(mask ?? "");
+  }
+
+  /** Identity of the viewing player; tokens on fog they don't own hide from them. */
+  setViewerUserId(userId: string | null): void {
+    this.tokenLayer.setViewerUserId(userId);
   }
 
   setFocusRect(rect: FocusRect | null): void {
@@ -297,6 +305,8 @@ export class MapScene extends Phaser.Scene {
     this.fogLayer.setDm(isDm);
     this.tokenLayer.setDm(isDm);
   }
+
+
 
   setAssetSource(source: AssetSource): void {
     this.imageLayer.setAssetSource(source);
@@ -325,6 +335,7 @@ export class MapScene extends Phaser.Scene {
     this.rulerOverlay.clear();
     this.focusOverlay.cancelDrag();
     this.fogLayer.cancelStroke();
+    this.fogLayer.setFogToolActive(mode === "fog");
 
     this.applyInteractiveState();
   }
@@ -632,12 +643,25 @@ export class MapScene extends Phaser.Scene {
       if (mode === "fog" && pointer.isDown) {
         this.fogLayer.addBrushCells(Math.floor(cellX), Math.floor(cellY), this.fogBrushRadius);
         this.fogLayer.redrawPreview(this.fogBrushMode === "paint");
+      } else if (mode === "fog") {
+        // Hover preview: show exactly the cells the brush would paint/erase.
+        this.fogLayer.showHover(
+          Math.floor(cellX),
+          Math.floor(cellY),
+          this.fogBrushRadius,
+          this.fogBrushMode === "paint",
+        );
       } else if (mode === "focus" && pointer.isDown) {
         const ctrl = pointer.event ? (pointer.event as MouseEvent).ctrlKey : false;
         this.focusOverlay.updateDrag(cellX, cellY, !ctrl && this.snapToGrid);
       } else if (mode === "ruler" && this.rulerOverlay.pointA && !this.rulerOverlay.pointB) {
         this.rulerOverlay.setPreviewPoint(cellX, cellY);
       }
+    });
+
+    // Clear the fog hover preview when the pointer leaves the canvas.
+    this.input.on(Phaser.Input.Events.GAME_OUT, () => {
+      this.fogLayer.clearHover();
     });
 
     // 5. Pointer Up

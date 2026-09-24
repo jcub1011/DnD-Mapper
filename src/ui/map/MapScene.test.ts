@@ -4,11 +4,11 @@ import Phaser from "phaser";
 import { DEPTH } from "./depth";
 import { CELL } from "./viewport";
 import { MapScene } from "./MapScene";
-import { FogLayer } from "./fogLayer";
+import { brushFootprint, computeFogPerimeter, FogLayer } from "./fogLayer";
 import { RulerOverlay } from "./rulerOverlay";
 import { FocusOverlay } from "./focusOverlay";
 import type { GridConfig, MapImage, Token } from "../../game/domain";
-import { encodeFog } from "../../game/fog";
+import { encodeFog, fillFog, setCellFogged } from "../../game/fog";
 
 function createTestGame(scene: Phaser.Scene): Promise<Phaser.Game> {
   return new Promise<Phaser.Game>((resolve) => {
@@ -458,6 +458,95 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
     expect(tokenContainers.get("hidden-top")!.visible).toBe(true);
   });
 
+  it("conceals tokens on fogged cells from non-owners but shows them to owner and DM", () => {
+    const grid: GridConfig = {
+      widthCells: 30,
+      heightCells: 20,
+      cellPixels: CELL,
+      showGridLines: true,
+      snapToGrid: true,
+      lineColor: "#222",
+    };
+    scene.updateGrid(grid);
+
+    // Cells (5, 4) and (6, 4) are fogged; (10, 10) stays revealed.
+    let mask = setCellFogged(new Uint8Array(0), grid, 5, 4, true);
+    mask = setCellFogged(mask, grid, 6, 4, true);
+    const tokens: Token[] = [
+      {
+        id: "foreign-fogged",
+        type: "NPCToken",
+        ownerUserId: null,
+        representsUserId: null,
+        name: "Goblin",
+        color: "#0f0",
+        iconKind: "Initial",
+        mapId: "map1",
+        x: 5.5,
+        y: 4.5,
+        sheetId: null,
+        hidden: false,
+      },
+      {
+        id: "owned-fogged",
+        type: "PlayerToken",
+        ownerUserId: "u1",
+        representsUserId: null,
+        name: "Hero",
+        color: "#00f",
+        iconKind: "Initial",
+        mapId: "map1",
+        x: 6.5,
+        y: 4.5,
+        sheetId: null,
+        hidden: false,
+      },
+      {
+        id: "foreign-revealed",
+        type: "NPCToken",
+        ownerUserId: null,
+        representsUserId: null,
+        name: "Shopkeep",
+        color: "#ff0",
+        iconKind: "Initial",
+        mapId: "map1",
+        x: 10.5,
+        y: 10.5,
+        sheetId: null,
+        hidden: false,
+      },
+    ];
+
+    scene.setDm(false);
+    scene.setViewerUserId("u1");
+    scene.updateFog(encodeFog(mask));
+    scene.updateTokens(tokens);
+
+    const tokenContainers = (
+      scene as unknown as {
+        tokenLayer: { tokenContainers: Map<string, Phaser.GameObjects.Container> };
+      }
+    ).tokenLayer.tokenContainers;
+
+    // NPC on fog with no owner: hidden from the player.
+    expect(tokenContainers.get("foreign-fogged")!.visible).toBe(false);
+    // Owner still sees their own token standing in fog.
+    expect(tokenContainers.get("owned-fogged")!.visible).toBe(true);
+    // Tokens on revealed cells stay visible to everyone.
+    expect(tokenContainers.get("foreign-revealed")!.visible).toBe(true);
+
+    // The DM sees everything, including the fog-concealed NPC.
+    scene.setDm(true);
+    scene.updateTokens(tokens);
+    expect(tokenContainers.get("foreign-fogged")!.visible).toBe(true);
+    expect(tokenContainers.get("owned-fogged")!.visible).toBe(true);
+
+    // Clearing the fog reveals the concealed token to the player again.
+    scene.setDm(false);
+    scene.updateFog("");
+    expect(tokenContainers.get("foreign-fogged")!.visible).toBe(true);
+  });
+
   it("anchors zoom to the visible center between rails", () => {
     const cam = scene.cameras.main;
     scene.resetView();
@@ -569,6 +658,105 @@ describe("FogLayer Diffing and Brush Math", () => {
     // At corner (0,0), radius 2 checks dx in [-1, 1], dy in [-1, 1], only (0,0), (1,0), (0,1), (1,1) valid = 4 cells
     expect(fogLayer.strokeCells.size).toBe(4);
     fogLayer.endStroke();
+  });
+
+  it("clears the fog texture when the mask is emptied (clear-fog regression)", () => {
+    const grid: GridConfig = {
+      widthCells: 8,
+      heightCells: 8,
+      cellPixels: CELL,
+      showGridLines: true,
+      snapToGrid: true,
+      lineColor: "#222",
+    };
+    fogLayer.setupGrid(grid);
+
+    // Fill every cell, then clear: no texel may stay opaque.
+    fogLayer.updateMask(encodeFog(fillFog(grid)));
+    const data = (fogLayer as unknown as { cachedImageData: ImageData }).cachedImageData.data;
+    expect(data[0 * 4 + 3]).toBe(255);
+    expect(data[63 * 4 + 3]).toBe(255);
+
+    fogLayer.updateMask("");
+    for (let i = 0; i < 64; i++) {
+      expect(data[i * 4 + 3]).toBe(0);
+    }
+  });
+
+  it("computes brush footprints shared by strokes and hover previews", () => {
+    expect(brushFootprint(5, 5, 1, 30, 20)).toEqual([5 * 30 + 5]);
+    expect(brushFootprint(5, 5, 2, 30, 20)).toHaveLength(9);
+    expect(brushFootprint(5, 5, 3, 30, 20)).toHaveLength(21);
+    // Corner clamping matches the legacy stroke behavior (4 cells).
+    expect(brushFootprint(0, 0, 2, 30, 20)).toHaveLength(4);
+  });
+
+  it("interpolates fast strokes so no gaps remain between frames", () => {
+    const grid: GridConfig = {
+      widthCells: 30,
+      heightCells: 20,
+      cellPixels: CELL,
+      showGridLines: true,
+      snapToGrid: true,
+      lineColor: "#222",
+    };
+    fogLayer.setupGrid(grid);
+
+    // Fast horizontal jump: every cell between the frames is covered.
+    fogLayer.startStroke();
+    fogLayer.addBrushCells(0, 0, 1);
+    fogLayer.addBrushCells(5, 0, 1);
+    const horizontal = fogLayer.endStroke();
+    for (let x = 0; x <= 5; x++) {
+      expect(horizontal).toContain(x);
+    }
+
+    // Fast diagonal jump likewise leaves no gaps.
+    fogLayer.startStroke();
+    fogLayer.addBrushCells(0, 0, 1);
+    fogLayer.addBrushCells(3, 3, 1);
+    const diagonal = fogLayer.endStroke();
+    for (let i = 0; i <= 3; i++) {
+      expect(diagonal).toContain(i * 30 + i);
+    }
+
+    // Interpolation accumulates into the same stroke set (mode-agnostic,
+    // so paint and erase strokes both benefit).
+    fogLayer.startStroke();
+    fogLayer.addBrushCells(10, 10, 2);
+    fogLayer.addBrushCells(12, 10, 2);
+    const wide = fogLayer.endStroke();
+    expect(wide).toContain(10 * 30 + 11); // cell (11, 10) bridged
+  });
+
+  it("traces the fog perimeter: empty, single cell, shared edges, full map", () => {
+    // Empty mask → no border.
+    expect(computeFogPerimeter(new Uint8Array(0), 4, 4)).toEqual([]);
+
+    // Single fogged cell → its 4 edges.
+    const grid4: GridConfig = {
+      widthCells: 4,
+      heightCells: 4,
+      cellPixels: CELL,
+      showGridLines: true,
+      snapToGrid: true,
+      lineColor: "#222",
+    };
+    let mask = setCellFogged(new Uint8Array(0), grid4, 1, 1, true);
+    expect(computeFogPerimeter(mask, 4, 4)).toHaveLength(4);
+
+    // Two adjacent cells share an edge → 6 segments, not 8.
+    mask = setCellFogged(mask, grid4, 2, 1, true);
+    expect(computeFogPerimeter(mask, 4, 4)).toHaveLength(6);
+
+    // Full map → just the outer rectangle (perimeter of the grid).
+    const full = computeFogPerimeter(fillFog(grid4), 4, 4);
+    expect(full).toHaveLength(16);
+    for (const e of full) {
+      const onOuter =
+        e.y1 === 0 || e.y1 === 4 || e.x1 === 0 || e.x1 === 4;
+      expect(onOuter).toBe(true);
+    }
   });
 
   it("updates fog mask with XOR diffing", () => {

@@ -854,6 +854,7 @@ describe("<dndm-app> Application Shell", () => {
         updateTokens: vi.fn(),
         updateImages: vi.fn(),
         updateFog: vi.fn(),
+        setViewerUserId: vi.fn(),
         updateMarkup: vi.fn(),
       } as unknown as MapScene & Record<string, unknown>;
     }

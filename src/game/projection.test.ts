@@ -12,6 +12,7 @@ import {
 } from "./domain";
 import { projectForPlayer, projectPatchForPlayer, projectSnapshot } from "./rules";
 import { guardSize } from "./wire";
+import { encodeFog, setCellFogged } from "./fog";
 import type { Patch } from "./types";
 
 const DM = "dm-1";
@@ -285,6 +286,49 @@ describe("projectForPlayer", () => {
     expect(fullMapOf(projectForPlayer(state, BOB)).fogMask).toBe("abcd");
   });
 
+  it("strips tokens on fogged cells for non-owners but keeps them for owner and DM", () => {
+    // tok-open (owned by ALICE) sits at (1.5, 1.5) → cell (1, 1). Fog it.
+    const map = fullMapOf(setupHiddenState());
+    const mask = setCellFogged(new Uint8Array(0), map.grid, 1, 1, true);
+    const state: DndMapperState = {
+      ...setupHiddenState(),
+      maps: [{ ...map, fogMask: encodeFog(mask) }],
+    };
+    // BOB owns nothing here: sees no tokens.
+    expect(fullMapOf(projectForPlayer(state, BOB)).tokens).toEqual([]);
+    // Owner still sees their token under fog.
+    expect(fullMapOf(projectForPlayer(state, ALICE)).tokens.map((t) => t.id)).toEqual([
+      "tok-open",
+    ]);
+    // DM sees the full truth.
+    expect(fullMapOf(projectForPlayer(state, DM)).tokens.map((t) => t.id)).toEqual([
+      "tok-open",
+      "tok-hidden",
+    ]);
+    // Fog mask itself still broadcasts.
+    expect(fullMapOf(projectForPlayer(state, BOB)).fogMask).toBe(encodeFog(mask));
+  });
+
+  it("drops fog-stripped combatants from the turn order for non-owners", () => {
+    const map = fullMapOf(setupHiddenState());
+    const mask = setCellFogged(new Uint8Array(0), map.grid, 1, 1, true);
+    const state: DndMapperState = {
+      ...setupHiddenState(),
+      maps: [{ ...map, fogMask: encodeFog(mask) }],
+    };
+    expect(projectForPlayer(state, BOB).activeCombat?.turnOrder).toEqual([]);
+    expect(
+      projectForPlayer(state, ALICE).activeCombat?.turnOrder.map((c) => c.id),
+    ).toEqual(["c-open"]);
+  });
+
+  it("keeps tokens on revealed cells visible to everyone", () => {
+    const state = setupHiddenState();
+    expect(fullMapOf(projectForPlayer(state, BOB)).tokens.map((t) => t.id)).toEqual([
+      "tok-open",
+    ]);
+  });
+
   it("leak test: guest snapshot contains no hidden bytes and is strict-JSON", () => {
     const state = setupHiddenState();
     const projected = projectForPlayer(state, BOB);
@@ -439,6 +483,43 @@ describe("projectPatchForPlayer", () => {
     expect(projectPatchForPlayer(fog, BOB, state)).toBe(fog);
     const removed: Patch = { kind: "tokenRemoved", tokenId: "tok-hidden" };
     expect(projectPatchForPlayer(removed, BOB, state)).toBe(removed);
+  });
+
+  it("tombstones tokens that move onto fog for non-owners", () => {
+    const prev = setupHiddenState();
+    const map = fullMapOf(prev);
+    const mask = setCellFogged(new Uint8Array(0), map.grid, 1, 1, true);
+    const fogged: DndMapperState = {
+      ...prev,
+      maps: [{ ...map, fogMask: encodeFog(mask) }],
+    };
+    // tok-open (ALICE's) slides onto its own fogged cell — same position, fog added.
+    const moved: Patch = { kind: "token", token: makeToken({ id: "tok-open" }) };
+    // BOB knew it before → tombstone so his client removes it.
+    expect(projectPatchForPlayer(moved, BOB, fogged, prev)).toEqual({
+      kind: "tokenRemoved",
+      tokenId: "tok-open",
+    });
+    // Owner still receives the live token.
+    expect(projectPatchForPlayer(moved, ALICE, fogged, prev)).toBe(moved);
+    // Already fog-hidden in both states → null (never had it).
+    expect(projectPatchForPlayer(moved, BOB, fogged, fogged)).toBeNull();
+    // Map patches strip fogged foreign tokens too.
+    const mapPatch = projectPatchForPlayer({ kind: "map", map: fullMapOf(fogged) }, BOB, fogged);
+    expect(mapPatch?.kind).toBe("map");
+    if (mapPatch?.kind === "map" && "tokens" in mapPatch.map) {
+      expect(mapPatch.map.tokens).toEqual([]);
+    }
+    // Combat patches drop fog-stripped combatants for non-owners.
+    const combatPatch = projectPatchForPlayer(
+      { kind: "combat", combat: fogged.activeCombat },
+      BOB,
+      fogged,
+    );
+    expect(combatPatch?.kind).toBe("combat");
+    if (combatPatch?.kind === "combat") {
+      expect(combatPatch.combat?.turnOrder).toEqual([]);
+    }
   });
 
   it("per-recipient guardSize passes on projected patches", () => {
