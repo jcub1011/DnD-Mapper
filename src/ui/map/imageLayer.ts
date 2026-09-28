@@ -140,6 +140,7 @@ export class ImageLayer {
   private activeDragHandle: string | null = null;
   private activeSpriteDragId: string | null = null;
   private hoveredHandle: string | null = null;
+  private hoveredSpriteId: string | null = null;
   // True while this layer has overridden the canvas cursor/title for a handle.
   private ownsCursor = false;
   private savedCanvasTitle = "";
@@ -208,6 +209,11 @@ export class ImageLayer {
         }
       }
     }
+
+    // Re-registering interactivity below clears Phaser's over-tracking, so a
+    // later POINTER_OUT would never fire for the current hover; forget it and
+    // let the next pointer move re-emit POINTER_OVER.
+    this.hoveredSpriteId = null;
 
     // 2. Sort by layerOrder to establish rank (DEPTH.IMAGES + rank)
     const sorted = sortImagesByLayer(this.images);
@@ -367,6 +373,17 @@ export class ImageLayer {
       }
     });
 
+    // Move cursor while over the selected image (see desiredCursor()).
+    sprite.on(Phaser.Input.Events.POINTER_OVER, () => {
+      this.hoveredSpriteId = img.id;
+      this.syncCursor();
+    });
+    sprite.on(Phaser.Input.Events.POINTER_OUT, () => {
+      if (this.hoveredSpriteId !== img.id) return;
+      this.hoveredSpriteId = null;
+      this.syncCursor();
+    });
+
     // Make scene listen to pointer move when selected image is dragging
     this.scene.input.setDraggable(sprite);
 
@@ -375,6 +392,8 @@ export class ImageLayer {
       didDrag = false;
       this.activeSpriteDragId = img.id;
       this.selectImage(img.id);
+      // Mid-drag selection only repositions the handles; update the cursor here.
+      this.syncCursor();
     });
 
     sprite.on(
@@ -393,6 +412,7 @@ export class ImageLayer {
 
     sprite.on(Phaser.Input.Events.DRAG_END, (pointer: Phaser.Input.Pointer) => {
       this.activeSpriteDragId = null;
+      this.syncCursor();
       if (!this.interactionsEnabled) {
         sprite.setPosition((img.x + img.width / 2) * CELL, (img.y + img.height / 2) * CELL);
         this.redrawSelectionHandles();
@@ -626,24 +646,43 @@ export class ImageLayer {
   }
 
   /**
-   * Shows the gesture cursor and a native tooltip naming the gesture and its
-   * modifier keys while a handle is hovered or dragged. Managed here rather
-   * than via Phaser's `cursor` option, which resets whenever the pointer
-   * slips off a handle mid-drag.
+   * Cursor + tooltip for the current pointer state, or null to leave the
+   * canvas default. A hovered/dragged handle wins over the image beneath it.
+   */
+  private desiredCursor(): { cursor: string; title: string } | null {
+    const handleId = this.activeDragHandle ?? this.hoveredHandle;
+    if (handleId !== null && this.handleContainers.has(handleId)) {
+      // Hide the tooltip mid-drag so it doesn't trail the gesture.
+      const hint = handleId === ROTATE_HANDLE_ID ? ROTATE_HINT : RESIZE_HINT;
+      return {
+        cursor: this.handleCursor(handleId),
+        title: this.activeDragHandle !== null ? "" : hint,
+      };
+    }
+    const spriteId = this.activeSpriteDragId ?? this.hoveredSpriteId;
+    if (spriteId !== null && spriteId === this.selectedImageId) {
+      return { cursor: "move", title: "" };
+    }
+    return null;
+  }
+
+  /**
+   * Applies desiredCursor() to the canvas: gesture cursors for handles and
+   * the selected image, plus a native tooltip naming each handle's gesture
+   * and modifier keys. Managed here rather than via Phaser's `cursor` option,
+   * which resets whenever the pointer slips off a handle mid-drag.
    */
   private syncCursor(): void {
     const canvas = this.scene.game.canvas as HTMLCanvasElement | null | undefined;
     if (!canvas) return;
-    const id = this.activeDragHandle ?? this.hoveredHandle;
-    if (id !== null && this.handleContainers.has(id)) {
+    const desired = this.desiredCursor();
+    if (desired) {
       if (!this.ownsCursor) {
         this.savedCanvasTitle = canvas.title;
         this.ownsCursor = true;
       }
-      canvas.style.cursor = this.handleCursor(id);
-      // Hide the tooltip mid-drag so it doesn't trail the gesture.
-      canvas.title =
-        this.activeDragHandle !== null ? "" : id === ROTATE_HANDLE_ID ? ROTATE_HINT : RESIZE_HINT;
+      canvas.style.cursor = desired.cursor;
+      canvas.title = desired.title;
     } else if (this.ownsCursor) {
       this.ownsCursor = false;
       canvas.style.cursor = this.scene.input.manager.defaultCursor;
@@ -818,6 +857,8 @@ export class ImageLayer {
 
   setInteractiveState(enabled: boolean): void {
     this.interactionsEnabled = enabled;
+    // Toggling interactivity drops Phaser's over-tracking (no POINTER_OUT follows).
+    this.hoveredSpriteId = null;
     for (const [id, sprite] of this.sprites.entries()) {
       const img = this.images.find((i) => i.id === id);
       if (enabled && img && !img.locked) {

@@ -308,6 +308,67 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
     expect(canvas.title).toBe("");
   });
 
+  it("shows a move cursor only over the selected image", () => {
+    const base = {
+      contentType: "image/png",
+      shareToken: null,
+      width: 2,
+      height: 2,
+      originalWidth: 128,
+      originalHeight: 128,
+      rotation: 0,
+      opacity: 1,
+      locked: false,
+      hidden: false,
+      byteSize: 400,
+      wasDownscaled: false,
+      originalLongEdgePx: 128,
+      displayLongEdgePx: 128,
+    };
+    const images: MapImage[] = [
+      { ...base, id: "move_a", name: "A", x: 0, y: 0, layerOrder: 1 },
+      { ...base, id: "move_b", name: "B", x: 5, y: 5, layerOrder: 2 },
+    ];
+    scene.updateImages(images);
+    scene.selectImage("move_a");
+
+    const sprites = (
+      scene as unknown as { imageLayer: { sprites: Map<string, Phaser.GameObjects.Image> } }
+    ).imageLayer.sprites;
+    const canvas = scene.game.canvas;
+
+    // Unselected image: no move cursor.
+    sprites.get("move_b")!.emit(Phaser.Input.Events.POINTER_OVER);
+    expect(canvas.style.cursor).not.toBe("move");
+    sprites.get("move_b")!.emit(Phaser.Input.Events.POINTER_OUT);
+
+    sprites.get("move_a")!.emit(Phaser.Input.Events.POINTER_OVER);
+    expect(canvas.style.cursor).toBe("move");
+
+    // A handle on top of the image takes precedence.
+    const handles = (
+      scene as unknown as {
+        imageLayer: { handleContainers: Map<string, Phaser.GameObjects.Container> };
+      }
+    ).imageLayer.handleContainers;
+    handles.get("se")!.emit(Phaser.Input.Events.POINTER_OVER);
+    expect(canvas.style.cursor).toBe("nwse-resize");
+    handles.get("se")!.emit(Phaser.Input.Events.POINTER_OUT);
+    expect(canvas.style.cursor).toBe("move");
+
+    sprites.get("move_a")!.emit(Phaser.Input.Events.POINTER_OUT);
+    expect(canvas.style.cursor).not.toBe("move");
+
+    // Selecting the image already under the pointer shows the cursor at once.
+    sprites.get("move_b")!.emit(Phaser.Input.Events.POINTER_OVER);
+    scene.selectImage("move_b");
+    expect(canvas.style.cursor).toBe("move");
+
+    // A selected tool locks images and clears the cursor.
+    scene.setToolMode("ruler");
+    expect(canvas.style.cursor).not.toBe("move");
+  });
+
   it("maps handle directions to the nearest CSS resize cursor", () => {
     expect(resizeCursorForAngle(45)).toBe("nwse-resize"); // SE corner, unrotated
     expect(resizeCursorForAngle(225)).toBe("nwse-resize"); // NW corner
