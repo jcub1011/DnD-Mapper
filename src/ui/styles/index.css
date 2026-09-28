@@ -1,2 +1,12 @@
 @import "./tokens.css";
+@import "./panels.css";
+@import "./sheet.css";
+@import "./sheet-popout.css";
+@import "./status-effects.css";
+@import "./shell.css";
+@import "./dice.css";
+@import "./loaded-dice.css";
+@import "./initiative.css";
+@import "./markup.css";
+@import "./display.css";
 @import "./base.css";

@@ -1,15 +1,12 @@
 /*
- * Builds the Phaser global-plugin config for the launch mode, and — for the two
- * server-less modes — wires this game's REAL authority module in as a virtual
- * server actor.
+ * Builds the Phaser global-plugin config for the launch mode.
  *
- * That last part is the point of this file. `solo` and `local-tab` both run
- * `createAuthority` locally through the addon's emulation, so every peer gets
- * `ready` with `isHost:false` / `authority:'server'` and every frame takes the
- * byte-identical path it will take against the real server. There is no
- * "single-player code path" that can rot — and the emulation's fidelity checks
- * (strict-JSON boundary, poisoned `Date`) catch sandbox violations during
- * `npm run dev` instead of after deployment.
+ * All three modes run the same host-authoritative path: the DM's browser holds
+ * the truth behind the controller seam (MatchView), and the transport just
+ * routes frames. `solo` and `local-tab` use the no-server peer with no
+ * `authority:` option, so every peer gets `ready` with
+ * `isHost:true/false` / `authority:'host'` exactly as the relay reports live.
+ * There is no "single-player code path" that can rot.
  *
  * ── The addons are UMD ──
  * The build runs them through CommonJS interop, so each module's api is the
@@ -26,18 +23,6 @@ import "./phaserGlobal";
 import KnockBoxCore from "../../addons/knockbox/kb-core.js";
 import KnockBoxPluginImport from "../../addons/knockbox/knockbox-plugin.js";
 import KnockBoxLocalImport from "../../addons/knockbox/knockbox-local.js";
-/*
- * NOTE: this pulls the authority module into the CLIENT bundle.
- *
- * Fine for this template — its rules hold no secrets. It is NOT fine for a
- * hidden-information game (secret roles, hands, an answer word): the real server
- * deliberately never serves `authority.js` to clients, and importing it here would
- * hand every player the secret anyway. For those games, use the URL form instead —
- * `authority: "./authority.js"` — which the local peer fetches, import-scans and
- * dynamic-imports at runtime; put a dev copy in `public/` so it is served locally
- * but is not statically reachable from the client graph.
- */
-import { createAuthority } from "../authority/authority";
 import type { KnockBoxLocalOptions } from "../../addons/knockbox/knockbox-phaser";
 import type { LaunchMode } from "./launch";
 
@@ -60,17 +45,17 @@ const LocalPlugin: unknown = KnockBoxLocalImport?.KnockBoxLocalPlugin ?? g.Knock
 /** Phaser global-plugin config for the launch mode, or null if the class is missing. */
 export function knockboxPluginConfig(mode: LaunchMode): Record<string, unknown> | null {
   if (mode === "platform") {
-    // The KnockBox server loads and runs authority.js itself, one instance per
-    // lobby. The client passes nothing extra — `sendToHost` already routes to it.
+    // The relay elects the lobby creator (the DM) as host and routes
+    // `sendToHost` to it. The manifest declares no `serverAuthority`.
     return RealPlugin
       ? { key: "KnockBox", plugin: RealPlugin, start: true, mapping: "knockbox" }
       : null;
   }
 
-  // solo and local-tab: emulate the server actor in-process with the real module.
+  // solo and local-tab: no-server peer in TRUE host mode. No `authority:`
+  // option — the DM browser behind the controller is the host.
   const data: KnockBoxLocalOptions = {
     mode: mode === "local-tab" ? "tab" : "solo",
-    authority: createAuthority,
   };
   return LocalPlugin
     ? { key: "KnockBox", plugin: LocalPlugin, start: true, mapping: "knockbox", data }

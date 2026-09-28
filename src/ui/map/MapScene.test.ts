@@ -1,0 +1,1928 @@
+// @vitest-environment happy-dom
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import Phaser from "phaser";
+import { DEPTH } from "./depth";
+import { CELL } from "./viewport";
+import { MapScene } from "./MapScene";
+import { brushFootprint, computeFogPerimeter, FogLayer } from "./fogLayer";
+import { RulerOverlay } from "./rulerOverlay";
+import { FocusOverlay } from "./focusOverlay";
+import { resizeCursorForAngle } from "./imageLayer";
+import type { GridConfig, MapImage, Token } from "../../game/domain";
+import { encodeFog, fillFog, setCellFogged } from "../../game/fog";
+
+function createTestGame(scene: Phaser.Scene): Promise<Phaser.Game> {
+  return new Promise<Phaser.Game>((resolve) => {
+    new Phaser.Game({
+      type: Phaser.HEADLESS,
+      width: 1920,
+      height: 1080,
+      scene: [scene],
+      callbacks: {
+        postBoot: (bootedGame) => {
+          // Patch Phaser 4.2.1 headless bug where TextureManager.stamp is undefined on destroy
+          const tm = bootedGame.textures as unknown as { stamp?: { destroy: () => void } };
+          if (tm && !tm.stamp) {
+            tm.stamp = { destroy: () => {} };
+          }
+          resolve(bootedGame);
+        },
+      },
+    });
+  });
+}
+
+describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
+  let game: Phaser.Game;
+  let scene: MapScene;
+
+  beforeEach(async () => {
+    scene = new MapScene();
+    game = await createTestGame(scene);
+  });
+
+  afterEach(() => {
+    try {
+      game.destroy(true, false);
+    } catch {
+      // Phaser headless teardown in happy-dom mock environment
+    }
+  });
+
+  it("initializes depth bands and viewport correctly", () => {
+    expect(DEPTH.BACKGROUND).toBe(0);
+    expect(DEPTH.IMAGES).toBe(1);
+    expect(DEPTH.GRID).toBe(1000);
+    expect(DEPTH.MARKUP).toBe(2000);
+    expect(DEPTH.FOG).toBe(3000);
+    expect(DEPTH.TOKENS).toBe(4000);
+    expect(DEPTH.FOCUS_RULER).toBe(5000);
+    expect(DEPTH.SELECTION).toBe(6000);
+
+    const cam = scene.cameras.main;
+    expect(cam.zoom).toBe(1.0);
+    expect(cam.scrollX).toBeCloseTo(0, 1);
+  });
+
+  it("assigns rank-normalized depths to images avoiding arbitrary layerOrder collisions", () => {
+    const images: MapImage[] = [
+      {
+        id: "img1",
+        name: "Background",
+        contentType: "image/png",
+        shareToken: null,
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+        originalWidth: 640,
+        originalHeight: 640,
+        rotation: 0,
+        opacity: 1,
+        layerOrder: 1500, // Dangerous: > 1000 would draw over grid if not normalized!
+        locked: false,
+        hidden: false,
+        byteSize: 1000,
+        wasDownscaled: false,
+        originalLongEdgePx: 640,
+        displayLongEdgePx: 640,
+      },
+      {
+        id: "img2",
+        name: "Overlay",
+        contentType: "image/png",
+        shareToken: null,
+        x: 2,
+        y: 2,
+        width: 5,
+        height: 5,
+        originalWidth: 320,
+        originalHeight: 320,
+        rotation: 45,
+        opacity: 0.8,
+        layerOrder: -50, // Negative layerOrder
+        locked: false,
+        hidden: false,
+        byteSize: 500,
+        wasDownscaled: false,
+        originalLongEdgePx: 320,
+        displayLongEdgePx: 320,
+      },
+      {
+        id: "img3",
+        name: "Mid",
+        contentType: "image/png",
+        shareToken: null,
+        x: 4,
+        y: 4,
+        width: 4,
+        height: 4,
+        originalWidth: 256,
+        originalHeight: 256,
+        rotation: 0,
+        opacity: 1,
+        layerOrder: 5,
+        locked: false,
+        hidden: false,
+        byteSize: 400,
+        wasDownscaled: false,
+        originalLongEdgePx: 256,
+        displayLongEdgePx: 256,
+      },
+    ];
+
+    scene.updateImages(images);
+
+    // Sorted order by layerOrder: img2 (-50) -> rank 0, img3 (5) -> rank 1, img1 (1500) -> rank 2
+    // All depths must be in [DEPTH.IMAGES, DEPTH.GRID - 1] = [1, 999]
+    const sprite1 = (
+      scene as unknown as { imageLayer: { sprites: Map<string, Phaser.GameObjects.Image> } }
+    ).imageLayer.sprites.get("img1")!;
+    const sprite2 = (
+      scene as unknown as { imageLayer: { sprites: Map<string, Phaser.GameObjects.Image> } }
+    ).imageLayer.sprites.get("img2")!;
+    const sprite3 = (
+      scene as unknown as { imageLayer: { sprites: Map<string, Phaser.GameObjects.Image> } }
+    ).imageLayer.sprites.get("img3")!;
+
+    expect(sprite2.depth).toBe(DEPTH.IMAGES + 0); // 1
+    expect(sprite3.depth).toBe(DEPTH.IMAGES + 1); // 2
+    expect(sprite1.depth).toBe(DEPTH.IMAGES + 2); // 3
+
+    expect(sprite1.depth).toBeLessThan(DEPTH.GRID);
+    expect(sprite2.depth).toBeGreaterThanOrEqual(DEPTH.IMAGES);
+  });
+
+  it("calculates image center position and rotation origin matching legacy Canvas2D translation", () => {
+    const img: MapImage = {
+      id: "rot_test",
+      name: "Rotated Map Piece",
+      contentType: "image/png",
+      shareToken: null,
+      x: 10,
+      y: 8,
+      width: 6,
+      height: 4,
+      originalWidth: 384,
+      originalHeight: 256,
+      rotation: 90, // Degrees
+      opacity: 0.9,
+      layerOrder: 1,
+      locked: false,
+      hidden: false,
+      byteSize: 1000,
+      wasDownscaled: false,
+      originalLongEdgePx: 384,
+      displayLongEdgePx: 384,
+    };
+
+    scene.updateImages([img]);
+
+    const sprite = (
+      scene as unknown as { imageLayer: { sprites: Map<string, Phaser.GameObjects.Image> } }
+    ).imageLayer.sprites.get("rot_test")!;
+
+    // Origin must be center (0.5, 0.5)
+    expect(sprite.originX).toBe(0.5);
+    expect(sprite.originY).toBe(0.5);
+
+    // Position must be at center: (x + width/2) * CELL, (y + height/2) * CELL
+    const expectedCenterX = (10 + 6 / 2) * CELL; // 13 * 64 = 832
+    const expectedCenterY = (8 + 4 / 2) * CELL; // 10 * 64 = 640
+
+    expect(sprite.x).toBe(expectedCenterX);
+    expect(sprite.y).toBe(expectedCenterY);
+    expect(sprite.angle).toBe(90);
+    expect(sprite.displayWidth).toBe(6 * CELL);
+    expect(sprite.displayHeight).toBe(4 * CELL);
+  });
+
+  it("keeps image selection handles a constant on-screen size across zoom changes", () => {
+    const img: MapImage = {
+      id: "handles_test",
+      name: "Handles",
+      contentType: "image/png",
+      shareToken: null,
+      x: 2,
+      y: 2,
+      width: 4,
+      height: 4,
+      originalWidth: 256,
+      originalHeight: 256,
+      rotation: 0,
+      opacity: 1,
+      layerOrder: 1,
+      locked: false,
+      hidden: false,
+      byteSize: 400,
+      wasDownscaled: false,
+      originalLongEdgePx: 256,
+      displayLongEdgePx: 256,
+    };
+
+    scene.updateImages([img]);
+    scene.selectImage("handles_test");
+
+    const handles = (
+      scene as unknown as {
+        imageLayer: { handleContainers: Map<string, Phaser.GameObjects.Container> };
+      }
+    ).imageLayer.handleContainers;
+    expect(handles.size).toBe(5);
+
+    const cam = scene.cameras.main;
+    const topEdgeY = img.y * CELL;
+    for (const h of handles.values()) expect(h.scaleX).toBeCloseTo(1, 5);
+    expect(handles.get("rot")!.y).toBeCloseTo(topEdgeY - 32, 5);
+
+    // Zoom without rebuilding the selection: the per-frame check must re-fit it.
+    scene.zoomIn();
+    scene.update();
+    const zoomedIn = cam.zoom;
+    expect(zoomedIn).toBeGreaterThan(1);
+    for (const h of handles.values()) expect(h.scaleX).toBeCloseTo(1 / zoomedIn, 5);
+    expect(handles.get("rot")!.y).toBeCloseTo(topEdgeY - 32 / zoomedIn, 5);
+
+    scene.zoomOut();
+    scene.zoomOut();
+    scene.update();
+    const zoomedOut = cam.zoom;
+    expect(zoomedOut).toBeLessThan(1);
+    for (const h of handles.values()) expect(h.scaleX).toBeCloseTo(1 / zoomedOut, 5);
+    expect(handles.get("rot")!.y).toBeCloseTo(topEdgeY - 32 / zoomedOut, 5);
+  });
+
+  it("highlights hovered image handles and shows a gesture cursor", () => {
+    const img: MapImage = {
+      id: "hover_test",
+      name: "Hover",
+      contentType: "image/png",
+      shareToken: null,
+      x: 2,
+      y: 2,
+      width: 4,
+      height: 4,
+      originalWidth: 256,
+      originalHeight: 256,
+      rotation: 0,
+      opacity: 1,
+      layerOrder: 1,
+      locked: false,
+      hidden: false,
+      byteSize: 400,
+      wasDownscaled: false,
+      originalLongEdgePx: 256,
+      displayLongEdgePx: 256,
+    };
+
+    scene.updateImages([img]);
+    scene.selectImage("hover_test");
+
+    const handles = (
+      scene as unknown as {
+        imageLayer: { handleContainers: Map<string, Phaser.GameObjects.Container> };
+      }
+    ).imageLayer.handleContainers;
+    const gfxOf = (id: string) => handles.get(id)!.getAt(0) as Phaser.GameObjects.Graphics;
+    // Headless Phaser still creates a canvas element.
+    const canvas = scene.game.canvas;
+    expect(canvas).toBeTruthy();
+
+    handles.get("se")!.emit(Phaser.Input.Events.POINTER_OVER);
+    expect(gfxOf("se").scaleX).toBeGreaterThan(1);
+    expect(gfxOf("nw").scaleX).toBe(1);
+    expect(canvas.style.cursor).toBe("nwse-resize");
+    expect(canvas.title).toContain("resize");
+
+    handles.get("se")!.emit(Phaser.Input.Events.POINTER_OUT);
+    expect(gfxOf("se").scaleX).toBe(1);
+    expect(canvas.title).toBe("");
+
+    handles.get("rot")!.emit(Phaser.Input.Events.POINTER_OVER);
+    expect(gfxOf("rot").scaleX).toBeGreaterThan(1);
+    expect(canvas.style.cursor).toContain("grab");
+    expect(canvas.title).toContain("rotate");
+
+    // Deselecting destroys the handles, which never emit POINTER_OUT.
+    scene.selectImage(null);
+    expect(canvas.title).toBe("");
+  });
+
+  it("shows a move cursor only over the selected image", () => {
+    const base = {
+      contentType: "image/png",
+      shareToken: null,
+      width: 2,
+      height: 2,
+      originalWidth: 128,
+      originalHeight: 128,
+      rotation: 0,
+      opacity: 1,
+      locked: false,
+      hidden: false,
+      byteSize: 400,
+      wasDownscaled: false,
+      originalLongEdgePx: 128,
+      displayLongEdgePx: 128,
+    };
+    const images: MapImage[] = [
+      { ...base, id: "move_a", name: "A", x: 0, y: 0, layerOrder: 1 },
+      { ...base, id: "move_b", name: "B", x: 5, y: 5, layerOrder: 2 },
+    ];
+    scene.updateImages(images);
+    scene.selectImage("move_a");
+
+    const sprites = (
+      scene as unknown as { imageLayer: { sprites: Map<string, Phaser.GameObjects.Image> } }
+    ).imageLayer.sprites;
+    const canvas = scene.game.canvas;
+
+    // Unselected image: no move cursor.
+    sprites.get("move_b")!.emit(Phaser.Input.Events.POINTER_OVER);
+    expect(canvas.style.cursor).not.toBe("move");
+    sprites.get("move_b")!.emit(Phaser.Input.Events.POINTER_OUT);
+
+    sprites.get("move_a")!.emit(Phaser.Input.Events.POINTER_OVER);
+    expect(canvas.style.cursor).toBe("move");
+
+    // A handle on top of the image takes precedence.
+    const handles = (
+      scene as unknown as {
+        imageLayer: { handleContainers: Map<string, Phaser.GameObjects.Container> };
+      }
+    ).imageLayer.handleContainers;
+    handles.get("se")!.emit(Phaser.Input.Events.POINTER_OVER);
+    expect(canvas.style.cursor).toBe("nwse-resize");
+    handles.get("se")!.emit(Phaser.Input.Events.POINTER_OUT);
+    expect(canvas.style.cursor).toBe("move");
+
+    sprites.get("move_a")!.emit(Phaser.Input.Events.POINTER_OUT);
+    expect(canvas.style.cursor).not.toBe("move");
+
+    // Selecting the image already under the pointer shows the cursor at once.
+    sprites.get("move_b")!.emit(Phaser.Input.Events.POINTER_OVER);
+    scene.selectImage("move_b");
+    expect(canvas.style.cursor).toBe("move");
+
+    // A selected tool locks images and clears the cursor.
+    scene.setToolMode("ruler");
+    expect(canvas.style.cursor).not.toBe("move");
+  });
+
+  it("maps handle directions to the nearest CSS resize cursor", () => {
+    expect(resizeCursorForAngle(45)).toBe("nwse-resize"); // SE corner, unrotated
+    expect(resizeCursorForAngle(225)).toBe("nwse-resize"); // NW corner
+    expect(resizeCursorForAngle(135)).toBe("nesw-resize"); // SW corner
+    expect(resizeCursorForAngle(45 + 90)).toBe("nesw-resize"); // SE corner, rotated 90°
+    expect(resizeCursorForAngle(45 + 45)).toBe("ns-resize"); // SE corner, rotated 45°
+    expect(resizeCursorForAngle(315 + 45)).toBe("ew-resize"); // NE corner, rotated 45°
+    expect(resizeCursorForAngle(-45)).toBe("nesw-resize"); // negative angles wrap
+  });
+
+  it("creates token containers with readable labels, halos, and stack detection", () => {
+    const tokens: Token[] = [
+      {
+        id: "tok1",
+        type: "PlayerToken",
+        ownerUserId: "user_a",
+        representsUserId: null,
+        name: "Aragorn",
+        color: "#1a1a1a", // dark -> readable label text is white
+        iconKind: "Initial",
+        mapId: "map1",
+        x: 5.5,
+        y: 4.5,
+        sheetId: null,
+        hidden: false,
+      },
+      {
+        id: "tok2",
+        type: "PlayerToken",
+        ownerUserId: null,
+        representsUserId: null,
+        name: "Legolas",
+        color: "#ffffff", // light -> readable label text is black
+        iconKind: "Initial",
+        mapId: "map1",
+        x: 5.5,
+        y: 4.5, // Co-located with tok1 -> stack of 2!
+        sheetId: null,
+        hidden: false,
+      },
+    ];
+
+    scene.updateTokens(tokens);
+
+    const tokenContainers = (
+      scene as unknown as {
+        tokenLayer: { tokenContainers: Map<string, Phaser.GameObjects.Container> };
+      }
+    ).tokenLayer.tokenContainers;
+
+    const c1 = tokenContainers.get("tok1")!;
+    const c2 = tokenContainers.get("tok2")!;
+
+    expect(c1).toBeDefined();
+    expect(c2).toBeDefined();
+
+    expect(c1.x).toBe(5.5 * CELL);
+    expect(c1.y).toBe(4.5 * CELL);
+
+    // tok1 is on top and visible; tok2 is stacked behind until expanded
+    expect(c1.visible).toBe(true);
+    expect(c2.visible).toBe(false);
+  });
+
+  it("manages tool mode state transitions and Space-to-pan override", () => {
+    expect(scene.effectiveMode).toBe("none");
+
+    scene.setToolMode("fog");
+    expect(scene.effectiveMode).toBe("fog");
+
+    scene.setToolMode("ruler");
+    expect(scene.effectiveMode).toBe("ruler");
+
+    // Simulate holding Space: overrides any active tool to "none" for panning
+    (scene as unknown as { spaceHeld: boolean }).spaceHeld = true;
+    expect(scene.effectiveMode).toBe("none");
+
+    // Releasing Space restores tool
+    (scene as unknown as { spaceHeld: boolean }).spaceHeld = false;
+    expect(scene.effectiveMode).toBe("ruler");
+  });
+
+  describe("clearing a tool after a state sync while locked", () => {
+    const image: MapImage = {
+      id: "relock_img",
+      name: "Relock",
+      contentType: "image/png",
+      shareToken: null,
+      x: 0,
+      y: 0,
+      width: 4,
+      height: 4,
+      originalWidth: 256,
+      originalHeight: 256,
+      rotation: 0,
+      opacity: 1,
+      layerOrder: 0,
+      locked: false,
+      hidden: false,
+      byteSize: 100,
+      wasDownscaled: false,
+      originalLongEdgePx: 256,
+      displayLongEdgePx: 256,
+    };
+    const token: Token = {
+      id: "relock_tok",
+      type: "PlayerToken",
+      ownerUserId: null,
+      representsUserId: null,
+      name: "Relock",
+      color: "#336699",
+      iconKind: "Initial",
+      mapId: "map1",
+      x: 3.5,
+      y: 3.5,
+      sheetId: null,
+      hidden: false,
+    };
+
+    type InputState = { enabled: boolean; draggable: boolean } | null;
+
+    it("restores image selection and drag listeners", () => {
+      scene.updateImages([image]);
+      scene.setToolMode("fog");
+      scene.updateImages([image]); // sync caused by using the tool
+      scene.setToolMode("none");
+
+      const sprite = (
+        scene as unknown as { imageLayer: { sprites: Map<string, Phaser.GameObjects.Image> } }
+      ).imageLayer.sprites.get(image.id)!;
+      const input = sprite.input as unknown as InputState;
+      expect(input?.enabled).toBe(true);
+      expect(input?.draggable).toBe(true);
+      expect(sprite.listenerCount(Phaser.Input.Events.POINTER_UP)).toBeGreaterThan(0);
+      expect(sprite.listenerCount(Phaser.Input.Events.DRAG_START)).toBeGreaterThan(0);
+    });
+
+    it("restores token drag listeners", () => {
+      scene.updateTokens([token]);
+      scene.setToolMode("fog");
+      scene.updateTokens([token]); // sync caused by using the tool
+      scene.setToolMode("none");
+
+      const container = (
+        scene as unknown as {
+          tokenLayer: { tokenContainers: Map<string, Phaser.GameObjects.Container> };
+        }
+      ).tokenLayer.tokenContainers.get(token.id)!;
+      const input = container.input as unknown as InputState;
+      expect(input?.enabled).toBe(true);
+      expect(input?.draggable).toBe(true);
+      expect(container.listenerCount(Phaser.Input.Events.DRAG_START)).toBeGreaterThan(0);
+      expect(container.listenerCount(Phaser.Input.Events.DRAG_END)).toBeGreaterThan(0);
+    });
+  });
+
+  describe("releases off the canvas (POINTER_UP_OUTSIDE)", () => {
+    const grid: GridConfig = {
+      widthCells: 30,
+      heightCells: 20,
+      cellPixels: CELL,
+      showGridLines: true,
+      snapToGrid: true,
+      lineColor: "#222",
+    };
+
+    /** Left-button pointer at screen == world point (x, y). */
+    const leftPointer = (x: number, y: number) =>
+      ({
+        x,
+        y,
+        worldX: x,
+        worldY: y,
+        isDown: true,
+        event: null,
+        leftButtonDown: () => true,
+        middleButtonDown: () => false,
+        rightButtonDown: () => false,
+      }) as unknown as Phaser.Input.Pointer;
+
+    it("ends a background pan so returning to the canvas doesn't keep panning", () => {
+      const cam = scene.cameras.main;
+      scene.input.emit(Phaser.Input.Events.POINTER_DOWN, leftPointer(100, 100));
+      scene.input.emit(Phaser.Input.Events.POINTER_UP_OUTSIDE, leftPointer(100, 100));
+      const { scrollX, scrollY } = cam;
+
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, leftPointer(300, 300));
+
+      expect(cam.scrollX).toBe(scrollX);
+      expect(cam.scrollY).toBe(scrollY);
+    });
+
+    it("commits the fog stroke", () => {
+      scene.updateGrid(grid);
+      scene.setToolMode("fog");
+      const commits: number[][] = [];
+      scene.onFogStrokeCommit = (cells) => commits.push(cells);
+
+      scene.input.emit(Phaser.Input.Events.POINTER_DOWN, leftPointer(5.5 * CELL, 5.5 * CELL));
+      scene.input.emit(Phaser.Input.Events.POINTER_UP_OUTSIDE, leftPointer(5.5 * CELL, 5.5 * CELL));
+
+      expect(commits).toEqual([[5 * 30 + 5]]);
+    });
+
+    it("commits the focus rect", () => {
+      scene.updateGrid(grid);
+      scene.setToolMode("focus");
+      let committed: unknown = null;
+      scene.onFocusRectCommit = (rect) => (committed = rect);
+
+      scene.input.emit(Phaser.Input.Events.POINTER_DOWN, leftPointer(2 * CELL, 2 * CELL));
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, leftPointer(6 * CELL, 5 * CELL));
+      scene.input.emit(Phaser.Input.Events.POINTER_UP_OUTSIDE, leftPointer(6 * CELL, 5 * CELL));
+
+      expect(committed).not.toBeNull();
+    });
+  });
+
+  describe("focus box editing", () => {
+    const grid: GridConfig = {
+      widthCells: 30,
+      heightCells: 20,
+      cellPixels: CELL,
+      showGridLines: true,
+      snapToGrid: true,
+      lineColor: "#222",
+    };
+    const box = { mapId: "map1", x: 2, y: 2, width: 4, height: 3 };
+
+    /** Pointer at cell-space point (cx, cy); screen == world at zoom 1. */
+    const cellPointer = (
+      cx: number,
+      cy: number,
+      opts: { isDown?: boolean; ctrlKey?: boolean; shiftKey?: boolean } = {},
+    ) =>
+      ({
+        x: cx * CELL,
+        y: cy * CELL,
+        worldX: cx * CELL,
+        worldY: cy * CELL,
+        isDown: opts.isDown ?? true,
+        event: { ctrlKey: opts.ctrlKey ?? false, shiftKey: opts.shiftKey ?? false },
+        leftButtonDown: () => true,
+        middleButtonDown: () => false,
+        rightButtonDown: () => false,
+      }) as unknown as Phaser.Input.Pointer;
+
+    let commits: unknown[];
+
+    const drag = (
+      from: [number, number],
+      to: [number, number],
+      opts: { ctrlKey?: boolean; shiftKey?: boolean } = {},
+    ) => {
+      scene.input.emit(Phaser.Input.Events.POINTER_DOWN, cellPointer(...from, opts));
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, cellPointer(...to, opts));
+      scene.input.emit(Phaser.Input.Events.POINTER_UP, cellPointer(...to, opts));
+    };
+
+    const pressEscape = () =>
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+
+    const storedFocus = () =>
+      (scene as unknown as { focusOverlay: { currentFocus: unknown } }).focusOverlay.currentFocus;
+
+    beforeEach(() => {
+      scene.resetView();
+      (scene as unknown as { activeMap: { id: string } }).activeMap = { id: "map1" };
+      scene.updateGrid(grid);
+      scene.setFocusRect(box);
+      scene.setToolMode("focus");
+      commits = [];
+      scene.onFocusRectCommit = (rect) => commits.push(rect);
+    });
+
+    it("moves the box when dragging inside it, keeping its size and snapping", () => {
+      drag([3, 3], [5.2, 4.1]);
+      expect(commits).toEqual([{ mapId: "map1", x: 4, y: 3, width: 4, height: 3 }]);
+    });
+
+    it("moves freely with Ctrl held", () => {
+      drag([3, 3], [5.2, 4.1], { ctrlKey: true });
+      const rect = commits[0] as typeof box;
+      expect(rect.x).toBeCloseTo(4.2, 4);
+      expect(rect.y).toBeCloseTo(3.1, 4);
+      expect(rect.width).toBe(4);
+      expect(rect.height).toBe(3);
+    });
+
+    it("resizes from a corner with the aspect ratio locked", () => {
+      drag([6, 5], [10, 6]);
+      expect(commits).toEqual([{ mapId: "map1", x: 2, y: 2, width: 8, height: 6 }]);
+    });
+
+    it("resizes with a free aspect ratio while Shift is held", () => {
+      drag([6, 5], [10, 6], { shiftKey: true });
+      expect(commits).toEqual([{ mapId: "map1", x: 2, y: 2, width: 8, height: 4 }]);
+    });
+
+    it("resizes from the opposite corner, anchoring the far one", () => {
+      drag([2, 2], [0, 1], { shiftKey: true });
+      expect(commits).toEqual([{ mapId: "map1", x: 0, y: 1, width: 6, height: 4 }]);
+    });
+
+    it("draws a new box when dragging outside the existing one", () => {
+      drag([10, 10], [12, 12]);
+      expect(commits).toEqual([{ mapId: "map1", x: 10, y: 10, width: 2, height: 2 }]);
+    });
+
+    it("does not commit a click on the box without movement", () => {
+      drag([3, 3], [3, 3]);
+      expect(commits).toEqual([]);
+    });
+
+    it("cancels a new draw on Escape and keeps the old box", () => {
+      scene.input.emit(Phaser.Input.Events.POINTER_DOWN, cellPointer(10, 10));
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, cellPointer(12, 12));
+      pressEscape();
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, cellPointer(14, 14));
+      scene.input.emit(Phaser.Input.Events.POINTER_UP, cellPointer(14, 14));
+
+      expect(commits).toEqual([]);
+      expect(storedFocus()).toEqual(box);
+    });
+
+    it("cancels a move on Escape", () => {
+      scene.input.emit(Phaser.Input.Events.POINTER_DOWN, cellPointer(3, 3));
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, cellPointer(8, 8));
+      pressEscape();
+      scene.input.emit(Phaser.Input.Events.POINTER_UP, cellPointer(8, 8));
+
+      expect(commits).toEqual([]);
+      expect(storedFocus()).toEqual(box);
+    });
+
+    it("draws instead of moving a box that belongs to another map", () => {
+      scene.setFocusRect({ ...box, mapId: "other" });
+      drag([3, 3], [5, 4]);
+      expect(commits).toEqual([{ mapId: "map1", x: 3, y: 3, width: 2, height: 1 }]);
+    });
+
+    it("stays editable after the focus tool is toggled off and back on", () => {
+      scene.setToolMode("none");
+      scene.setToolMode("focus");
+      drag([3, 3], [5.2, 4.1]);
+      expect(commits).toEqual([{ mapId: "map1", x: 4, y: 3, width: 4, height: 3 }]);
+    });
+
+    it("shows move and resize cursors while hovering the box", () => {
+      const canvas = scene.game.canvas;
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, cellPointer(6, 5, { isDown: false }));
+      expect(canvas.style.cursor).toBe("nwse-resize");
+      expect(canvas.title).toContain("resize");
+
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, cellPointer(6, 2, { isDown: false }));
+      expect(canvas.style.cursor).toBe("nesw-resize");
+
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, cellPointer(4, 3, { isDown: false }));
+      expect(canvas.style.cursor).toBe("move");
+      expect(canvas.title).toBe("");
+
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, cellPointer(15, 15, { isDown: false }));
+      expect(canvas.style.cursor).not.toBe("move");
+    });
+
+    it("releases the cursor when the focus tool is deselected", () => {
+      const canvas = scene.game.canvas;
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, cellPointer(4, 3, { isDown: false }));
+      expect(canvas.style.cursor).toBe("move");
+
+      scene.setToolMode("none");
+      expect(canvas.style.cursor).not.toBe("move");
+    });
+  });
+
+  it("centers and resets viewport properly", () => {
+    const cam = scene.cameras.main;
+
+    scene.centerOn(15, 10, 0);
+    expect(cam.midPoint.x).toBeCloseTo(15 * CELL, 1);
+    expect(cam.midPoint.y).toBeCloseTo(10 * CELL, 1);
+
+    scene.zoomIn();
+    expect(cam.zoom).toBeGreaterThan(1.0);
+
+    scene.resetView();
+    expect(cam.zoom).toBe(1.0);
+  });
+
+  it("centers on the visible center between rails", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    scene.setRailInsets(300, 100);
+
+    scene.centerOn(15, 10, 0);
+
+    // The token must land under the visible-center anchor (1060, 540),
+    // not under the physical canvas midpoint (960, 540).
+    const anchorX = (cam.width + scene.railLeft - scene.railRight) / 2;
+    const anchorY = cam.height / 2;
+    const wp = cam.getWorldPoint(anchorX, anchorY);
+    expect(wp.x).toBeCloseTo(15 * CELL, 1);
+    expect(wp.y).toBeCloseTo(10 * CELL, 1);
+  });
+
+  it("centers on the camera midpoint at a non-1 zoom", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    scene.setRailInsets(0, 0);
+    cam.setZoom(2.5);
+
+    scene.centerOn(15, 10, 0);
+
+    expect(cam.midPoint.x).toBeCloseTo(15 * CELL, 1);
+    expect(cam.midPoint.y).toBeCloseTo(10 * CELL, 1);
+  });
+
+  it("centers on the visible center between rails at a non-1 zoom", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    scene.setRailInsets(300, 100);
+    cam.setZoom(2.5);
+
+    scene.centerOn(15, 10, 0);
+
+    cam.preRender();
+    const anchorX = (cam.width + scene.railLeft - scene.railRight) / 2;
+    const anchorY = cam.height / 2;
+    const wp = cam.getWorldPoint(anchorX, anchorY);
+    expect(wp.x).toBeCloseTo(15 * CELL, 1);
+    expect(wp.y).toBeCloseTo(10 * CELL, 1);
+  });
+
+  it("frames a box instantly on the visible center between rails", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    scene.setRailInsets(300, 100);
+
+    scene.frameBox({ x: 10, y: 5, width: 4, height: 2 }, 0);
+    expect(cam.zoom).not.toBe(1);
+
+    cam.preRender();
+    const anchorX = (cam.width + scene.railLeft - scene.railRight) / 2;
+    const anchorY = cam.height / 2;
+    const wp = cam.getWorldPoint(anchorX, anchorY);
+    expect(wp.x).toBeCloseTo(12 * CELL, 1);
+    expect(wp.y).toBeCloseTo(6 * CELL, 1);
+  });
+
+  it("re-centering on the visible center world point leaves the view unchanged", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    scene.setRailInsets(300, 100);
+    cam.setZoom(1.8);
+    cam.scrollX = 437;
+    cam.scrollY = -212;
+
+    const before = scene.getVisibleCenterWorld();
+    const scrollX = cam.scrollX;
+    const scrollY = cam.scrollY;
+
+    scene.centerOn(before.x / CELL, before.y / CELL, 0);
+
+    expect(cam.scrollX).toBeCloseTo(scrollX, 1);
+    expect(cam.scrollY).toBeCloseTo(scrollY, 1);
+  });
+
+  it("centerOn animates by default and lands on the visible center", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    scene.setRailInsets(300, 100);
+    cam.setZoom(2.5);
+    cam.preRender();
+    const startScrollX = cam.scrollX;
+
+    scene.centerOn(15, 10);
+
+    // Nothing moves until the pan effect ticks.
+    expect(cam.panEffect.isRunning).toBe(true);
+    expect(cam.scrollX).toBe(startScrollX);
+
+    cam.panEffect.update(0, 1000);
+    cam.preRender();
+
+    expect(cam.panEffect.isRunning).toBe(false);
+    const anchorX = (cam.width + scene.railLeft - scene.railRight) / 2;
+    const anchorY = cam.height / 2;
+    const wp = cam.getWorldPoint(anchorX, anchorY);
+    expect(wp.x).toBeCloseTo(15 * CELL, 1);
+    expect(wp.y).toBeCloseTo(10 * CELL, 1);
+  });
+
+  it("a newer centerOn retargets a pan already in flight", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    scene.setRailInsets(0, 0);
+
+    scene.centerOn(15, 10);
+    cam.panEffect.update(0, 50);
+    scene.centerOn(40, 30);
+    cam.panEffect.update(0, 1000);
+
+    expect(cam.midPoint.x).toBeCloseTo(40 * CELL, 1);
+    expect(cam.midPoint.y).toBeCloseTo(30 * CELL, 1);
+  });
+
+  it("direct navigation cancels a running center pan", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+
+    scene.centerOn(15, 10);
+    scene.panByScreenDelta(10, 0);
+
+    expect(cam.panEffect.isRunning).toBe(false);
+  });
+
+  it("zooms cursor-anchored for DOM overlay surfaces", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    cam.preRender();
+
+    const sx = 400;
+    const sy = 300;
+    const before = cam.getWorldPoint(sx, sy);
+
+    scene.zoomAtScreenPoint(2.0, sx, sy);
+    expect(cam.zoom).toBeCloseTo(2.0, 4);
+
+    // The world point under the cursor must not move.
+    const after = cam.getWorldPoint(sx, sy);
+    expect(after.x).toBeCloseTo(before.x, 1);
+    expect(after.y).toBeCloseTo(before.y, 1);
+  });
+
+  it("pans by screen-pixel deltas for DOM overlay gestures", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    cam.setZoom(2.0);
+    cam.preRender();
+
+    const sx = 100;
+    const sy = 200;
+    const before = cam.getWorldPoint(sx, sy);
+
+    scene.panByScreenDelta(100, 50);
+
+    // The content follows the drag: the old world point now sits one delta away.
+    const after = cam.getWorldPoint(sx + 100, sy + 50);
+    expect(after.x).toBeCloseTo(before.x, 1);
+    expect(after.y).toBeCloseTo(before.y, 1);
+  });
+
+  it("gates token dragging by move policy and keeps stacked tops click-only", () => {
+    const tokens: Token[] = [
+      {
+        id: "solo",
+        type: "PlayerToken",
+        ownerUserId: "u1",
+        representsUserId: null,
+        name: "Solo",
+        color: "#fff",
+        iconKind: "Initial",
+        mapId: "map1",
+        x: 2.5,
+        y: 2.5,
+        sheetId: null,
+        hidden: false,
+      },
+      {
+        id: "stack-top",
+        type: "PlayerToken",
+        ownerUserId: "u1",
+        representsUserId: null,
+        name: "Top",
+        color: "#fff",
+        iconKind: "Initial",
+        mapId: "map1",
+        x: 5.5,
+        y: 4.5,
+        sheetId: null,
+        hidden: false,
+      },
+      {
+        id: "stack-behind",
+        type: "PlayerToken",
+        ownerUserId: "u1",
+        representsUserId: null,
+        name: "Behind",
+        color: "#fff",
+        iconKind: "Initial",
+        mapId: "map1",
+        x: 5.5,
+        y: 4.5,
+        sheetId: null,
+        hidden: false,
+      },
+    ];
+    scene.updateTokens(tokens);
+
+    const tokenContainers = (
+      scene as unknown as {
+        tokenLayer: { tokenContainers: Map<string, Phaser.GameObjects.Container> };
+      }
+    ).tokenLayer.tokenContainers;
+
+    const solo = tokenContainers.get("solo")!;
+    const top = tokenContainers.get("stack-top")!;
+    const behind = tokenContainers.get("stack-behind")!;
+
+    // Default policy allows everything: single is draggable, stack top is
+    // click-only (moves via popover chips), behind is hidden.
+    expect((solo.input as unknown as { draggable: boolean }).draggable).toBe(true);
+    expect((top.input as unknown as { draggable: boolean }).draggable).toBe(false);
+    expect(behind.visible).toBe(false);
+
+    // Deny-all policy: even the single token becomes click-only.
+    scene.setTokenMovePolicy(() => false);
+    expect((solo.input as unknown as { draggable: boolean }).draggable).toBe(false);
+
+    // Re-allow: draggable again.
+    scene.setTokenMovePolicy(() => true);
+    expect((solo.input as unknown as { draggable: boolean }).draggable).toBe(true);
+  });
+
+  describe("view-only (projector) mode", () => {
+    const token: Token = {
+      id: "solo",
+      type: "PlayerToken",
+      ownerUserId: "u1",
+      representsUserId: null,
+      name: "Solo",
+      color: "#fff",
+      iconKind: "Initial",
+      mapId: "map1",
+      x: 2.5,
+      y: 2.5,
+      sheetId: null,
+      hidden: false,
+    };
+    const image: MapImage = {
+      id: "img",
+      name: "Img",
+      contentType: "image/png",
+      shareToken: null,
+      x: 0,
+      y: 0,
+      width: 2,
+      height: 2,
+      originalWidth: 128,
+      originalHeight: 128,
+      rotation: 0,
+      opacity: 1,
+      layerOrder: 1,
+      locked: false,
+      hidden: false,
+      byteSize: 400,
+      wasDownscaled: false,
+      originalLongEdgePx: 128,
+      displayLongEdgePx: 128,
+    };
+    const leftPointer = (x: number, y: number) =>
+      ({
+        x,
+        y,
+        worldX: x,
+        worldY: y,
+        isDown: true,
+        event: null,
+        leftButtonDown: () => true,
+        middleButtonDown: () => false,
+        rightButtonDown: () => false,
+      }) as unknown as Phaser.Input.Pointer;
+    const layers = () =>
+      scene as unknown as {
+        tokenLayer: { tokenContainers: Map<string, Phaser.GameObjects.Container> };
+        imageLayer: { sprites: Map<string, Phaser.GameObjects.Image> };
+      };
+
+    it("disables token and image interaction, including across rebuilds", () => {
+      scene.updateTokens([token]);
+      scene.updateImages([image]);
+      scene.setViewOnly(true);
+      // A state push rebuilds both layers; they must stay non-interactive.
+      scene.updateTokens([{ ...token, x: 3.5 }]);
+      scene.updateImages([{ ...image, x: 1 }]);
+
+      const container = layers().tokenLayer.tokenContainers.get("solo")!;
+      const sprite = layers().imageLayer.sprites.get("img")!;
+      expect(container.input?.enabled ?? false).toBe(false);
+      expect(sprite.input?.enabled ?? false).toBe(false);
+      scene.selectImage("img");
+      expect(scene.getSelectedImageId()).toBeNull();
+
+      scene.setViewOnly(false);
+      expect(container.input?.enabled).toBe(true);
+      expect(sprite.input?.enabled).toBe(true);
+    });
+
+    it("pans on a left drag, and not at all while navigation is locked", () => {
+      const cam = scene.cameras.main;
+      scene.resetView();
+      scene.setViewOnly(true);
+
+      scene.input.emit(Phaser.Input.Events.POINTER_DOWN, leftPointer(100, 100));
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, leftPointer(200, 150));
+      scene.input.emit(Phaser.Input.Events.POINTER_UP, leftPointer(200, 150));
+      expect(cam.scrollX).toBeCloseTo(-100, 1);
+      expect(cam.scrollY).toBeCloseTo(-50, 1);
+
+      scene.setNavigationLocked(true);
+      const { scrollX, scrollY, zoom } = cam;
+      scene.input.emit(Phaser.Input.Events.POINTER_DOWN, leftPointer(100, 100));
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, leftPointer(300, 300));
+      scene.input.emit(Phaser.Input.Events.POINTER_UP, leftPointer(300, 300));
+      scene.input.emit(Phaser.Input.Events.POINTER_WHEEL, leftPointer(100, 100), [], 0, -100);
+      expect(cam.scrollX).toBe(scrollX);
+      expect(cam.scrollY).toBe(scrollY);
+      expect(cam.zoom).toBe(zoom);
+    });
+  });
+
+  it("frames a box to cover the canvas in fill mode", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    // 1920x1080 canvas; a 10x10-cell box is limited by height when fitting.
+    scene.frameBox({ x: 0, y: 0, width: 10, height: 10 }, 0, "fit");
+    expect(cam.zoom).toBeCloseTo(1080 / (10 * CELL), 4);
+    scene.frameBox({ x: 0, y: 0, width: 10, height: 10 }, 0, "fill");
+    expect(cam.zoom).toBeCloseTo(1920 / (10 * CELL), 4);
+  });
+
+  it("trusts host projection for hiding; ghosts hidden tokens for the DM", () => {
+    const tokens: Token[] = [
+      {
+        id: "hidden-top",
+        type: "PlayerToken",
+        ownerUserId: "u1",
+        representsUserId: null,
+        name: "Hidden",
+        color: "#fff",
+        iconKind: "Initial",
+        mapId: "map1",
+        x: 5.5,
+        y: 4.5,
+        sheetId: null,
+        hidden: true,
+      },
+      {
+        id: "visible-under",
+        type: "PlayerToken",
+        ownerUserId: "u1",
+        representsUserId: null,
+        name: "Seen",
+        color: "#fff",
+        iconKind: "Initial",
+        mapId: "map1",
+        x: 5.5,
+        y: 4.5,
+        sheetId: null,
+        hidden: false,
+      },
+    ];
+
+    // Hiding is owned by host projection: guests never receive hidden tokens,
+    // so the layer renders whatever it is given without client-side filtering.
+    scene.setDm(false);
+    scene.updateTokens(tokens);
+
+    const tokenContainers = (
+      scene as unknown as {
+        tokenLayer: { tokenContainers: Map<string, Phaser.GameObjects.Container> };
+      }
+    ).tokenLayer.tokenContainers;
+
+    expect(tokenContainers.get("hidden-top")!.visible).toBe(true);
+    expect(tokenContainers.get("visible-under")!.visible).toBe(false);
+
+    // The DM renders the full truth with hidden tokens ghosted.
+    scene.setDm(true);
+    scene.updateTokens(tokens);
+    expect(tokenContainers.get("hidden-top")!.visible).toBe(true);
+  });
+
+  it("conceals tokens on fogged cells from non-owners but shows them to owner and DM", () => {
+    const grid: GridConfig = {
+      widthCells: 30,
+      heightCells: 20,
+      cellPixels: CELL,
+      showGridLines: true,
+      snapToGrid: true,
+      lineColor: "#222",
+    };
+    scene.updateGrid(grid);
+
+    // Cells (5, 4) and (6, 4) are fogged; (10, 10) stays revealed.
+    let mask = setCellFogged(new Uint8Array(0), grid, 5, 4, true);
+    mask = setCellFogged(mask, grid, 6, 4, true);
+    const tokens: Token[] = [
+      {
+        id: "foreign-fogged",
+        type: "NPCToken",
+        ownerUserId: null,
+        representsUserId: null,
+        name: "Goblin",
+        color: "#0f0",
+        iconKind: "Initial",
+        mapId: "map1",
+        x: 5.5,
+        y: 4.5,
+        sheetId: null,
+        hidden: false,
+      },
+      {
+        id: "owned-fogged",
+        type: "PlayerToken",
+        ownerUserId: "u1",
+        representsUserId: null,
+        name: "Hero",
+        color: "#00f",
+        iconKind: "Initial",
+        mapId: "map1",
+        x: 6.5,
+        y: 4.5,
+        sheetId: null,
+        hidden: false,
+      },
+      {
+        id: "foreign-revealed",
+        type: "NPCToken",
+        ownerUserId: null,
+        representsUserId: null,
+        name: "Shopkeep",
+        color: "#ff0",
+        iconKind: "Initial",
+        mapId: "map1",
+        x: 10.5,
+        y: 10.5,
+        sheetId: null,
+        hidden: false,
+      },
+    ];
+
+    scene.setDm(false);
+    scene.setViewerUserId("u1");
+    scene.updateFog(encodeFog(mask));
+    scene.updateTokens(tokens);
+
+    const tokenContainers = (
+      scene as unknown as {
+        tokenLayer: { tokenContainers: Map<string, Phaser.GameObjects.Container> };
+      }
+    ).tokenLayer.tokenContainers;
+
+    // NPC on fog with no owner: hidden from the player.
+    expect(tokenContainers.get("foreign-fogged")!.visible).toBe(false);
+    // Owner still sees their own token standing in fog.
+    expect(tokenContainers.get("owned-fogged")!.visible).toBe(true);
+    // Tokens on revealed cells stay visible to everyone.
+    expect(tokenContainers.get("foreign-revealed")!.visible).toBe(true);
+
+    // The DM sees everything, including the fog-concealed NPC.
+    scene.setDm(true);
+    scene.updateTokens(tokens);
+    expect(tokenContainers.get("foreign-fogged")!.visible).toBe(true);
+    expect(tokenContainers.get("owned-fogged")!.visible).toBe(true);
+
+    // Clearing the fog reveals the concealed token to the player again.
+    scene.setDm(false);
+    scene.updateFog("");
+    expect(tokenContainers.get("foreign-fogged")!.visible).toBe(true);
+  });
+
+  it("anchors zoom to the visible center between rails", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+
+    // Set asymmetrical rail insets: left rail 300px, right rail 100px
+    scene.setRailInsets(300, 100);
+    expect(scene.railLeft).toBe(300);
+    expect(scene.railRight).toBe(100);
+
+    // Visible canvas interval is [300, 1920 - 100] = [300, 1820]. Center is 1060.
+    // Formula: (1920 + 300 - 100) / 2 = 1060.
+    const expectedAnchorX = (cam.width + scene.railLeft - scene.railRight) / 2;
+    expect(expectedAnchorX).toBe(1060);
+    const expectedAnchorY = cam.height / 2;
+
+    const worldBefore = cam.getWorldPoint(expectedAnchorX, expectedAnchorY);
+
+    scene.zoomIn();
+
+    // Invariant: screen anchor point maps to the exact same world coordinate before and after zoom
+    const worldAfter = cam.getWorldPoint(expectedAnchorX, expectedAnchorY);
+    expect(worldAfter.x).toBeCloseTo(worldBefore.x, 1);
+    expect(worldAfter.y).toBeCloseTo(worldBefore.y, 1);
+
+    scene.zoomOut();
+
+    const worldAfterZoomOut = cam.getWorldPoint(expectedAnchorX, expectedAnchorY);
+    expect(worldAfterZoomOut.x).toBeCloseTo(worldBefore.x, 1);
+    expect(worldAfterZoomOut.y).toBeCloseTo(worldBefore.y, 1);
+  });
+
+  it("updates active turn token halo and pans camera to world coordinates", () => {
+    const tokens: Token[] = [
+      {
+        id: "tok-1",
+        type: "PlayerToken",
+        name: "Valeros",
+        color: "#f00",
+        iconKind: "Initial",
+        mapId: "map-1",
+        x: 2.5,
+        y: 2.5,
+        sheetId: null,
+        hidden: false,
+        ownerUserId: "u1",
+        representsUserId: null,
+      },
+    ];
+    scene.updateTokens(tokens);
+    scene.setActiveTurnTokenId("tok-1");
+    expect(() => scene.setActiveTurnTokenId("tok-1")).not.toThrow();
+    expect(() => scene.panToWorld(100, 200)).not.toThrow();
+  });
+});
+
+describe("FogLayer Diffing and Brush Math", () => {
+  let game: Phaser.Game;
+  let scene: Phaser.Scene;
+  let fogLayer: FogLayer;
+
+  beforeEach(async () => {
+    scene = new Phaser.Scene("TestFog");
+    game = await createTestGame(scene);
+    fogLayer = new FogLayer(scene);
+  });
+
+  afterEach(() => {
+    fogLayer.destroy();
+    try {
+      game.destroy(true, false);
+    } catch {
+      // Phaser headless teardown in happy-dom mock environment
+    }
+  });
+
+  it("accumulates correct brush cells for radii 1, 2, and 3", () => {
+    const grid: GridConfig = {
+      widthCells: 30,
+      heightCells: 20,
+      cellPixels: CELL,
+      showGridLines: true,
+      snapToGrid: true,
+      lineColor: "#222",
+    };
+    fogLayer.setupGrid(grid);
+
+    // Radius 1: exactly 1 cell
+    fogLayer.startStroke();
+    fogLayer.addBrushCells(5, 5, 1);
+    expect(fogLayer.strokeCells.size).toBe(1);
+    expect(fogLayer.strokeCells.has(5 * 30 + 5)).toBe(true);
+    fogLayer.endStroke();
+
+    // Radius 2: 3x3 block = 9 cells
+    fogLayer.startStroke();
+    fogLayer.addBrushCells(5, 5, 2);
+    expect(fogLayer.strokeCells.size).toBe(9);
+    fogLayer.endStroke();
+
+    // Radius 3: 5x5 rounded circle = 21 cells
+    fogLayer.startStroke();
+    fogLayer.addBrushCells(5, 5, 3);
+    expect(fogLayer.strokeCells.size).toBe(21);
+    fogLayer.endStroke();
+
+    // Boundary clamping at map corner (0, 0)
+    fogLayer.startStroke();
+    fogLayer.addBrushCells(0, 0, 2);
+    // At corner (0,0), radius 2 checks dx in [-1, 1], dy in [-1, 1], only (0,0), (1,0), (0,1), (1,1) valid = 4 cells
+    expect(fogLayer.strokeCells.size).toBe(4);
+    fogLayer.endStroke();
+  });
+
+  it("clears the fog texture when the mask is emptied (clear-fog regression)", () => {
+    const grid: GridConfig = {
+      widthCells: 8,
+      heightCells: 8,
+      cellPixels: CELL,
+      showGridLines: true,
+      snapToGrid: true,
+      lineColor: "#222",
+    };
+    fogLayer.setupGrid(grid);
+
+    // Fill every cell, then clear: no texel may stay opaque.
+    fogLayer.updateMask(encodeFog(fillFog(grid)));
+    const data = (fogLayer as unknown as { cachedImageData: ImageData }).cachedImageData.data;
+    expect(data[0 * 4 + 3]).toBe(255);
+    expect(data[63 * 4 + 3]).toBe(255);
+
+    fogLayer.updateMask("");
+    for (let i = 0; i < 64; i++) {
+      expect(data[i * 4 + 3]).toBe(0);
+    }
+  });
+
+  it("computes brush footprints shared by strokes and hover previews", () => {
+    expect(brushFootprint(5, 5, 1, 30, 20)).toEqual([5 * 30 + 5]);
+    expect(brushFootprint(5, 5, 2, 30, 20)).toHaveLength(9);
+    expect(brushFootprint(5, 5, 3, 30, 20)).toHaveLength(21);
+    // Corner clamping matches the legacy stroke behavior (4 cells).
+    expect(brushFootprint(0, 0, 2, 30, 20)).toHaveLength(4);
+  });
+
+  it("interpolates fast strokes so no gaps remain between frames", () => {
+    const grid: GridConfig = {
+      widthCells: 30,
+      heightCells: 20,
+      cellPixels: CELL,
+      showGridLines: true,
+      snapToGrid: true,
+      lineColor: "#222",
+    };
+    fogLayer.setupGrid(grid);
+
+    // Fast horizontal jump: every cell between the frames is covered.
+    fogLayer.startStroke();
+    fogLayer.addBrushCells(0, 0, 1);
+    fogLayer.addBrushCells(5, 0, 1);
+    const horizontal = fogLayer.endStroke();
+    for (let x = 0; x <= 5; x++) {
+      expect(horizontal).toContain(x);
+    }
+
+    // Fast diagonal jump likewise leaves no gaps.
+    fogLayer.startStroke();
+    fogLayer.addBrushCells(0, 0, 1);
+    fogLayer.addBrushCells(3, 3, 1);
+    const diagonal = fogLayer.endStroke();
+    for (let i = 0; i <= 3; i++) {
+      expect(diagonal).toContain(i * 30 + i);
+    }
+
+    // Interpolation accumulates into the same stroke set (mode-agnostic,
+    // so paint and erase strokes both benefit).
+    fogLayer.startStroke();
+    fogLayer.addBrushCells(10, 10, 2);
+    fogLayer.addBrushCells(12, 10, 2);
+    const wide = fogLayer.endStroke();
+    expect(wide).toContain(10 * 30 + 11); // cell (11, 10) bridged
+  });
+
+  it("traces the fog perimeter: empty, single cell, shared edges, full map", () => {
+    // Empty mask → no border.
+    expect(computeFogPerimeter(new Uint8Array(0), 4, 4)).toEqual([]);
+
+    // Single fogged cell → its 4 edges.
+    const grid4: GridConfig = {
+      widthCells: 4,
+      heightCells: 4,
+      cellPixels: CELL,
+      showGridLines: true,
+      snapToGrid: true,
+      lineColor: "#222",
+    };
+    let mask = setCellFogged(new Uint8Array(0), grid4, 1, 1, true);
+    expect(computeFogPerimeter(mask, 4, 4)).toHaveLength(4);
+
+    // Two adjacent cells share an edge → 6 segments, not 8.
+    mask = setCellFogged(mask, grid4, 2, 1, true);
+    expect(computeFogPerimeter(mask, 4, 4)).toHaveLength(6);
+
+    // Full map → just the outer rectangle (perimeter of the grid).
+    const full = computeFogPerimeter(fillFog(grid4), 4, 4);
+    expect(full).toHaveLength(16);
+    for (const e of full) {
+      const onOuter =
+        e.y1 === 0 || e.y1 === 4 || e.x1 === 0 || e.x1 === 4;
+      expect(onOuter).toBe(true);
+    }
+  });
+
+  it("updates fog mask with XOR diffing", () => {
+    const grid: GridConfig = {
+      widthCells: 16,
+      heightCells: 16,
+      cellPixels: CELL,
+      showGridLines: true,
+      snapToGrid: true,
+      lineColor: "#222",
+    };
+    fogLayer.setupGrid(grid);
+
+    const maskBytes1 = new Uint8Array(32); // 256 bits = 32 bytes
+    maskBytes1[0] = 0b00000001; // cell 0 is fogged
+    const b64_1 = encodeFog(maskBytes1);
+
+    fogLayer.updateMask(b64_1);
+
+    const data = (fogLayer as unknown as { cachedImageData: ImageData }).cachedImageData.data;
+    expect(data[0 * 4 + 3]).toBe(255); // cell 0 fogged
+    expect(data[1 * 4 + 3]).toBe(0); // cell 1 clear
+
+    // Diff update: reveal cell 0, fog cell 1
+    const maskBytes2 = new Uint8Array(32);
+    maskBytes2[0] = 0b00000010; // cell 1 is fogged
+    const b64_2 = encodeFog(maskBytes2);
+
+    fogLayer.updateMask(b64_2);
+    expect(data[0 * 4 + 3]).toBe(0); // cell 0 now clear
+    expect(data[1 * 4 + 3]).toBe(255); // cell 1 now fogged
+  });
+});
+
+describe("RulerOverlay and FocusOverlay Math", () => {
+  let game: Phaser.Game;
+  let scene: Phaser.Scene;
+
+  beforeEach(async () => {
+    scene = new Phaser.Scene("TestOverlays");
+    game = await createTestGame(scene);
+  });
+
+  afterEach(() => {
+    try {
+      game.destroy(true, false);
+    } catch {
+      // Phaser headless teardown in happy-dom mock environment
+    }
+  });
+
+  it("handles ruler measurement points and clear", () => {
+    const ruler = new RulerOverlay(scene);
+
+    expect(ruler.isActive).toBe(false);
+    ruler.setPointA(2, 3);
+    expect(ruler.isActive).toBe(true);
+    expect(ruler.pointA).toEqual({ x: 2, y: 3 });
+
+    ruler.setPointB(6, 6);
+    expect(ruler.pointB).toEqual({ x: 6, y: 6 });
+
+    ruler.clear();
+    expect(ruler.isActive).toBe(false);
+    expect(ruler.pointA).toBeNull();
+    expect(ruler.pointB).toBeNull();
+
+    ruler.destroy();
+  });
+
+  it("calculates focus rect with and without grid snapping", () => {
+    const focus = new FocusOverlay(scene);
+
+    focus.beginGesture(2.2, 3.8);
+    focus.updateGesture(7.1, 8.4, true);
+
+    const snapped = focus.endGesture("map1", true);
+    expect(snapped).toEqual({
+      mapId: "map1",
+      x: 2, // floor(2.2)
+      y: 3, // floor(3.8)
+      width: 6, // ceil(7.1) - 2 = 8 - 2 = 6
+      height: 6, // ceil(8.4) - 3 = 9 - 3 = 6
+    });
+
+    // Without snapping
+    focus.beginGesture(2.2, 3.8);
+    focus.updateGesture(7.2, 8.8, false);
+
+    const unsnapped = focus.endGesture("map1", false);
+    expect(unsnapped!.x).toBeCloseTo(2.2, 4);
+    expect(unsnapped!.y).toBeCloseTo(3.8, 4);
+    expect(unsnapped!.width).toBeCloseTo(5.0, 4);
+    expect(unsnapped!.height).toBeCloseTo(5.0, 4);
+
+    focus.destroy();
+  });
+});
+
+describe("TokenLayer move smoothing", () => {
+  let game: Phaser.Game;
+  let scene: MapScene;
+
+  beforeEach(async () => {
+    scene = new MapScene();
+    game = await createTestGame(scene);
+  });
+
+  afterEach(() => {
+    try {
+      game.destroy(true, false);
+    } catch {
+      // Phaser headless teardown in happy-dom mock environment
+    }
+  });
+
+  const makeToken = (id: string, x: number, y: number): Token => ({
+    id,
+    type: "PlayerToken",
+    ownerUserId: null,
+    representsUserId: null,
+    name: id,
+    color: "#888888",
+    iconKind: "Initial",
+    mapId: "map1",
+    x,
+    y,
+    sheetId: null,
+    hidden: false,
+  });
+
+  const layerOf = (s: MapScene) =>
+    (
+      s as unknown as {
+        tokenLayer: {
+          tokenContainers: Map<string, Phaser.GameObjects.Container>;
+          popoverContainer: Phaser.GameObjects.Container;
+          pendingLocalMoves: Map<string, unknown>;
+        };
+      }
+    ).tokenLayer;
+
+  const containerOf = (id: string) => layerOf(scene).tokenContainers.get(id)!;
+  const tweensOn = (obj: object) => scene.tweens.getTweensOf(obj);
+  const pointer = { event: null } as unknown as Phaser.Input.Pointer;
+
+  /** Establish starting tokens without the enter fade (as a map apply does). */
+  const seed = (tokens: Token[]) =>
+    (
+      scene as unknown as {
+        tokenLayer: { setTokens: (t: Token[], o: { animate: boolean }) => void };
+      }
+    ).tokenLayer.setTokens(tokens, { animate: false });
+
+  /** Drive a full drag gesture on a game object to world point (x, y). */
+  const dragTo = (obj: Phaser.GameObjects.Container, x: number, y: number) => {
+    obj.emit(Phaser.Input.Events.DRAG_START, pointer);
+    obj.emit(Phaser.Input.Events.DRAG, pointer, x, y);
+    obj.emit(Phaser.Input.Events.DRAG_END, pointer);
+  };
+
+  it("slides another participant's move to the new position", () => {
+    seed([makeToken("t1", 2.5, 2.5)]);
+    const c = containerOf("t1");
+    expect(tweensOn(c)).toHaveLength(0);
+
+    scene.updateTokens([makeToken("t1", 6.5, 3.5)]);
+
+    const tweens = tweensOn(c);
+    expect(tweens).toHaveLength(1);
+    // Starts from the old spot; the slide carries it to the new one.
+    expect(c.x).toBe(2.5 * CELL);
+    tweens[0].seek(10_000);
+    expect(c.x).toBe(6.5 * CELL);
+    expect(c.y).toBe(3.5 * CELL);
+  });
+
+  it("does not restart an in-flight slide on unrelated rebuilds", () => {
+    seed([makeToken("t1", 2.5, 2.5)]);
+    const c = containerOf("t1");
+    scene.updateTokens([makeToken("t1", 6.5, 3.5)]);
+    const [first] = tweensOn(c);
+
+    scene.updateSheets({});
+    scene.setActiveTurnTokenId("t1");
+
+    expect(tweensOn(c)).toEqual([first]);
+  });
+
+  it("snaps the mover's own drop when the authority echoes it", () => {
+    const moves: { tokenId: string; x: number; y: number }[] = [];
+    scene.onTokenMoveEnd = (e) => moves.push(e);
+    seed([makeToken("t1", 2.5, 2.5)]);
+    const c = containerOf("t1");
+
+    dragTo(c, 6.4 * CELL, 3.6 * CELL);
+    expect(moves).toEqual([{ tokenId: "t1", x: 6.5, y: 3.5 }]);
+    expect(c.x).toBe(6.5 * CELL);
+
+    scene.updateTokens([makeToken("t1", 6.5, 3.5)]);
+    expect(tweensOn(c)).toHaveLength(0);
+    expect(c.x).toBe(6.5 * CELL);
+    expect(layerOf(scene).pendingLocalMoves.has("t1")).toBe(false);
+  });
+
+  it("holds the drop through a stale pre-move update", () => {
+    seed([makeToken("t1", 2.5, 2.5)]);
+    const c = containerOf("t1");
+    dragTo(c, 6.5 * CELL, 3.5 * CELL);
+
+    // Broadcast the host sent before it processed the move.
+    scene.updateTokens([makeToken("t1", 2.5, 2.5)]);
+    expect(tweensOn(c)).toHaveLength(0);
+    expect(c.x).toBe(6.5 * CELL);
+
+    scene.updateTokens([makeToken("t1", 6.5, 3.5)]);
+    expect(tweensOn(c)).toHaveLength(0);
+    expect(layerOf(scene).pendingLocalMoves.has("t1")).toBe(false);
+  });
+
+  it("snaps to the authority once a pending drop expires (rejected move)", () => {
+    seed([makeToken("t1", 2.5, 2.5)]);
+    const c = containerOf("t1");
+    dragTo(c, 6.5 * CELL, 3.5 * CELL);
+
+    const realNow = Date.now;
+    const t0 = realNow();
+    Date.now = () => t0 + 60_000;
+    try {
+      scene.updateTokens([makeToken("t1", 2.5, 2.5)]);
+    } finally {
+      Date.now = realNow;
+    }
+    expect(tweensOn(c)).toHaveLength(0);
+    expect(c.x).toBe(2.5 * CELL);
+  });
+
+  it("adopts a host-adjusted position instantly without sliding", () => {
+    seed([makeToken("t1", 2.5, 2.5)]);
+    const c = containerOf("t1");
+    dragTo(c, 6.5 * CELL, 3.5 * CELL);
+
+    // Host re-snapped / clamped the drop to a different cell.
+    scene.updateTokens([makeToken("t1", 7.5, 3.5)]);
+    expect(tweensOn(c)).toHaveLength(0);
+    expect(c.x).toBe(7.5 * CELL);
+  });
+
+  it("snaps a stack-chip drop instead of sliding out of the stack", () => {
+    seed([makeToken("top", 5.5, 4.5), makeToken("under", 5.5, 4.5)]);
+    const top = containerOf("top");
+    const under = containerOf("under");
+
+    // Click the stack top to fan out the chips.
+    top.emit(Phaser.Input.Events.POINTER_UP, pointer);
+    const chip = layerOf(scene)
+      .popoverContainer.getAll()
+      .find(
+        (o) => (o as Phaser.GameObjects.Container).getData("tokenChipId") === "under",
+      ) as Phaser.GameObjects.Container;
+    expect(chip).toBeDefined();
+
+    dragTo(chip, 9.5 * CELL, 2.5 * CELL);
+    expect(under.x).toBe(9.5 * CELL);
+
+    scene.updateTokens([makeToken("top", 5.5, 4.5), makeToken("under", 9.5, 2.5)]);
+    expect(tweensOn(under)).toHaveLength(0);
+    expect(under.x).toBe(9.5 * CELL);
+    expect(under.visible).toBe(true);
+  });
+
+  it("does not move or tween a token while it is being dragged", () => {
+    seed([makeToken("t1", 2.5, 2.5)]);
+    const c = containerOf("t1");
+    c.emit(Phaser.Input.Events.DRAG_START, pointer);
+    c.emit(Phaser.Input.Events.DRAG, pointer, 8 * CELL, 8 * CELL);
+
+    // Someone else's update lands mid-drag.
+    scene.updateTokens([makeToken("t1", 2.5, 2.5)]);
+    expect(tweensOn(c)).toHaveLength(0);
+    expect(c.x).toBe(8 * CELL);
+
+    // Drag state survives the listener rebuild: the drop is a move, not a click.
+    const moves: unknown[] = [];
+    scene.onTokenMoveEnd = (e) => moves.push(e);
+    c.emit(Phaser.Input.Events.DRAG_END, pointer);
+    expect(moves).toEqual([{ tokenId: "t1", x: 8.5, y: 8.5 }]);
+  });
+
+  it("keeps a token visible while it slides onto an occupied cell", () => {
+    seed([makeToken("resident", 5.5, 4.5), makeToken("mover", 1.5, 1.5)]);
+    const mover = containerOf("mover");
+
+    scene.updateTokens([makeToken("resident", 5.5, 4.5), makeToken("mover", 5.5, 4.5)]);
+    expect(mover.visible).toBe(true);
+
+    tweensOn(mover)[0].seek(10_000, 16.6, true);
+    // Landed behind the resident: the stack settles and hides it.
+    expect(mover.visible).toBe(false);
+  });
+
+  it("snaps instead of sliding when a map is (re)applied", () => {
+    const map = {
+      id: "map1",
+      name: "Map",
+      grid: {
+        widthCells: 30,
+        heightCells: 20,
+        cellPixels: CELL,
+        showGridLines: true,
+        snapToGrid: true,
+        lineColor: "#222",
+      },
+      images: [],
+      tokens: [makeToken("t1", 2.5, 2.5)],
+      fogMask: "",
+      markupSvg: null,
+    } as unknown as Parameters<MapScene["setMap"]>[0];
+    scene.setMap(map, true);
+    const c = containerOf("t1");
+
+    scene.setMap({ ...map, tokens: [makeToken("t1", 9.5, 9.5)] }, true);
+    expect(tweensOn(c)).toHaveLength(0);
+    expect(c.x).toBe(9.5 * CELL);
+
+    // Tokens appearing with a map apply show up at full opacity.
+    scene.setMap({ ...map, id: "map2", tokens: [makeToken("t9", 1.5, 1.5)] }, true);
+    const t9 = containerOf("t9");
+    expect(tweensOn(t9)).toHaveLength(0);
+    expect(t9.alpha).toBe(1);
+  });
+  const FADE_HALF_MS = 150;
+
+  const fadingOf = (s: MapScene) =>
+    (
+      s as unknown as {
+        tokenLayer: {
+          fadingOut: Map<string, { container: Phaser.GameObjects.Container }>;
+        };
+      }
+    ).tokenLayer.fadingOut;
+
+  it("fades out, in place, a token that leaves the viewer's list (moved into fog)", () => {
+    seed([makeToken("t1", 2.5, 2.5)]);
+    const c = containerOf("t1");
+
+    // Host projection strips the token once it stands on fog.
+    scene.updateTokens([]);
+
+    expect(layerOf(scene).tokenContainers.has("t1")).toBe(false);
+    expect(fadingOf(scene).get("t1")?.container).toBe(c);
+    expect(c.active).toBe(true);
+    expect(c.x).toBe(2.5 * CELL); // fades where last seen, no slide
+    expect(c.input?.enabled ?? false).toBe(false);
+
+    const [fade] = tweensOn(c);
+    fade.seek(10_000, 16.6, true);
+    expect(c.alpha).toBe(0);
+    expect(c.active).toBe(false);
+    expect(fadingOf(scene).has("t1")).toBe(false);
+  });
+
+  it("removes a token hidden behind a stack without a fade", () => {
+    seed([makeToken("top", 5.5, 4.5), makeToken("under", 5.5, 4.5)]);
+    const under = containerOf("under");
+
+    scene.updateTokens([makeToken("top", 5.5, 4.5)]);
+    expect(under.active).toBe(false);
+    expect(fadingOf(scene).has("under")).toBe(false);
+  });
+
+  it("drops the fading ghost when the token comes back into view", () => {
+    seed([makeToken("t1", 2.5, 2.5)]);
+    const ghost = containerOf("t1");
+    scene.updateTokens([]);
+
+    scene.updateTokens([makeToken("t1", 8.5, 8.5)]);
+    expect(ghost.active).toBe(false);
+    expect(fadingOf(scene).has("t1")).toBe(false);
+    const fresh = containerOf("t1");
+    expect(fresh).not.toBe(ghost);
+    expect(fresh.x).toBe(8.5 * CELL);
+    expect(fresh.alpha).toBe(0); // fades back in at the new spot
+  });
+
+  const fadingInOf = (s: MapScene) =>
+    (s as unknown as { tokenLayer: { fadingIn: Map<string, unknown> } }).tokenLayer.fadingIn;
+
+  it("fades in, in place, a token that enters the viewer's list (out of fog)", () => {
+    seed([]);
+    scene.updateTokens([makeToken("t1", 6.5, 3.5)]);
+    const c = containerOf("t1");
+
+    expect(c.x).toBe(6.5 * CELL); // appears at its new spot, no slide
+    expect(c.alpha).toBe(0);
+    const [fade] = tweensOn(c);
+    expect(fade).toBeDefined();
+
+    // Unrelated rebuilds mid-fade must not snap it to full opacity.
+    scene.updateSheets({});
+    expect(c.alpha).toBe(0);
+    expect(tweensOn(c)).toEqual([fade]);
+
+    fade.seek(10_000, 16.6, true);
+    expect(c.alpha).toBe(1);
+    expect(fadingInOf(scene).has("t1")).toBe(false);
+  });
+
+  it("fades a DM's hidden token in to its ghost alpha", () => {
+    scene.setDm(true);
+    seed([]);
+    scene.updateTokens([{ ...makeToken("t1", 6.5, 3.5), hidden: true }]);
+    const c = containerOf("t1");
+
+    tweensOn(c)[0].seek(10_000, 16.6, true);
+    expect(c.alpha).toBe(0.5);
+  });
+
+  it("does not fade in a token that enters hidden behind a stack", () => {
+    seed([makeToken("top", 5.5, 4.5)]);
+    scene.updateTokens([makeToken("top", 5.5, 4.5), makeToken("under", 5.5, 4.5)]);
+    const under = containerOf("under");
+    expect(under.visible).toBe(false);
+    expect(tweensOn(under)).toHaveLength(0);
+    expect(fadingInOf(scene).has("under")).toBe(false);
+  });
+
+  it("fades out from partway when a token leaves mid-fade-in", () => {
+    seed([]);
+    scene.updateTokens([makeToken("t1", 6.5, 3.5)]);
+    const c = containerOf("t1");
+    tweensOn(c)[0].seek(FADE_HALF_MS);
+    const partway = c.alpha;
+    expect(partway).toBeGreaterThan(0);
+    expect(partway).toBeLessThan(1);
+
+    scene.updateTokens([]);
+    expect(fadingInOf(scene).has("t1")).toBe(false);
+    expect(c.alpha).toBe(partway);
+    // The stopped fade-in lingers in the manager until next frame; only the
+    // fade-out is live.
+    expect(tweensOn(c).filter((t) => !t.isPendingRemove())).toHaveLength(1);
+  });
+
+  it("removes tokens instantly when a map is (re)applied", () => {
+    const map = {
+      id: "map1",
+      name: "Map",
+      grid: {
+        widthCells: 30,
+        heightCells: 20,
+        cellPixels: CELL,
+        showGridLines: true,
+        snapToGrid: true,
+        lineColor: "#222",
+      },
+      images: [],
+      tokens: [makeToken("t1", 2.5, 2.5), makeToken("t2", 4.5, 4.5)],
+      fogMask: "",
+      markupSvg: null,
+    } as unknown as Parameters<MapScene["setMap"]>[0];
+    scene.setMap(map, true);
+    const t1 = containerOf("t1");
+    const t2 = containerOf("t2");
+
+    // An in-flight fade from a normal update is cut short by the map switch.
+    scene.updateTokens([makeToken("t2", 4.5, 4.5)]);
+    expect(fadingOf(scene).has("t1")).toBe(true);
+
+    scene.setMap({ ...map, id: "map2", tokens: [] }, true);
+    expect(t1.active).toBe(false);
+    expect(t2.active).toBe(false);
+    expect(fadingOf(scene).size).toBe(0);
+  });
+});
