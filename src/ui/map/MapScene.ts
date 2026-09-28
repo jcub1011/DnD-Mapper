@@ -52,6 +52,7 @@ const CENTER_PAN_MS = 300;
 export class MapScene extends Phaser.Scene {
   private bgGfx!: Phaser.GameObjects.Graphics;
   private gridGfx!: Phaser.GameObjects.Graphics;
+  private focusMaskGfx!: Phaser.GameObjects.Graphics;
 
   private imageLayer!: ImageLayer;
   private markupLayer!: MarkupLayer;
@@ -70,6 +71,12 @@ export class MapScene extends Phaser.Scene {
   public showGridLines = true;
   public snapToGrid = true;
   public isDm = false;
+  // Hides the grid regardless of showGridLines (which updateGrid overwrites).
+  private gridSuppressed = false;
+  // Blocks user camera navigation (wheel, drag-pan, touch); programmatic framing still works.
+  private navigationLocked = false;
+  // Projector mode: no token/image/tool interaction at all — the pointer only navigates.
+  private viewOnly = false;
 
   // Tool Modes & Modifiers
   private currentToolMode: ToolMode = "none";
@@ -138,6 +145,10 @@ export class MapScene extends Phaser.Scene {
     this.tokenLayer.onTokenMoveEnd = (e) => this.onTokenMoveEnd?.(e);
     this.tokenLayer.onTokenDoubleClick = (id) => this.onTokenDoubleClick?.(id);
 
+    // 5b. Outside-focus blackout (DEPTH.FOCUS_MASK = 4500)
+    this.focusMaskGfx = this.add.graphics();
+    this.focusMaskGfx.setDepth(DEPTH.FOCUS_MASK);
+
     // 6. Overlays (DEPTH.FOCUS_RULER = 5000)
     this.rulerOverlay = new RulerOverlay(this);
     this.focusOverlay = new FocusOverlay(this);
@@ -164,7 +175,7 @@ export class MapScene extends Phaser.Scene {
 
   override update(): void {
     // Check multi-touch navigation first
-    if (this.touchNav.update()) {
+    if (!this.navigationLocked && this.touchNav.update()) {
       this.cancelCameraTweens();
       this.redrawGrid();
       this.rulerOverlay.redraw();
@@ -232,7 +243,15 @@ export class MapScene extends Phaser.Scene {
     this.fogLayer.setPitchBlack(isProjector);
   }
 
-  frameBox(box: { x: number; y: number; width: number; height: number }, duration = 400): void {
+  /**
+   * Frame a cell-space box edge to edge: "fit" contains it, "fill"
+   * covers the visible canvas with it.
+   */
+  frameBox(
+    box: { x: number; y: number; width: number; height: number },
+    duration = 400,
+    mode: "fit" | "fill" = "fit",
+  ): void {
     const cam = this.cameras.main;
     const centerX = (box.x + box.width / 2) * CELL;
     const centerY = (box.y + box.height / 2) * CELL;
@@ -242,10 +261,11 @@ export class MapScene extends Phaser.Scene {
     // in the visible center rather than under a side rail.
     const visibleW = Math.max(1, cam.width - this.railLeft - this.railRight);
     const visibleH = Math.max(1, cam.height);
-    const targetZoom = Math.max(
-      0.01,
-      Math.min(10.0, Math.min(visibleW / worldW, visibleH / worldH) * 0.95),
-    );
+    const scale =
+      mode === "fill"
+        ? Math.max(visibleW / worldW, visibleH / worldH)
+        : Math.min(visibleW / worldW, visibleH / worldH);
+    const targetZoom = Math.max(0.01, Math.min(10.0, scale));
     // cam.pan() targets the physical center; offset so the box lands on the
     // visible center instead (see panToWorld for derivation).
     const panX = centerX + (this.railRight - this.railLeft) / (2 * targetZoom);
@@ -265,6 +285,46 @@ export class MapScene extends Phaser.Scene {
     this.rulerOverlay.redraw();
     this.focusOverlay.redraw();
     this.onViewportChanged?.(readViewport(cam, CELL));
+  }
+
+  setGridSuppressed(suppressed: boolean): void {
+    if (suppressed === this.gridSuppressed) return;
+    this.gridSuppressed = suppressed;
+    this.redrawGrid();
+  }
+
+  /**
+   * Black out everything outside a cell-space box, or clear the blackout with
+   * null. Drawn in world space far past the map so it holds at any zoom.
+   */
+  setOutsideMask(box: { x: number; y: number; width: number; height: number } | null): void {
+    const g = this.focusMaskGfx?.clear();
+    if (!g || !box) return;
+    const far = 1e7;
+    const left = box.x * CELL;
+    const top = box.y * CELL;
+    const right = (box.x + box.width) * CELL;
+    const bottom = (box.y + box.height) * CELL;
+    g.fillStyle(0x000000, 1);
+    g.fillRect(-far, -far, 2 * far, top + far); // above
+    g.fillRect(-far, bottom, 2 * far, far - bottom); // below
+    g.fillRect(-far, top, left + far, bottom - top); // left
+    g.fillRect(right, top, far - right, bottom - top); // right
+  }
+
+  /**
+   * Disable every map interaction (token/image select, move, popovers, tools)
+   * so the pointer only pans/zooms — and not even that while navigation is locked.
+   */
+  setViewOnly(viewOnly: boolean): void {
+    if (viewOnly === this.viewOnly) return;
+    this.viewOnly = viewOnly;
+    this.applyInteractiveState();
+  }
+
+  setNavigationLocked(locked: boolean): void {
+    this.navigationLocked = locked;
+    if (locked) this.isPanning = false;
   }
 
   updateGrid(grid: GridConfig): void {
@@ -369,9 +429,9 @@ export class MapScene extends Phaser.Scene {
     // Lock on the selected tool itself, not the Space-to-pan override:
     // holding Space still pans (via effectiveMode) but must not re-enable
     // image selection/resize or token move/click until the tool is cleared.
-    const toolSelected = this.currentToolMode !== "none";
-    this.imageLayer.setInteractiveState(!toolSelected);
-    this.tokenLayer.setInteractiveState(!toolSelected);
+    const enabled = this.currentToolMode === "none" && !this.viewOnly;
+    this.imageLayer.setInteractiveState(enabled);
+    this.tokenLayer.setInteractiveState(enabled);
   }
 
   /** True when the pointer is over token-layer content (map token or popover chip). */
@@ -488,6 +548,7 @@ export class MapScene extends Phaser.Scene {
    * sx/sy are screen px relative to the Phaser canvas.
    */
   zoomAtScreenPoint(factor: number, sx: number, sy: number): void {
+    if (this.navigationLocked) return;
     const cam = this.cameras.main;
     this.cancelCameraTweens();
     zoomAtAnchor(cam, factor, sx, sy);
@@ -503,6 +564,7 @@ export class MapScene extends Phaser.Scene {
    * pan branch.
    */
   panByScreenDelta(dxPx: number, dyPx: number): void {
+    if (this.navigationLocked) return;
     const cam = this.cameras.main;
     this.cancelCameraTweens();
     cam.scrollX -= dxPx / cam.zoom;
@@ -538,7 +600,7 @@ export class MapScene extends Phaser.Scene {
     const cam = this.cameras.main;
     const g = this.gridGfx.clear();
 
-    if (!this.showGridLines) return;
+    if (!this.showGridLines || this.gridSuppressed) return;
 
     const view = cam.worldView;
     g.lineStyle(1 / cam.zoom, this.lineColor, 1);
@@ -588,6 +650,7 @@ export class MapScene extends Phaser.Scene {
     this.input.on(
       Phaser.Input.Events.POINTER_WHEEL,
       (pointer: Phaser.Input.Pointer, _over: unknown[], _dx: number, dy: number) => {
+        if (this.navigationLocked) return;
         const factor = dy < 0 ? WHEEL_FACTOR : 1 / WHEEL_FACTOR;
         this.cancelCameraTweens();
         zoomAtAnchor(cam, factor, pointer.x, pointer.y);
@@ -605,7 +668,8 @@ export class MapScene extends Phaser.Scene {
       const isMiddle = pointer.middleButtonDown();
       const isLeft = pointer.leftButtonDown();
       const isRight = pointer.rightButtonDown();
-      const mode = this.effectiveMode;
+      // View-only ignores tools and layer content: any left/middle press pans.
+      const mode = this.viewOnly ? "none" : this.effectiveMode;
 
       // Right-click handling: clears ruler in ruler mode
       if (isRight) {
@@ -620,8 +684,10 @@ export class MapScene extends Phaser.Scene {
         // Don't steal the gesture from a token (or stack chip) drag, nor from
         // an image move/resize/rotate gesture: if the press began on
         // token- or image-layer content, those handlers own it.
-        if (isLeft && !isMiddle && this.isPointerOverToken(pointer)) return;
-        if (isLeft && !isMiddle && this.isPointerOverImage(pointer)) return;
+        if (!this.viewOnly && isLeft && !isMiddle) {
+          if (this.isPointerOverToken(pointer) || this.isPointerOverImage(pointer)) return;
+        }
+        if (this.navigationLocked) return;
         this.cancelCameraTweens();
         this.isPanning = true;
         this.didMoveDuringPan = false;

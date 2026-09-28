@@ -10,6 +10,7 @@ export const DEPTH = {
   MARKUP: 2000,
   FOG: 3000,
   TOKENS: 4000,
+  FOCUS_MASK: 4500, // popout blackout outside the focus box — above tokens and their popovers
   FOCUS_RULER: 5000,
   SELECTION: 6000,
 } as const;

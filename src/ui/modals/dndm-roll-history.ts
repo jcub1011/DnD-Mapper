@@ -1,8 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { isNatural1, isNatural20 } from "../../game/dice.js";
 import type { DndMapperState, RollMode, RollResult } from "../../game/domain.js";
 import { GameElement } from "../app/GameElement.js";
+import { renderRollLogEntry, rollerNameFor } from "../dice/rollLogEntry.js";
 import "./dndm-modal.js";
 
 @customElement("dndm-roll-history")
@@ -75,7 +75,7 @@ export class DndmRollHistory extends GameElement {
     const query = this.searchQuery.trim().toLowerCase();
     if (query) {
       filtered = filtered.filter((r) => {
-        const rollerName = this.getRollerName(r).toLowerCase();
+        const rollerName = rollerNameFor(this.state, r).toLowerCase();
         const formula = r.formula.toLowerCase();
         const label = (r.label || "").toLowerCase();
         return rollerName.includes(query) || formula.includes(query) || label.includes(query);
@@ -83,29 +83,6 @@ export class DndmRollHistory extends GameElement {
     }
 
     return filtered;
-  }
-
-  private getRollerName(roll: RollResult): string {
-    if (roll.tokenId) {
-      for (const map of this.state?.maps ?? []) {
-        if ("tokens" in map) {
-          const token = map.tokens.find((t) => t.id === roll.tokenId);
-          if (token) return token.name;
-        }
-      }
-    }
-
-    if (this.state?.dmPlayerId === roll.rollerUserId) {
-      return "DM";
-    }
-
-    for (const sheet of Object.values(this.state?.sheets ?? {})) {
-      if (sheet.ownerUserId === roll.rollerUserId) {
-        return sheet.characterName || "Player";
-      }
-    }
-
-    return "Player";
   }
 
   private handleReRoll(roll: RollResult, e: MouseEvent): void {
@@ -117,10 +94,6 @@ export class DndmRollHistory extends GameElement {
     }
 
     this.onReRoll?.(roll, mode);
-  }
-
-  private formatMod(mod: number): string {
-    return mod >= 0 ? `+${mod}` : `${mod}`;
   }
 
   override render(): TemplateResult | typeof nothing {
@@ -209,109 +182,12 @@ export class DndmRollHistory extends GameElement {
   }
 
   private renderEntry(r: RollResult): TemplateResult {
-    const isNat20 = isNatural20(r);
-    const isNat1 = isNatural1(r);
-    const rollerName = this.getRollerName(r);
-    const canReRoll = r.rollerUserId === this.currentUserId;
-
-    const hasAppliedRules = Boolean(r.appliedRules && r.appliedRules.length > 0);
-    const visibility = this.state?.settings?.loadedDiceRuleVisibility ?? "Hidden";
-    const showRuleStamps =
-      this.isDm || visibility === "VisibleToAll" || visibility === "AllPlayers";
-    const indicator = this.state?.settings?.loadedDicePlayerIndicator ?? "None";
-    const showSubtleCue =
-      hasAppliedRules && (indicator === "Subtle" || indicator === "RedDotInLog");
-    const showObviousCue = hasAppliedRules && indicator === "Obvious";
-
-    return html`
-      <article
-        class="dndm-rolllog-entry ${isNat20 ? "dndm-rolllog-entry--nat20" : ""} ${isNat1 ? "dndm-rolllog-entry--nat1" : ""}"
-      >
-        <header class="dndm-rolllog-meta">
-          <span class="dndm-rolllog-roller">${rollerName}</span>
-          <span class="dndm-rolllog-formula">${r.formula}</span>
-          <span class="dndm-rolllog-label">${r.label}</span>
-          ${
-            r.mode !== "Normal"
-              ? html`<span class="dndm-rolllog-mode"
-                  >${r.mode === "Advantage" ? "ADV" : "DIS"}</span
-                >`
-              : nothing
-          }
-          ${hasAppliedRules && (showSubtleCue || (this.isDm && indicator === "None"))
-            ? html`<span class="dndm-rolllog-cue--subtle" title="Roll modified by Loaded Dice">●</span>`
-            : nothing}
-          <time class="dndm-rolllog-time" title=${r.timestampUtc}>
-            ${r.timestampUtc.slice(11, 19)}
-          </time>
-          ${
-            canReRoll
-              ? html`
-                  <button
-                    class="dndm-rolllog-reroll"
-                    type="button"
-                    title="Re-roll (Shift: Adv, Ctrl: Dis)"
-                    @click=${(e: MouseEvent) => this.handleReRoll(r, e)}
-                  >
-                    ↻
-                  </button>
-                `
-              : nothing
-          }
-        </header>
-
-        <div class="dndm-rolllog-dice">
-          <span class="dndm-rolllog-total"><strong>${r.total}</strong></span>
-          <div class="dndm-rolllog-dice-detail">
-            ${r.rolls.map(
-              (d) => html`
-                <span
-                  class="dndm-die ${d.discarded ? "dndm-die--discarded" : ""}"
-                  title="d${d.sides}: ${d.value}${d.discarded ? " (discarded)" : ""}"
-                >
-                  ${d.value}
-                </span>
-              `,
-            )}
-            ${
-              r.flatModifier !== 0 || r.attributeModifier !== 0
-                ? html`
-                    <span class="dndm-rolllog-mod">
-                      ${this.formatMod(r.flatModifier + r.attributeModifier)}
-                    </span>
-                  `
-                : nothing
-            }
-          </div>
-        </div>
-
-        ${
-          r.modifierBreakdown
-            ? html`<div class="dndm-rolllog-breakdown">${r.modifierBreakdown}</div>`
-            : nothing
-        }
-
-        ${hasAppliedRules && showRuleStamps
-          ? html`
-              <div class="dndm-rolllog-stamps" style="display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px;">
-                ${r.appliedRules.map((stamp) => {
-                  const name = typeof stamp === "string" ? stamp : stamp.ruleName;
-                  const type = typeof stamp === "object" ? ` (${stamp.modificationType})` : "";
-                  return html`
-                    <span class="dndm-rolllog-tampered-badge" title="Loaded Dice: ${name}${type}">
-                      ⚡ ${name}
-                    </span>
-                  `;
-                })}
-              </div>
-            `
-          : nothing}
-
-        ${showObviousCue
-          ? html`<div class="dndm-rolllog-cue--obvious">⚡ Tampered by a divine hand</div>`
-          : nothing}
-      </article>
-    `;
+    return renderRollLogEntry(r, {
+      state: this.state,
+      isDm: this.isDm,
+      currentUserId: this.currentUserId,
+      onReRoll: (roll, e) => this.handleReRoll(roll, e),
+    });
   }
 }
 

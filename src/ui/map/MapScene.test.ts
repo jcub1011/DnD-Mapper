@@ -762,6 +762,113 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
     expect((solo.input as unknown as { draggable: boolean }).draggable).toBe(true);
   });
 
+  describe("view-only (projector) mode", () => {
+    const token: Token = {
+      id: "solo",
+      type: "PlayerToken",
+      ownerUserId: "u1",
+      representsUserId: null,
+      name: "Solo",
+      color: "#fff",
+      iconKind: "Initial",
+      mapId: "map1",
+      x: 2.5,
+      y: 2.5,
+      sheetId: null,
+      hidden: false,
+    };
+    const image: MapImage = {
+      id: "img",
+      name: "Img",
+      contentType: "image/png",
+      shareToken: null,
+      x: 0,
+      y: 0,
+      width: 2,
+      height: 2,
+      originalWidth: 128,
+      originalHeight: 128,
+      rotation: 0,
+      opacity: 1,
+      layerOrder: 1,
+      locked: false,
+      hidden: false,
+      byteSize: 400,
+      wasDownscaled: false,
+      originalLongEdgePx: 128,
+      displayLongEdgePx: 128,
+    };
+    const leftPointer = (x: number, y: number) =>
+      ({
+        x,
+        y,
+        worldX: x,
+        worldY: y,
+        isDown: true,
+        event: null,
+        leftButtonDown: () => true,
+        middleButtonDown: () => false,
+        rightButtonDown: () => false,
+      }) as unknown as Phaser.Input.Pointer;
+    const layers = () =>
+      scene as unknown as {
+        tokenLayer: { tokenContainers: Map<string, Phaser.GameObjects.Container> };
+        imageLayer: { sprites: Map<string, Phaser.GameObjects.Image> };
+      };
+
+    it("disables token and image interaction, including across rebuilds", () => {
+      scene.updateTokens([token]);
+      scene.updateImages([image]);
+      scene.setViewOnly(true);
+      // A state push rebuilds both layers; they must stay non-interactive.
+      scene.updateTokens([{ ...token, x: 3.5 }]);
+      scene.updateImages([{ ...image, x: 1 }]);
+
+      const container = layers().tokenLayer.tokenContainers.get("solo")!;
+      const sprite = layers().imageLayer.sprites.get("img")!;
+      expect(container.input?.enabled ?? false).toBe(false);
+      expect(sprite.input?.enabled ?? false).toBe(false);
+      scene.selectImage("img");
+      expect(scene.getSelectedImageId()).toBeNull();
+
+      scene.setViewOnly(false);
+      expect(container.input?.enabled).toBe(true);
+      expect(sprite.input?.enabled).toBe(true);
+    });
+
+    it("pans on a left drag, and not at all while navigation is locked", () => {
+      const cam = scene.cameras.main;
+      scene.resetView();
+      scene.setViewOnly(true);
+
+      scene.input.emit(Phaser.Input.Events.POINTER_DOWN, leftPointer(100, 100));
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, leftPointer(200, 150));
+      scene.input.emit(Phaser.Input.Events.POINTER_UP, leftPointer(200, 150));
+      expect(cam.scrollX).toBeCloseTo(-100, 1);
+      expect(cam.scrollY).toBeCloseTo(-50, 1);
+
+      scene.setNavigationLocked(true);
+      const { scrollX, scrollY, zoom } = cam;
+      scene.input.emit(Phaser.Input.Events.POINTER_DOWN, leftPointer(100, 100));
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, leftPointer(300, 300));
+      scene.input.emit(Phaser.Input.Events.POINTER_UP, leftPointer(300, 300));
+      scene.input.emit(Phaser.Input.Events.POINTER_WHEEL, leftPointer(100, 100), [], 0, -100);
+      expect(cam.scrollX).toBe(scrollX);
+      expect(cam.scrollY).toBe(scrollY);
+      expect(cam.zoom).toBe(zoom);
+    });
+  });
+
+  it("frames a box to cover the canvas in fill mode", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    // 1920x1080 canvas; a 10x10-cell box is limited by height when fitting.
+    scene.frameBox({ x: 0, y: 0, width: 10, height: 10 }, 0, "fit");
+    expect(cam.zoom).toBeCloseTo(1080 / (10 * CELL), 4);
+    scene.frameBox({ x: 0, y: 0, width: 10, height: 10 }, 0, "fill");
+    expect(cam.zoom).toBeCloseTo(1920 / (10 * CELL), 4);
+  });
+
   it("trusts host projection for hiding; ghosts hidden tokens for the DM", () => {
     const tokens: Token[] = [
       {
