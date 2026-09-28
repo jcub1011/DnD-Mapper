@@ -853,25 +853,24 @@ export class ImageLayer {
 
   setInteractiveState(enabled: boolean): void {
     this.interactionsEnabled = enabled;
+    if (enabled) {
+      // Rebuilds while locked strip sprite listeners without re-attaching
+      // them; a full rebuild restores interactivity, listeners and handles.
+      this.rebuildImages();
+      return;
+    }
     // Toggling interactivity drops Phaser's over-tracking (no POINTER_OUT follows).
     this.hoveredSpriteId = null;
-    for (const [id, sprite] of this.sprites.entries()) {
-      const img = this.images.find((i) => i.id === id);
-      if (enabled && img && !img.locked) {
-        sprite.setInteractive();
-      } else {
-        sprite.disableInteractive();
-      }
+    for (const sprite of this.sprites.values()) {
+      sprite.disableInteractive();
     }
     for (const handle of this.handleContainers.values()) {
       handle.disableInteractive();
     }
-    if (!enabled) {
-      this.selectImage(null);
-      // selectImage(null) already clears via redrawSelectionHandles, but
-      // ensure no stale handle survives if selection was already null.
-      this.redrawSelectionHandles();
-    }
+    this.selectImage(null);
+    // selectImage(null) already clears via redrawSelectionHandles, but
+    // ensure no stale handle survives if selection was already null.
+    this.redrawSelectionHandles();
   }
 
   destroy(): void {

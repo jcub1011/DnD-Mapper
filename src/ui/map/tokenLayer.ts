@@ -857,20 +857,9 @@ export class TokenLayer {
       this.closePopover();
       return;
     }
-    // Re-apply the per-token policy (stack tops stay click-only).
-    const { byCell } = this.stacksForViewer();
-    const byId = new Map(this.tokens.map((t) => [t.id, t] as const));
-    for (const [id, container] of this.tokenContainers.entries()) {
-      const token = byId.get(id);
-      if (!token) {
-        container.disableInteractive();
-        continue;
-      }
-      this.applyDraggable(
-        container,
-        this.isDirectlyMovable(token, byCell.get(this.cellKeyOf(token))),
-      );
-    }
+    // Rebuilds while locked strip container listeners without re-attaching
+    // them; a full rebuild restores the per-token policy and its listeners.
+    this.rebuildTokens();
   }
 
   /** True when the game object belongs to this layer (map token or popover chip). */

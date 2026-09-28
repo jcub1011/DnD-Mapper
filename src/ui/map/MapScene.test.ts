@@ -451,6 +451,80 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
     expect(scene.effectiveMode).toBe("ruler");
   });
 
+  describe("clearing a tool after a state sync while locked", () => {
+    const image: MapImage = {
+      id: "relock_img",
+      name: "Relock",
+      contentType: "image/png",
+      shareToken: null,
+      x: 0,
+      y: 0,
+      width: 4,
+      height: 4,
+      originalWidth: 256,
+      originalHeight: 256,
+      rotation: 0,
+      opacity: 1,
+      layerOrder: 0,
+      locked: false,
+      hidden: false,
+      byteSize: 100,
+      wasDownscaled: false,
+      originalLongEdgePx: 256,
+      displayLongEdgePx: 256,
+    };
+    const token: Token = {
+      id: "relock_tok",
+      type: "PlayerToken",
+      ownerUserId: null,
+      representsUserId: null,
+      name: "Relock",
+      color: "#336699",
+      iconKind: "Initial",
+      mapId: "map1",
+      x: 3.5,
+      y: 3.5,
+      sheetId: null,
+      hidden: false,
+    };
+
+    type InputState = { enabled: boolean; draggable: boolean } | null;
+
+    it("restores image selection and drag listeners", () => {
+      scene.updateImages([image]);
+      scene.setToolMode("fog");
+      scene.updateImages([image]); // sync caused by using the tool
+      scene.setToolMode("none");
+
+      const sprite = (
+        scene as unknown as { imageLayer: { sprites: Map<string, Phaser.GameObjects.Image> } }
+      ).imageLayer.sprites.get(image.id)!;
+      const input = sprite.input as unknown as InputState;
+      expect(input?.enabled).toBe(true);
+      expect(input?.draggable).toBe(true);
+      expect(sprite.listenerCount(Phaser.Input.Events.POINTER_UP)).toBeGreaterThan(0);
+      expect(sprite.listenerCount(Phaser.Input.Events.DRAG_START)).toBeGreaterThan(0);
+    });
+
+    it("restores token drag listeners", () => {
+      scene.updateTokens([token]);
+      scene.setToolMode("fog");
+      scene.updateTokens([token]); // sync caused by using the tool
+      scene.setToolMode("none");
+
+      const container = (
+        scene as unknown as {
+          tokenLayer: { tokenContainers: Map<string, Phaser.GameObjects.Container> };
+        }
+      ).tokenLayer.tokenContainers.get(token.id)!;
+      const input = container.input as unknown as InputState;
+      expect(input?.enabled).toBe(true);
+      expect(input?.draggable).toBe(true);
+      expect(container.listenerCount(Phaser.Input.Events.DRAG_START)).toBeGreaterThan(0);
+      expect(container.listenerCount(Phaser.Input.Events.DRAG_END)).toBeGreaterThan(0);
+    });
+  });
+
   describe("releases off the canvas (POINTER_UP_OUTSIDE)", () => {
     const grid: GridConfig = {
       widthCells: 30,
