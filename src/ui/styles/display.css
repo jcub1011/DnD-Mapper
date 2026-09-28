@@ -1,38 +1,28 @@
-/* Display / Projector Theater Mode */
+/* Projector display popout window (?view=display). */
 
+/* The view sits above the Phaser map canvas (#map), so it must stay
+   transparent and click-through — an opaque background here hides the map. */
 .dndm-display-view {
   position: fixed;
   inset: 0;
-  background: #000;
   overflow: hidden;
   user-select: none;
-  z-index: 60;
   pointer-events: none;
 }
 
-.dndm-display-exit-btn {
+.dndm-display-status {
   position: absolute;
-  top: var(--dndm-spacing-md, 12px);
-  right: var(--dndm-spacing-md, 12px);
-  padding: 6px 12px;
-  background: rgba(16, 14, 23, 0.7);
-  backdrop-filter: blur(8px);
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  max-width: calc(100% - 32px);
+  padding: 10px 18px;
+  background: rgba(16, 14, 23, 0.85);
   border: 1px solid var(--dndm-color-border, rgba(232, 144, 85, 0.3));
-  border-radius: var(--dndm-radius-pill, 9999px);
+  border-radius: 8px;
   color: var(--dndm-color-text-secondary, #b3a598);
-  font-size: 12px;
-  cursor: pointer;
-  pointer-events: auto;
-  transition: background 0.15s, color 0.15s, opacity 0.2s;
-  opacity: 0.4;
-  z-index: 130;
-}
-
-.dndm-display-exit-btn:hover {
-  opacity: 1;
-  background: rgba(232, 144, 85, 0.2);
-  color: var(--dndm-color-text-primary, #f5efe6);
-  border-color: #e89055;
+  font-size: 14px;
+  text-align: center;
 }
 
 .dndm-display-roll-ticker {

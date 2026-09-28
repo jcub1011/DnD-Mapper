@@ -20,7 +20,7 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
 3. **Loaded Dice Engine & DM Secret Tampering**
 4. **Initiative & Combat Tracker**
 5. **Freehand Canvas Markup Overlay**
-6. **Display / Projector Theater Mode**
+6. **Display / Projector Popout**
 7. **Campaign Exporter (.vtf Packager)**
 8. **Player Lifecycle & Character Abandonment Reassignment**
 9. **Remaining Sandboxed Authority Verbs (~40 Verbs)**
@@ -48,7 +48,7 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
 | **Loaded Dice** | `LoadedDiceProcessor.cs`, `LoadedDiceRulesPanel.razor`, `dndMapperHostInput.js` | Domain records in `domain.ts`, no evaluation/UI | **Pending (Phase 8)** |
 | **Initiative & Combat** | `HostInitiativePanel.razor`, `InitiativeBanner.razor`, `TurnOrderSorter.cs` | `CombatState` record stub, no tracker/turn logic | **Pending (Phase 9)** |
 | **Canvas Markup** | `MarkupOverlay.razor`, `Map.MarkupSvg` | `markupSvg` field on `GameMap`, no drawing UI/scene | **Pending (Phase 10)** |
-| **Projector View** | `DndMapperDisplay.razor` (dedicated route), `DisplayProjection.cs` | None (needs in-app theater mode / popup window) | **Pending (Phase 10)** |
+| **Projector View** | `DndMapperDisplay.razor` (dedicated route), `DisplayProjection.cs` | None (needs a popout window) | **Pending (Phase 10)** |
 | **VTF Export** | `VtfPackager.cs` (pack), `dndMapperVtfPackager.js` | None (import only) | **Pending (Phase 11)** |
 | **Player Lifecycle** | `HandlePlayerLeft` -> convert to NPC, `RepresentsUserId` | Non-owner leave tolerated, but no token conversion | **Pending (Phase 11)** |
 
@@ -330,7 +330,7 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
 
 ---
 
-### Subsystem 6: Display / Projector Theater Mode
+### Subsystem 6: Display / Projector Popout
 
 #### 1. Legacy References
 - `Pages/DndMapperDisplay.razor` (and `.cs`, `.css` — 513 lines CSS)
@@ -341,7 +341,7 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
 #### 2. Platform Architecture Adaptation
 - In legacy, this was a second URL route (`/room/dnd-mapper/{code}/display`).
 - In KnockBox-Games, games run as single-entry-point bundles in an iframe.
-- **Solution**: Port the display view as an **in-app Theater Mode** (fullscreen button) or **Detached Popup Window** (`window.open('', '_blank')` sharing client state via `BroadcastChannel` or second client instance).
+- **Solution**: Port the display view as a **popout window** (`?view=display`) driven by the DM's window over `postMessage`, so the DM keeps full control in their own window and the popout can be shown on a TV/projector or screen-shared. (An in-app fullscreen Theater Mode was removed because it took board control away from the DM.)
 
 #### 3. Display Projection Rules
 - Uses `DisplayProjection`:
@@ -578,7 +578,7 @@ graph TD
 1. Interactive SVG drawing layer on Phaser stage, pen/eraser/color/width tools, undo/redo, clear all.
 2. Pixel-to-cell transformation and storage in `GameMap.markupSvg`.
 3. Spacebar bypass for panning.
-4. Display theater mode: In-app fullscreen / detached window with 100% fog opacity, focus rect auto-framing, 250ms token animations, roll ticker.
+4. Display popout: detached window with 100% fog opacity, focus rect auto-framing, 250ms token animations, roll ticker.
 
 ### [Phase 11: Campaign Exporter (.vtf Packager) & Final Parity Polish](phase-11-vtf-export-and-lifecycle.md)
 *Detailed technical plan: [`phase-11-vtf-export-and-lifecycle.md`](phase-11-vtf-export-and-lifecycle.md)*

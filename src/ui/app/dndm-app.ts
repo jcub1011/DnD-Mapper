@@ -33,7 +33,7 @@ import type { GameController } from "../../net/controller";
 import type { LaunchMode } from "../../net/launch";
 import { LibraryService } from "../../storage/libraryService";
 import { fx } from "../fx/fx";
-import { fullscreenExitIcon, fullscreenIcon, gearIcon, lockIcon } from "../icons";
+import { gearIcon, lockIcon } from "../icons";
 import type { MapScene, ToolMode } from "../map/MapScene";
 import { CELL } from "../map/viewport";
 import { toDisplayRoster } from "../roster";
@@ -63,10 +63,11 @@ import "../panels/dndm-token-rail";
 import "../toast/dndm-toast";
 import "../upload/dndm-image-upload";
 import "../markup/dndm-markup-overlay";
-import "../display/dndm-display-roll-ticker";
+import "../display/dndm-display-popout-view";
 import "../panels/dndm-sheet-popout-view";
 import { parseSheetPopoutParams } from "../panels/sheetPopout";
-import { filterDisplayImages, filterDisplayTokens } from "../display/displayProjection";
+import { DisplayPopoutHost, isDisplayPopoutSearch } from "../display/displayPopout";
+import { projectForPlayer } from "../../game/rules";
 import { resolveActiveTurnTokenId } from "../../game/combat";
 import { canMoveToken } from "../../game/visibility";
 import { getReadableTextColor, resolveDiceColor, resolveDiceColorForToken } from "../../game/color";
@@ -167,8 +168,9 @@ export class DndmApp extends GameElement {
   @state() private rollHistoryOpen = false;
   @state() private diceSoundEnabled = false;
   @state() private diceScale: number = loadDiceScale(DEFAULT_DICE_SCALE);
-  @state() private projectorMode =
-    typeof window !== "undefined" && window.location?.search?.includes("view=display");
+  /** Projector popout window (`?view=display`): map-only client of the DM window. */
+  private readonly isDisplayPopout =
+    typeof window !== "undefined" && isDisplayPopoutSearch(window.location?.search ?? "");
 
   /**
    * Whole-character-sheet popout (`?view=sheet&sheetId=<id>`). Renders only the
@@ -195,7 +197,7 @@ export class DndmApp extends GameElement {
    * entries clear when the full `map` patch arrives (see requestMissingMaps).
    */
   private readonly pendingMapFetches = new Set<string>();
-  private displaySyncChannel?: BroadcastChannel;
+  private displayPopoutHost?: DisplayPopoutHost;
   // MapScene instance the canvas callbacks are wired to. Phaser boots
   // asynchronously, so attach() can run before fx.map() exists — wiring is
   // (re)attempted on every state change and frame until it sticks.
@@ -218,44 +220,42 @@ export class DndmApp extends GameElement {
     }
   };
 
-  private readonly onEscapeKey = (e: KeyboardEvent): void => {
-    if (e.key === "Escape" && this.projectorMode) {
-      this.toggleProjectorMode();
-    }
-  };
-
   override connectedCallback(): void {
     super.connectedCallback();
-    // Sheet popouts never touch the controller, map, or library — the
-    // <dndm-sheet-popout-view> owns its sync channel.
-    if (this.sheetPopoutParams.isSheetPopout) return;
+    // Popouts never touch the controller or library — the
+    // <dndm-sheet-popout-view> / <dndm-display-popout-view> own their sync.
+    if (this.sheetPopoutParams.isSheetPopout || this.isDisplayPopout) return;
     document.addEventListener("click", this.onGlobalPanelCollapseClick);
     window.addEventListener("dndm-open-sheet", this.onOpenSheet);
-    window.addEventListener("keydown", this.onEscapeKey);
     window.addEventListener("pagehide", this.onPageHide);
     diceOverlay.setDiceScale(this.diceScale);
     void this.libraryService.attach();
 
-    if (typeof BroadcastChannel !== "undefined") {
-      this.displaySyncChannel = new BroadcastChannel("dndm-display-sync");
-      this.displaySyncChannel.onmessage = (event: MessageEvent) => {
-        if (event.data?.type === "state-sync" && this.projectorMode) {
-          this.onStateChanged(event.data.state);
-        }
-      };
-    }
+    this.displayPopoutHost = new DisplayPopoutHost({
+      // The authority's own player projection: hidden tokens/images, fogged
+      // tokens and secret rolls never leave this window.
+      getSnapshot: () => ({
+        state: projectForPlayer(this.hostTruth, null),
+        roster: this.roster.map((p) => ({ id: p.id, displayName: p.displayName })),
+      }),
+      resolveAsset: async (imageId) => {
+        const url = await this.assetSource.resolve(imageId);
+        if (!url) return null;
+        const res = await fetch(url);
+        return res.ok ? await res.blob() : null;
+      },
+    });
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     document.removeEventListener("click", this.onGlobalPanelCollapseClick);
     window.removeEventListener("dndm-open-sheet", this.onOpenSheet);
-    window.removeEventListener("keydown", this.onEscapeKey);
     window.removeEventListener("pagehide", this.onPageHide);
     window.removeEventListener("pointermove", this.onWindowPointerMove);
     window.removeEventListener("pointerup", this.onWindowPointerUp);
     window.removeEventListener("pointercancel", this.onWindowPointerUp);
-    this.displaySyncChannel?.close();
+    this.displayPopoutHost?.dispose();
     cancelAnimationFrame(this.rafId);
     this.pendingMapFetches.clear();
     this.controller?.destroy();
@@ -682,11 +682,6 @@ export class DndmApp extends GameElement {
     map.setTokenMovePolicy((token) => canMoveToken(state, me, token));
   }
 
-  private toggleProjectorMode(): void {
-    this.projectorMode = !this.projectorMode;
-    this.onStateChanged(this.match);
-  }
-
   private onStateChanged(state: Readonly<MatchState>): void {
     const prevRollLog = this.match?.rollLog ?? [];
     const prevMapId = this.match.activeMapId;
@@ -696,72 +691,24 @@ export class DndmApp extends GameElement {
     // and pushing rail insets / policy before applying this state.
     this.wireMapScene();
 
-    if (this.displaySyncChannel && !this.projectorMode) {
-      try {
-        this.displaySyncChannel.postMessage({ type: "state-sync", state });
-      } catch {
-        // channel could be closed
-      }
-    }
+    this.displayPopoutHost?.push();
 
     const map = fx.map();
     if (map) {
       const activeMap = this.activeMap;
       if (activeMap) {
-        if (this.projectorMode) {
-          map.setProjectorMode(true);
-          const displayTokens = filterDisplayTokens(
-            activeMap.tokens,
-            activeMap.fogMask,
-            activeMap.grid,
-          );
-          const displayImages = filterDisplayImages(
-            activeMap.images,
-            activeMap.fogMask,
-            activeMap.grid,
-          );
-          if (prevMapId !== activeMap.id) {
-            map.setMap(
-              { ...activeMap, tokens: displayTokens, images: displayImages },
-              false,
-              this.assetSource,
-            );
-            map.updateSheets(state.sheets);
-          } else {
-            map.updateGrid(activeMap.grid);
-            map.updateTokens(displayTokens);
-            map.updateImages(displayImages);
-            map.updateSheets(state.sheets);
-            // Always apply — an empty mask is a real state (all revealed)
-            // that must clear the texture, not be skipped.
-            map.updateFog(activeMap.fogMask ?? "");
-            map.updateMarkup(activeMap.markupSvg ?? null);
-          }
-          if (state.focusRect) {
-            map.frameBox(state.focusRect);
-          } else {
-            map.frameBox({
-              x: 0,
-              y: 0,
-              width: activeMap.grid.widthCells,
-              height: activeMap.grid.heightCells,
-            });
-          }
+        if (prevMapId !== activeMap.id) {
+          map.setMap(activeMap, this.isDm, this.assetSource);
+          map.updateSheets(state.sheets);
         } else {
-          map.setProjectorMode(false);
-          if (prevMapId !== activeMap.id) {
-            map.setMap(activeMap, this.isDm, this.assetSource);
-            map.updateSheets(state.sheets);
-          } else {
-            map.updateGrid(activeMap.grid);
-            map.updateTokens(activeMap.tokens);
-            map.updateImages(activeMap.images);
-            map.updateSheets(state.sheets);
-            // Always apply — an empty mask is a real state (all revealed)
-            // that must clear the texture, not be skipped.
-            map.updateFog(activeMap.fogMask ?? "");
-            map.updateMarkup(activeMap.markupSvg ?? null);
-          }
+          map.updateGrid(activeMap.grid);
+          map.updateTokens(activeMap.tokens);
+          map.updateImages(activeMap.images);
+          map.updateSheets(state.sheets);
+          // Always apply — an empty mask is a real state (all revealed)
+          // that must clear the texture, not be skipped.
+          map.updateFog(activeMap.fogMask ?? "");
+          map.updateMarkup(activeMap.markupSvg ?? null);
         }
       }
       map.setActiveTurnTokenId(resolveActiveTurnTokenId(state.activeCombat));
@@ -770,7 +717,6 @@ export class DndmApp extends GameElement {
       this.updateTokenMovePolicy();
 
       if (
-        !this.projectorMode &&
         state.pendingCenterRequest &&
         state.pendingCenterRequest.nonce !== this.lastCenterNonce
       ) {
@@ -882,7 +828,6 @@ export class DndmApp extends GameElement {
    * (or removal).
    */
   private requestMissingMaps(state: Readonly<MatchState>): void {
-    if (this.projectorMode) return;
     const liveById = new Map(state.maps.map((m) => [m.id, m] as const));
     for (const id of [...this.pendingMapFetches]) {
       const cur = liveById.get(id);
@@ -1062,6 +1007,9 @@ export class DndmApp extends GameElement {
         <dndm-sheet-popout-view .sheetId=${this.sheetPopoutParams.sheetId}></dndm-sheet-popout-view>
       `;
     }
+    if (this.isDisplayPopout) {
+      return html`<dndm-display-popout-view></dndm-display-popout-view>`;
+    }
     const { phase, maps, activeMapId, settings } = this.match;
     const me = this.controller?.playerId ?? "";
 
@@ -1090,29 +1038,6 @@ export class DndmApp extends GameElement {
     const active = this.activeMap;
     const myToken: Token | null =
       active?.tokens.find((t) => t.ownerUserId === me || t.representsUserId === me) ?? null;
-
-    if (this.projectorMode) {
-      return html`
-        <div class="dndm-display-view">
-          <button
-            class="dndm-display-exit-btn"
-            type="button"
-            title="Exit Theater Mode (Esc)"
-            @click=${() => this.toggleProjectorMode()}
-          >
-            ${fullscreenExitIcon()} Exit Theater (Esc)
-          </button>
-          <div class="dndm-dice-canvas-overlay" id="dndm-dice-overlay"></div>
-          <dndm-display-roll-ticker
-            .rolls=${this.match.rollLog ?? []}
-            .tokens=${active?.tokens ?? []}
-            .isDm=${this.isDm}
-            .currentUserId=${me}
-            .rollsVisibleToPlayers=${settings.rollsVisibleToPlayers}
-          ></dndm-display-roll-ticker>
-        </div>
-      `;
-    }
 
     return html`
       <div
@@ -1244,19 +1169,10 @@ export class DndmApp extends GameElement {
                           ${this.lobbyOpen ? html`${lockIcon(true)} Close Lobby` : html`${lockIcon(false)} Open Lobby`}
                         </button>
                         <button
-                          class="dndm-btn dndm-btn--ghost dndm-btn--small dndm-btn--icon"
-                          type="button"
-                          title="Enter Projector Theater Mode"
-                          aria-label="Enter Projector Theater Mode"
-                          @click=${() => this.toggleProjectorMode()}
-                        >
-                          ${fullscreenIcon()}
-                        </button>
-                        <button
                           class="dndm-btn dndm-btn--ghost dndm-btn--small"
                           type="button"
-                          title="Open Projector in a new window"
-                          @click=${() => window.open("?view=display", "_blank")}
+                          title="Open the player-safe projector view in a new window (for a TV, projector, or screen share)"
+                          @click=${() => this.displayPopoutHost?.open()}
                         >
                           ↗ Popout
                         </button>

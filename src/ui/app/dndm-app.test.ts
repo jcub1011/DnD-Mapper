@@ -2,7 +2,7 @@
 import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Emitter } from "../../game/emitter";
-import { createDefaultDndMapperState, toMapSummary, type GameMap } from "../../game/domain";
+import { createDefaultDndMapperState, toMapSummary, type GameMap, type Token } from "../../game/domain";
 import type { ControllerEvents, GameController } from "../../net/controller";
 import type { MatchState } from "../../game/types";
 import type { KBPlayer } from "../../../addons/knockbox/knockbox-phaser";
@@ -453,6 +453,78 @@ describe("<dndm-app> Application Shell", () => {
       expect(uploadComponent).not.toBeNull();
       const uploadBtn = uploadComponent?.querySelector('label[aria-label="Upload images"]');
       expect(uploadBtn).not.toBeNull();
+    });
+  });
+
+  describe("Projector popout", () => {
+    function makeToken(id: string, hidden: boolean): Token {
+      return {
+        id,
+        type: "NPCToken",
+        ownerUserId: null,
+        representsUserId: null,
+        name: id,
+        color: "#f00",
+        iconKind: "Initial",
+        mapId: "map-1",
+        x: 1.5,
+        y: 1.5,
+        sheetId: null,
+        hidden,
+      };
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("has no Theater Mode button — Popout is the only projector entry point", async () => {
+      const controller = createMockController({
+        state: { phase: "Playing", maps: [makeMap("map-1", "Dungeon")], activeMapId: "map-1" },
+      });
+      app.attach(controller);
+      await app.updateComplete;
+
+      expect(app.querySelector('button[title="Enter Projector Theater Mode"]')).toBeNull();
+      const popoutBtn = [...app.querySelectorAll(".dndm-session-panel button")].find((b) =>
+        b.textContent?.includes("Popout"),
+      );
+      expect(popoutBtn).toBeDefined();
+    });
+
+    it("opens ?view=display and pushes only the player projection to it", async () => {
+      const map1: GameMap = {
+        ...makeMap("map-1", "Dungeon"),
+        tokens: [makeToken("tok-visible", false), makeToken("tok-hidden", true)],
+      };
+      const controller = createMockController({
+        state: { phase: "Playing", maps: [map1], activeMapId: "map-1", dmPlayerId: "dm-user" },
+      });
+      const fakePopup = { closed: false, focus: vi.fn(), postMessage: vi.fn() };
+      const openSpy = vi
+        .spyOn(window, "open")
+        .mockReturnValue(fakePopup as unknown as Window);
+      app.attach(controller);
+      await app.updateComplete;
+
+      const popoutBtn = [...app.querySelectorAll(".dndm-session-panel button")].find((b) =>
+        b.textContent?.includes("Popout"),
+      ) as HTMLButtonElement;
+      popoutBtn.click();
+
+      expect(openSpy).toHaveBeenCalledWith("?view=display", "_blank", expect.any(String));
+      const msg = fakePopup.postMessage.mock.calls[0]?.[0] as {
+        type: string;
+        state: MatchState;
+      };
+      expect(msg.type).toBe("display-state");
+      const pushedMap = msg.state.maps.find((m) => m.id === "map-1") as GameMap;
+      expect(pushedMap.tokens.map((t) => t.id)).toEqual(["tok-visible"]);
+
+      // A second click focuses the open window instead of opening another.
+      popoutBtn.click();
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      expect(fakePopup.focus).toHaveBeenCalled();
     });
   });
 

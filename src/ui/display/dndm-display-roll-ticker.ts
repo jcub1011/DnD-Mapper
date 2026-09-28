@@ -1,5 +1,5 @@
 /*
- * Roll Result Ticker for Display / Projector Mode.
+ * Roll Result Ticker for the projector popout.
  *
  * Renders a floating stack of recent rolls in the bottom-right corner.
  * Shows up to 10 latest rolls, filtered by player visibility settings.
