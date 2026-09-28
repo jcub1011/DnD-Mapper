@@ -213,7 +213,8 @@ export class MapScene extends Phaser.Scene {
     this.tokenLayer.setDm(this.isDm);
     this.tokenLayer.setGrid(map.grid);
     this.tokenLayer.setFogMask(map.fogMask ?? "");
-    this.tokenLayer.setTokens(map.tokens);
+    // A map switch or reload is not a move: snap, don't slide.
+    this.tokenLayer.setTokens(map.tokens, { animate: false });
 
     this.focusOverlay.setFocusRect(null);
     this.rulerOverlay.clear();
@@ -225,7 +226,6 @@ export class MapScene extends Phaser.Scene {
 
   setProjectorMode(isProjector: boolean): void {
     this.fogLayer.setPitchBlack(isProjector);
-    this.tokenLayer.setTweenMoves(isProjector);
   }
 
   frameBox(box: { x: number; y: number; width: number; height: number }, duration = 400): void {
@@ -739,7 +739,7 @@ export class MapScene extends Phaser.Scene {
     if (this.activeMap) {
       this.imageLayer.setImages(this.activeMap.images);
       this.imageLayer.onContextRestored();
-      this.tokenLayer.setTokens(this.activeMap.tokens);
+      this.tokenLayer.setTokens(this.activeMap.tokens, { animate: false });
     }
     this.rulerOverlay.redraw();
     this.focusOverlay.redraw();

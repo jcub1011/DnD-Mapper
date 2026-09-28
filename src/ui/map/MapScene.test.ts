@@ -1149,3 +1149,380 @@ describe("RulerOverlay and FocusOverlay Math", () => {
     focus.destroy();
   });
 });
+
+describe("TokenLayer move smoothing", () => {
+  let game: Phaser.Game;
+  let scene: MapScene;
+
+  beforeEach(async () => {
+    scene = new MapScene();
+    game = await createTestGame(scene);
+  });
+
+  afterEach(() => {
+    try {
+      game.destroy(true, false);
+    } catch {
+      // Phaser headless teardown in happy-dom mock environment
+    }
+  });
+
+  const makeToken = (id: string, x: number, y: number): Token => ({
+    id,
+    type: "PlayerToken",
+    ownerUserId: null,
+    representsUserId: null,
+    name: id,
+    color: "#888888",
+    iconKind: "Initial",
+    mapId: "map1",
+    x,
+    y,
+    sheetId: null,
+    hidden: false,
+  });
+
+  const layerOf = (s: MapScene) =>
+    (
+      s as unknown as {
+        tokenLayer: {
+          tokenContainers: Map<string, Phaser.GameObjects.Container>;
+          popoverContainer: Phaser.GameObjects.Container;
+          pendingLocalMoves: Map<string, unknown>;
+        };
+      }
+    ).tokenLayer;
+
+  const containerOf = (id: string) => layerOf(scene).tokenContainers.get(id)!;
+  const tweensOn = (obj: object) => scene.tweens.getTweensOf(obj);
+  const pointer = { event: null } as unknown as Phaser.Input.Pointer;
+
+  /** Establish starting tokens without the enter fade (as a map apply does). */
+  const seed = (tokens: Token[]) =>
+    (
+      scene as unknown as {
+        tokenLayer: { setTokens: (t: Token[], o: { animate: boolean }) => void };
+      }
+    ).tokenLayer.setTokens(tokens, { animate: false });
+
+  /** Drive a full drag gesture on a game object to world point (x, y). */
+  const dragTo = (obj: Phaser.GameObjects.Container, x: number, y: number) => {
+    obj.emit(Phaser.Input.Events.DRAG_START, pointer);
+    obj.emit(Phaser.Input.Events.DRAG, pointer, x, y);
+    obj.emit(Phaser.Input.Events.DRAG_END, pointer);
+  };
+
+  it("slides another participant's move to the new position", () => {
+    seed([makeToken("t1", 2.5, 2.5)]);
+    const c = containerOf("t1");
+    expect(tweensOn(c)).toHaveLength(0);
+
+    scene.updateTokens([makeToken("t1", 6.5, 3.5)]);
+
+    const tweens = tweensOn(c);
+    expect(tweens).toHaveLength(1);
+    // Starts from the old spot; the slide carries it to the new one.
+    expect(c.x).toBe(2.5 * CELL);
+    tweens[0].seek(10_000);
+    expect(c.x).toBe(6.5 * CELL);
+    expect(c.y).toBe(3.5 * CELL);
+  });
+
+  it("does not restart an in-flight slide on unrelated rebuilds", () => {
+    seed([makeToken("t1", 2.5, 2.5)]);
+    const c = containerOf("t1");
+    scene.updateTokens([makeToken("t1", 6.5, 3.5)]);
+    const [first] = tweensOn(c);
+
+    scene.updateSheets({});
+    scene.setActiveTurnTokenId("t1");
+
+    expect(tweensOn(c)).toEqual([first]);
+  });
+
+  it("snaps the mover's own drop when the authority echoes it", () => {
+    const moves: { tokenId: string; x: number; y: number }[] = [];
+    scene.onTokenMoveEnd = (e) => moves.push(e);
+    seed([makeToken("t1", 2.5, 2.5)]);
+    const c = containerOf("t1");
+
+    dragTo(c, 6.4 * CELL, 3.6 * CELL);
+    expect(moves).toEqual([{ tokenId: "t1", x: 6.5, y: 3.5 }]);
+    expect(c.x).toBe(6.5 * CELL);
+
+    scene.updateTokens([makeToken("t1", 6.5, 3.5)]);
+    expect(tweensOn(c)).toHaveLength(0);
+    expect(c.x).toBe(6.5 * CELL);
+    expect(layerOf(scene).pendingLocalMoves.has("t1")).toBe(false);
+  });
+
+  it("holds the drop through a stale pre-move update", () => {
+    seed([makeToken("t1", 2.5, 2.5)]);
+    const c = containerOf("t1");
+    dragTo(c, 6.5 * CELL, 3.5 * CELL);
+
+    // Broadcast the host sent before it processed the move.
+    scene.updateTokens([makeToken("t1", 2.5, 2.5)]);
+    expect(tweensOn(c)).toHaveLength(0);
+    expect(c.x).toBe(6.5 * CELL);
+
+    scene.updateTokens([makeToken("t1", 6.5, 3.5)]);
+    expect(tweensOn(c)).toHaveLength(0);
+    expect(layerOf(scene).pendingLocalMoves.has("t1")).toBe(false);
+  });
+
+  it("snaps to the authority once a pending drop expires (rejected move)", () => {
+    seed([makeToken("t1", 2.5, 2.5)]);
+    const c = containerOf("t1");
+    dragTo(c, 6.5 * CELL, 3.5 * CELL);
+
+    const realNow = Date.now;
+    const t0 = realNow();
+    Date.now = () => t0 + 60_000;
+    try {
+      scene.updateTokens([makeToken("t1", 2.5, 2.5)]);
+    } finally {
+      Date.now = realNow;
+    }
+    expect(tweensOn(c)).toHaveLength(0);
+    expect(c.x).toBe(2.5 * CELL);
+  });
+
+  it("adopts a host-adjusted position instantly without sliding", () => {
+    seed([makeToken("t1", 2.5, 2.5)]);
+    const c = containerOf("t1");
+    dragTo(c, 6.5 * CELL, 3.5 * CELL);
+
+    // Host re-snapped / clamped the drop to a different cell.
+    scene.updateTokens([makeToken("t1", 7.5, 3.5)]);
+    expect(tweensOn(c)).toHaveLength(0);
+    expect(c.x).toBe(7.5 * CELL);
+  });
+
+  it("snaps a stack-chip drop instead of sliding out of the stack", () => {
+    seed([makeToken("top", 5.5, 4.5), makeToken("under", 5.5, 4.5)]);
+    const top = containerOf("top");
+    const under = containerOf("under");
+
+    // Click the stack top to fan out the chips.
+    top.emit(Phaser.Input.Events.POINTER_UP, pointer);
+    const chip = layerOf(scene)
+      .popoverContainer.getAll()
+      .find(
+        (o) => (o as Phaser.GameObjects.Container).getData("tokenChipId") === "under",
+      ) as Phaser.GameObjects.Container;
+    expect(chip).toBeDefined();
+
+    dragTo(chip, 9.5 * CELL, 2.5 * CELL);
+    expect(under.x).toBe(9.5 * CELL);
+
+    scene.updateTokens([makeToken("top", 5.5, 4.5), makeToken("under", 9.5, 2.5)]);
+    expect(tweensOn(under)).toHaveLength(0);
+    expect(under.x).toBe(9.5 * CELL);
+    expect(under.visible).toBe(true);
+  });
+
+  it("does not move or tween a token while it is being dragged", () => {
+    seed([makeToken("t1", 2.5, 2.5)]);
+    const c = containerOf("t1");
+    c.emit(Phaser.Input.Events.DRAG_START, pointer);
+    c.emit(Phaser.Input.Events.DRAG, pointer, 8 * CELL, 8 * CELL);
+
+    // Someone else's update lands mid-drag.
+    scene.updateTokens([makeToken("t1", 2.5, 2.5)]);
+    expect(tweensOn(c)).toHaveLength(0);
+    expect(c.x).toBe(8 * CELL);
+
+    // Drag state survives the listener rebuild: the drop is a move, not a click.
+    const moves: unknown[] = [];
+    scene.onTokenMoveEnd = (e) => moves.push(e);
+    c.emit(Phaser.Input.Events.DRAG_END, pointer);
+    expect(moves).toEqual([{ tokenId: "t1", x: 8.5, y: 8.5 }]);
+  });
+
+  it("keeps a token visible while it slides onto an occupied cell", () => {
+    seed([makeToken("resident", 5.5, 4.5), makeToken("mover", 1.5, 1.5)]);
+    const mover = containerOf("mover");
+
+    scene.updateTokens([makeToken("resident", 5.5, 4.5), makeToken("mover", 5.5, 4.5)]);
+    expect(mover.visible).toBe(true);
+
+    tweensOn(mover)[0].seek(10_000, 16.6, true);
+    // Landed behind the resident: the stack settles and hides it.
+    expect(mover.visible).toBe(false);
+  });
+
+  it("snaps instead of sliding when a map is (re)applied", () => {
+    const map = {
+      id: "map1",
+      name: "Map",
+      grid: {
+        widthCells: 30,
+        heightCells: 20,
+        cellPixels: CELL,
+        showGridLines: true,
+        snapToGrid: true,
+        lineColor: "#222",
+      },
+      images: [],
+      tokens: [makeToken("t1", 2.5, 2.5)],
+      fogMask: "",
+      markupSvg: null,
+    } as unknown as Parameters<MapScene["setMap"]>[0];
+    scene.setMap(map, true);
+    const c = containerOf("t1");
+
+    scene.setMap({ ...map, tokens: [makeToken("t1", 9.5, 9.5)] }, true);
+    expect(tweensOn(c)).toHaveLength(0);
+    expect(c.x).toBe(9.5 * CELL);
+
+    // Tokens appearing with a map apply show up at full opacity.
+    scene.setMap({ ...map, id: "map2", tokens: [makeToken("t9", 1.5, 1.5)] }, true);
+    const t9 = containerOf("t9");
+    expect(tweensOn(t9)).toHaveLength(0);
+    expect(t9.alpha).toBe(1);
+  });
+  const FADE_HALF_MS = 150;
+
+  const fadingOf = (s: MapScene) =>
+    (
+      s as unknown as {
+        tokenLayer: {
+          fadingOut: Map<string, { container: Phaser.GameObjects.Container }>;
+        };
+      }
+    ).tokenLayer.fadingOut;
+
+  it("fades out, in place, a token that leaves the viewer's list (moved into fog)", () => {
+    seed([makeToken("t1", 2.5, 2.5)]);
+    const c = containerOf("t1");
+
+    // Host projection strips the token once it stands on fog.
+    scene.updateTokens([]);
+
+    expect(layerOf(scene).tokenContainers.has("t1")).toBe(false);
+    expect(fadingOf(scene).get("t1")?.container).toBe(c);
+    expect(c.active).toBe(true);
+    expect(c.x).toBe(2.5 * CELL); // fades where last seen, no slide
+    expect(c.input?.enabled ?? false).toBe(false);
+
+    const [fade] = tweensOn(c);
+    fade.seek(10_000, 16.6, true);
+    expect(c.alpha).toBe(0);
+    expect(c.active).toBe(false);
+    expect(fadingOf(scene).has("t1")).toBe(false);
+  });
+
+  it("removes a token hidden behind a stack without a fade", () => {
+    seed([makeToken("top", 5.5, 4.5), makeToken("under", 5.5, 4.5)]);
+    const under = containerOf("under");
+
+    scene.updateTokens([makeToken("top", 5.5, 4.5)]);
+    expect(under.active).toBe(false);
+    expect(fadingOf(scene).has("under")).toBe(false);
+  });
+
+  it("drops the fading ghost when the token comes back into view", () => {
+    seed([makeToken("t1", 2.5, 2.5)]);
+    const ghost = containerOf("t1");
+    scene.updateTokens([]);
+
+    scene.updateTokens([makeToken("t1", 8.5, 8.5)]);
+    expect(ghost.active).toBe(false);
+    expect(fadingOf(scene).has("t1")).toBe(false);
+    const fresh = containerOf("t1");
+    expect(fresh).not.toBe(ghost);
+    expect(fresh.x).toBe(8.5 * CELL);
+    expect(fresh.alpha).toBe(0); // fades back in at the new spot
+  });
+
+  const fadingInOf = (s: MapScene) =>
+    (s as unknown as { tokenLayer: { fadingIn: Map<string, unknown> } }).tokenLayer.fadingIn;
+
+  it("fades in, in place, a token that enters the viewer's list (out of fog)", () => {
+    seed([]);
+    scene.updateTokens([makeToken("t1", 6.5, 3.5)]);
+    const c = containerOf("t1");
+
+    expect(c.x).toBe(6.5 * CELL); // appears at its new spot, no slide
+    expect(c.alpha).toBe(0);
+    const [fade] = tweensOn(c);
+    expect(fade).toBeDefined();
+
+    // Unrelated rebuilds mid-fade must not snap it to full opacity.
+    scene.updateSheets({});
+    expect(c.alpha).toBe(0);
+    expect(tweensOn(c)).toEqual([fade]);
+
+    fade.seek(10_000, 16.6, true);
+    expect(c.alpha).toBe(1);
+    expect(fadingInOf(scene).has("t1")).toBe(false);
+  });
+
+  it("fades a DM's hidden token in to its ghost alpha", () => {
+    scene.setDm(true);
+    seed([]);
+    scene.updateTokens([{ ...makeToken("t1", 6.5, 3.5), hidden: true }]);
+    const c = containerOf("t1");
+
+    tweensOn(c)[0].seek(10_000, 16.6, true);
+    expect(c.alpha).toBe(0.5);
+  });
+
+  it("does not fade in a token that enters hidden behind a stack", () => {
+    seed([makeToken("top", 5.5, 4.5)]);
+    scene.updateTokens([makeToken("top", 5.5, 4.5), makeToken("under", 5.5, 4.5)]);
+    const under = containerOf("under");
+    expect(under.visible).toBe(false);
+    expect(tweensOn(under)).toHaveLength(0);
+    expect(fadingInOf(scene).has("under")).toBe(false);
+  });
+
+  it("fades out from partway when a token leaves mid-fade-in", () => {
+    seed([]);
+    scene.updateTokens([makeToken("t1", 6.5, 3.5)]);
+    const c = containerOf("t1");
+    tweensOn(c)[0].seek(FADE_HALF_MS);
+    const partway = c.alpha;
+    expect(partway).toBeGreaterThan(0);
+    expect(partway).toBeLessThan(1);
+
+    scene.updateTokens([]);
+    expect(fadingInOf(scene).has("t1")).toBe(false);
+    expect(c.alpha).toBe(partway);
+    // The stopped fade-in lingers in the manager until next frame; only the
+    // fade-out is live.
+    expect(tweensOn(c).filter((t) => !t.isPendingRemove())).toHaveLength(1);
+  });
+
+  it("removes tokens instantly when a map is (re)applied", () => {
+    const map = {
+      id: "map1",
+      name: "Map",
+      grid: {
+        widthCells: 30,
+        heightCells: 20,
+        cellPixels: CELL,
+        showGridLines: true,
+        snapToGrid: true,
+        lineColor: "#222",
+      },
+      images: [],
+      tokens: [makeToken("t1", 2.5, 2.5), makeToken("t2", 4.5, 4.5)],
+      fogMask: "",
+      markupSvg: null,
+    } as unknown as Parameters<MapScene["setMap"]>[0];
+    scene.setMap(map, true);
+    const t1 = containerOf("t1");
+    const t2 = containerOf("t2");
+
+    // An in-flight fade from a normal update is cut short by the map switch.
+    scene.updateTokens([makeToken("t2", 4.5, 4.5)]);
+    expect(fadingOf(scene).has("t1")).toBe(true);
+
+    scene.setMap({ ...map, id: "map2", tokens: [] }, true);
+    expect(t1.active).toBe(false);
+    expect(t2.active).toBe(false);
+    expect(fadingOf(scene).size).toBe(0);
+  });
+});
