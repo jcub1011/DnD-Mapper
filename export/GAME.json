@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/jcub1011/KnockBox-Games-Marketplace/refs/heads/main/schemas/plugin.schema.json",
   "id": "dnd-mapper",
   "name": "D&D Mapper",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Virtual tabletop map editor and session viewer for KnockBox.",
   "author": { "name": "Jacob McCormack" },
   "license": "MIT",
