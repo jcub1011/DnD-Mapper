@@ -82,6 +82,9 @@ export class MapScene extends Phaser.Scene {
   private camStartY = 0;
   private didMoveDuringPan = false;
 
+  // Last camera zoom the image selection handles were fitted to
+  private lastZoom = 1;
+
   // Rail insets for rail-aware visible center zoom anchor
   public railLeft = 0;
   public railRight = 0;
@@ -159,6 +162,14 @@ export class MapScene extends Phaser.Scene {
       this.rulerOverlay.redraw();
       this.focusOverlay.redraw();
       this.onViewportChanged?.(readViewport(this.cameras.main, CELL));
+    }
+
+    // Per-frame check (rather than at each zoom call site) so tweened zooms
+    // like frameBox's zoomTo also keep the selection handles screen-constant.
+    const zoom = this.cameras.main.zoom;
+    if (zoom !== this.lastZoom) {
+      this.lastZoom = zoom;
+      this.imageLayer.onZoomChanged();
     }
   }
 

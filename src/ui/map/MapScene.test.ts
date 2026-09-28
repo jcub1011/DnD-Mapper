@@ -7,6 +7,7 @@ import { MapScene } from "./MapScene";
 import { brushFootprint, computeFogPerimeter, FogLayer } from "./fogLayer";
 import { RulerOverlay } from "./rulerOverlay";
 import { FocusOverlay } from "./focusOverlay";
+import { resizeCursorForAngle } from "./imageLayer";
 import type { GridConfig, MapImage, Token } from "../../game/domain";
 import { encodeFog, fillFog, setCellFogged } from "../../game/fog";
 
@@ -194,6 +195,127 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
     expect(sprite.angle).toBe(90);
     expect(sprite.displayWidth).toBe(6 * CELL);
     expect(sprite.displayHeight).toBe(4 * CELL);
+  });
+
+  it("keeps image selection handles a constant on-screen size across zoom changes", () => {
+    const img: MapImage = {
+      id: "handles_test",
+      name: "Handles",
+      contentType: "image/png",
+      shareToken: null,
+      x: 2,
+      y: 2,
+      width: 4,
+      height: 4,
+      originalWidth: 256,
+      originalHeight: 256,
+      rotation: 0,
+      opacity: 1,
+      layerOrder: 1,
+      locked: false,
+      hidden: false,
+      byteSize: 400,
+      wasDownscaled: false,
+      originalLongEdgePx: 256,
+      displayLongEdgePx: 256,
+    };
+
+    scene.updateImages([img]);
+    scene.selectImage("handles_test");
+
+    const handles = (
+      scene as unknown as {
+        imageLayer: { handleContainers: Map<string, Phaser.GameObjects.Container> };
+      }
+    ).imageLayer.handleContainers;
+    expect(handles.size).toBe(5);
+
+    const cam = scene.cameras.main;
+    const topEdgeY = img.y * CELL;
+    for (const h of handles.values()) expect(h.scaleX).toBeCloseTo(1, 5);
+    expect(handles.get("rot")!.y).toBeCloseTo(topEdgeY - 32, 5);
+
+    // Zoom without rebuilding the selection: the per-frame check must re-fit it.
+    scene.zoomIn();
+    scene.update();
+    const zoomedIn = cam.zoom;
+    expect(zoomedIn).toBeGreaterThan(1);
+    for (const h of handles.values()) expect(h.scaleX).toBeCloseTo(1 / zoomedIn, 5);
+    expect(handles.get("rot")!.y).toBeCloseTo(topEdgeY - 32 / zoomedIn, 5);
+
+    scene.zoomOut();
+    scene.zoomOut();
+    scene.update();
+    const zoomedOut = cam.zoom;
+    expect(zoomedOut).toBeLessThan(1);
+    for (const h of handles.values()) expect(h.scaleX).toBeCloseTo(1 / zoomedOut, 5);
+    expect(handles.get("rot")!.y).toBeCloseTo(topEdgeY - 32 / zoomedOut, 5);
+  });
+
+  it("highlights hovered image handles and shows a gesture cursor", () => {
+    const img: MapImage = {
+      id: "hover_test",
+      name: "Hover",
+      contentType: "image/png",
+      shareToken: null,
+      x: 2,
+      y: 2,
+      width: 4,
+      height: 4,
+      originalWidth: 256,
+      originalHeight: 256,
+      rotation: 0,
+      opacity: 1,
+      layerOrder: 1,
+      locked: false,
+      hidden: false,
+      byteSize: 400,
+      wasDownscaled: false,
+      originalLongEdgePx: 256,
+      displayLongEdgePx: 256,
+    };
+
+    scene.updateImages([img]);
+    scene.selectImage("hover_test");
+
+    const handles = (
+      scene as unknown as {
+        imageLayer: { handleContainers: Map<string, Phaser.GameObjects.Container> };
+      }
+    ).imageLayer.handleContainers;
+    const gfxOf = (id: string) => handles.get(id)!.getAt(0) as Phaser.GameObjects.Graphics;
+    // Headless Phaser still creates a canvas element.
+    const canvas = scene.game.canvas;
+    expect(canvas).toBeTruthy();
+
+    handles.get("se")!.emit(Phaser.Input.Events.POINTER_OVER);
+    expect(gfxOf("se").scaleX).toBeGreaterThan(1);
+    expect(gfxOf("nw").scaleX).toBe(1);
+    expect(canvas.style.cursor).toBe("nwse-resize");
+    expect(canvas.title).toContain("resize");
+
+    handles.get("se")!.emit(Phaser.Input.Events.POINTER_OUT);
+    expect(gfxOf("se").scaleX).toBe(1);
+    expect(canvas.title).toBe("");
+
+    handles.get("rot")!.emit(Phaser.Input.Events.POINTER_OVER);
+    expect(gfxOf("rot").scaleX).toBeGreaterThan(1);
+    expect(canvas.style.cursor).toContain("grab");
+    expect(canvas.title).toContain("rotate");
+
+    // Deselecting destroys the handles, which never emit POINTER_OUT.
+    scene.selectImage(null);
+    expect(canvas.title).toBe("");
+  });
+
+  it("maps handle directions to the nearest CSS resize cursor", () => {
+    expect(resizeCursorForAngle(45)).toBe("nwse-resize"); // SE corner, unrotated
+    expect(resizeCursorForAngle(225)).toBe("nwse-resize"); // NW corner
+    expect(resizeCursorForAngle(135)).toBe("nesw-resize"); // SW corner
+    expect(resizeCursorForAngle(45 + 90)).toBe("nesw-resize"); // SE corner, rotated 90°
+    expect(resizeCursorForAngle(45 + 45)).toBe("ns-resize"); // SE corner, rotated 45°
+    expect(resizeCursorForAngle(315 + 45)).toBe("ew-resize"); // NE corner, rotated 45°
+    expect(resizeCursorForAngle(-45)).toBe("nesw-resize"); // negative angles wrap
   });
 
   it("creates token containers with readable labels, halos, and stack detection", () => {

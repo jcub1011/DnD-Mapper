@@ -5,6 +5,7 @@
  *  - Center-anchored rotation parity matching legacy Canvas2D
  *  - Placeholder dashed textures for missing/loading assets
  *  - Interactive selection outline, 4-corner resize handles, and rotation stem
+ *  - Handle hover feedback: highlight, gesture cursor, and modifier-key tooltip
  *  - Snapping with Ctrl (bypass) and Shift (free aspect ratio) modifiers
  */
 
@@ -26,6 +27,46 @@ export interface ImageTransformEvent {
 }
 
 const inFlight = new Map<string, Promise<boolean>>();
+
+// Selection chrome, sized in screen pixels (world sizes are divided by zoom).
+const SELECTION_COLOR = 0xe89055;
+const HANDLE_HOVER_COLOR = 0xffc49c;
+const HANDLE_STROKE_COLOR = 0x07060a;
+const HANDLE_STROKE_WIDTH = 2;
+const HANDLE_HOVER_SCALE = 1.25;
+const HANDLE_HIT_SIZE = 28;
+const CORNER_HANDLE_SIZE = 12;
+const ROTATE_HANDLE_RADIUS = 8;
+const OUTLINE_WIDTH = 3;
+const STEM_WIDTH = 2;
+const STEM_LENGTH = 32;
+
+const ROTATE_HANDLE_ID = "rot";
+const CORNER_IDS = ["nw", "ne", "se", "sw"] as const;
+// Outward direction of each corner on an unrotated image, in degrees
+// clockwise from +x (screen y points down, so 45° is down-right).
+const CORNER_BASE_DEG: Record<string, number> = { se: 45, sw: 135, nw: 225, ne: 315 };
+
+const RESIZE_HINT = "Drag to resize · Shift: free aspect ratio · Ctrl: ignore grid snap";
+const ROTATE_HINT = "Drag to rotate · Ctrl: free rotation (no 5° snap)";
+
+// Clockwise-arrow cursor (Lucide "rotate-cw", ISC) with a white halo for
+// contrast on dark maps; falls back to `grab` where SVG cursors are unsupported.
+const ROTATE_CURSOR_SVG =
+  "<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='-1 -1 26 26' " +
+  "fill='none' stroke-linecap='round' stroke-linejoin='round'>" +
+  "<g stroke='white' stroke-width='5'><path d='M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8'/><path d='M21 3v5h-5'/></g>" +
+  "<g stroke='black' stroke-width='2'><path d='M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8'/><path d='M21 3v5h-5'/></g>" +
+  "</svg>";
+const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(ROTATE_CURSOR_SVG)}") 12 12, grab`;
+
+const RESIZE_CURSORS = ["ew-resize", "nwse-resize", "ns-resize", "nesw-resize"] as const;
+
+/** CSS resize cursor closest to an outward handle direction (degrees clockwise from +x). */
+export function resizeCursorForAngle(deg: number): string {
+  const axis = ((deg % 180) + 180) % 180;
+  return RESIZE_CURSORS[Math.round(axis / 45) % 4];
+}
 
 /**
  * Ensures texture is loaded into Phaser for the given map image.
@@ -98,6 +139,10 @@ export class ImageLayer {
   private selectedImageId: string | null = null;
   private activeDragHandle: string | null = null;
   private activeSpriteDragId: string | null = null;
+  private hoveredHandle: string | null = null;
+  // True while this layer has overridden the canvas cursor/title for a handle.
+  private ownsCursor = false;
+  private savedCanvasTitle = "";
   // Sticky tool lock: while a map tool is selected, images stay
   // non-interactive across rebuilds (setImages on every state sync).
   private interactionsEnabled = true;
@@ -476,33 +521,140 @@ export class ImageLayer {
     const worldCorners = this.cornerWorldPositions(cx, cy, halfW, halfH, cos, sin);
 
     this.selectionGfx.clear();
-    this.selectionGfx.lineStyle(2 * invZoom, 0xe89055, 0.9);
+    this.selectionGfx.lineStyle(OUTLINE_WIDTH * invZoom, SELECTION_COLOR, 0.9);
     for (let i = 0; i < 4; i++) {
       const p1 = worldCorners[i];
       const p2 = worldCorners[(i + 1) % 4];
       this.selectionGfx.lineBetween(p1.x, p1.y, p2.x, p2.y);
     }
 
-    const stemLength = 24 * invZoom;
+    const stemLength = STEM_LENGTH * invZoom;
     const topCenterX = cx + (0 * cos - -halfH * sin);
     const topCenterY = cy + (0 * sin + -halfH * cos);
     const rotHandleX = cx + (0 * cos - (-halfH - stemLength) * sin);
     const rotHandleY = cy + (0 * sin + (-halfH - stemLength) * cos);
-    this.selectionGfx.lineStyle(1.5 * invZoom, 0xe89055, 0.8);
+    this.selectionGfx.lineStyle(STEM_WIDTH * invZoom, SELECTION_COLOR, 0.8);
     this.selectionGfx.lineBetween(topCenterX, topCenterY, rotHandleX, rotHandleY);
 
     for (const corner of worldCorners) {
       this.handleContainers.get(corner.id)?.setPosition(corner.x, corner.y);
     }
-    this.handleContainers.get("rot")?.setPosition(rotHandleX, rotHandleY);
+    this.handleContainers.get(ROTATE_HANDLE_ID)?.setPosition(rotHandleX, rotHandleY);
+
+    // Handle graphics are drawn in screen pixels; counter-scale the containers
+    // (which also scales their hit areas) so they stay a constant on-screen size.
+    for (const handle of this.handleContainers.values()) {
+      handle.setScale(invZoom);
+    }
+  }
+
+  /** Re-fit the selection chrome to the current camera zoom. Safe mid-drag. */
+  onZoomChanged(): void {
+    this.repositionHandles();
+  }
+
+  private destroyHandles(): void {
+    this.selectionGfx.clear();
+    for (const h of this.handleContainers.values()) h.destroy(true);
+    this.handleContainers.clear();
+    // Destroyed containers never emit POINTER_OUT, so drop hover state here.
+    this.hoveredHandle = null;
+    this.syncCursor();
+  }
+
+  /**
+   * Creates an interactive handle container whose graphics are drawn in
+   * screen pixels; repositionHandles() places it and applies the 1/zoom
+   * counter-scale.
+   */
+  private createHandle(id: string): Phaser.GameObjects.Container {
+    const handle = this.scene.add.container(0, 0);
+    handle.setDepth(DEPTH.SELECTION + (id === ROTATE_HANDLE_ID ? 2 : 1));
+    handle.add(this.scene.add.graphics());
+    handle.setSize(HANDLE_HIT_SIZE, HANDLE_HIT_SIZE);
+    handle.setInteractive({ draggable: true });
+
+    handle.on(Phaser.Input.Events.POINTER_OVER, () => {
+      this.hoveredHandle = id;
+      this.refreshHandleHighlight();
+    });
+    handle.on(Phaser.Input.Events.POINTER_OUT, () => {
+      if (this.hoveredHandle !== id) return;
+      this.hoveredHandle = null;
+      this.refreshHandleHighlight();
+    });
+
+    this.handleContainers.set(id, handle);
+    this.drawHandle(id, handle, false);
+    return handle;
+  }
+
+  private drawHandle(id: string, handle: Phaser.GameObjects.Container, highlighted: boolean): void {
+    const gfx = handle.getAt(0) as Phaser.GameObjects.Graphics;
+    gfx.clear();
+    gfx.setScale(highlighted ? HANDLE_HOVER_SCALE : 1);
+    gfx.fillStyle(highlighted ? HANDLE_HOVER_COLOR : SELECTION_COLOR, 1);
+    gfx.lineStyle(HANDLE_STROKE_WIDTH, HANDLE_STROKE_COLOR, 1);
+    if (id === ROTATE_HANDLE_ID) {
+      gfx.fillCircle(0, 0, ROTATE_HANDLE_RADIUS);
+      gfx.strokeCircle(0, 0, ROTATE_HANDLE_RADIUS);
+    } else {
+      const half = CORNER_HANDLE_SIZE / 2;
+      gfx.fillRect(-half, -half, CORNER_HANDLE_SIZE, CORNER_HANDLE_SIZE);
+      gfx.strokeRect(-half, -half, CORNER_HANDLE_SIZE, CORNER_HANDLE_SIZE);
+    }
+  }
+
+  /** The dragged handle, else the hovered one, is highlighted and owns the cursor. */
+  private refreshHandleHighlight(): void {
+    const active = this.activeDragHandle ?? this.hoveredHandle;
+    for (const [id, handle] of this.handleContainers) {
+      this.drawHandle(id, handle, id === active);
+    }
+    this.syncCursor();
+  }
+
+  private setActiveDragHandle(id: string | null): void {
+    this.activeDragHandle = id;
+    this.refreshHandleHighlight();
+  }
+
+  private handleCursor(id: string): string {
+    if (id === ROTATE_HANDLE_ID) return ROTATE_CURSOR;
+    const rotationDeg = Phaser.Math.RadToDeg(this.liveGeometry()?.rad ?? 0);
+    return resizeCursorForAngle(CORNER_BASE_DEG[id] + rotationDeg);
+  }
+
+  /**
+   * Shows the gesture cursor and a native tooltip naming the gesture and its
+   * modifier keys while a handle is hovered or dragged. Managed here rather
+   * than via Phaser's `cursor` option, which resets whenever the pointer
+   * slips off a handle mid-drag.
+   */
+  private syncCursor(): void {
+    const canvas = this.scene.game.canvas as HTMLCanvasElement | null | undefined;
+    if (!canvas) return;
+    const id = this.activeDragHandle ?? this.hoveredHandle;
+    if (id !== null && this.handleContainers.has(id)) {
+      if (!this.ownsCursor) {
+        this.savedCanvasTitle = canvas.title;
+        this.ownsCursor = true;
+      }
+      canvas.style.cursor = this.handleCursor(id);
+      // Hide the tooltip mid-drag so it doesn't trail the gesture.
+      canvas.title =
+        this.activeDragHandle !== null ? "" : id === ROTATE_HANDLE_ID ? ROTATE_HINT : RESIZE_HINT;
+    } else if (this.ownsCursor) {
+      this.ownsCursor = false;
+      canvas.style.cursor = this.scene.input.manager.defaultCursor;
+      canvas.title = this.savedCanvasTitle;
+    }
   }
 
   private redrawSelectionHandles(): void {
     // While a tool is selected no selection outline or handles may exist.
     if (!this.interactionsEnabled) {
-      this.selectionGfx.clear();
-      for (const h of this.handleContainers.values()) h.destroy(true);
-      this.handleContainers.clear();
+      this.destroyHandles();
       return;
     }
     // While a transform drag is active the dragged container must survive;
@@ -511,70 +663,15 @@ export class ImageLayer {
       this.repositionHandles();
       return;
     }
-    this.selectionGfx.clear();
-    for (const h of this.handleContainers.values()) h.destroy(true);
-    this.handleContainers.clear();
+    this.destroyHandles();
 
     if (!this.selectedImageId) return;
     const img = this.images.find((i) => i.id === this.selectedImageId);
     const sprite = this.sprites.get(this.selectedImageId);
     if (!img || !sprite) return;
 
-    const cam = this.scene.cameras.main;
-    const invZoom = 1 / cam.zoom;
-
-    const rad = Phaser.Math.DegToRad(img.rotation);
-    const cos = Math.cos(rad);
-    const sin = Math.sin(rad);
-
-    const halfW = (img.width * CELL) / 2;
-    const halfH = (img.height * CELL) / 2;
-    const cx = sprite.x;
-    const cy = sprite.y;
-
-    // 4 corners relative to center
-    const corners = [
-      { id: "nw", x: -halfW, y: -halfH },
-      { id: "ne", x: halfW, y: -halfH },
-      { id: "se", x: halfW, y: halfH },
-      { id: "sw", x: -halfW, y: halfH },
-    ];
-
-    const worldCorners = corners.map((c) => ({
-      id: c.id,
-      x: cx + (c.x * cos - c.y * sin),
-      y: cy + (c.x * sin + c.y * cos),
-    }));
-
-    // Draw selection outline
-    this.selectionGfx.lineStyle(2 * invZoom, 0xe89055, 0.9);
-    for (let i = 0; i < 4; i++) {
-      const p1 = worldCorners[i];
-      const p2 = worldCorners[(i + 1) % 4];
-      this.selectionGfx.lineBetween(p1.x, p1.y, p2.x, p2.y);
-    }
-
-    // Draw rotation stem and handle
-    const stemLength = 24 * invZoom;
-    const topCenterX = cx + (0 * cos - -halfH * sin);
-    const topCenterY = cy + (0 * sin + -halfH * cos);
-    const rotHandleX = cx + (0 * cos - (-halfH - stemLength) * sin);
-    const rotHandleY = cy + (0 * sin + (-halfH - stemLength) * cos);
-
-    this.selectionGfx.lineStyle(1.5 * invZoom, 0xe89055, 0.8);
-    this.selectionGfx.lineBetween(topCenterX, topCenterY, rotHandleX, rotHandleY);
-
     // Create Interactive Rotation Handle
-    const rotContainer = this.scene.add.container(rotHandleX, rotHandleY);
-    rotContainer.setDepth(DEPTH.SELECTION + 2);
-    const rotDot = this.scene.add.graphics();
-    rotDot.fillStyle(0xe89055, 1);
-    rotDot.lineStyle(1.5, 0x07060a, 1);
-    rotDot.fillCircle(0, 0, 7 * invZoom);
-    rotDot.strokeCircle(0, 0, 7 * invZoom);
-    rotContainer.add(rotDot);
-    rotContainer.setSize(18 * invZoom, 18 * invZoom);
-    rotContainer.setInteractive({ draggable: true });
+    const rotContainer = this.createHandle(ROTATE_HANDLE_ID);
 
     // Snap to absolute 5deg multiples (e.g. 7deg snaps to 10 on first move);
     // holding Ctrl bypasses quantization for free rotation.
@@ -590,7 +687,7 @@ export class ImageLayer {
 
     rotContainer.on(Phaser.Input.Events.DRAG_START, () => {
       if (!this.interactionsEnabled) return;
-      this.activeDragHandle = "rot";
+      this.setActiveDragHandle(ROTATE_HANDLE_ID);
     });
 
     rotContainer.on(Phaser.Input.Events.DRAG, (pointer: Phaser.Input.Pointer) => {
@@ -600,7 +697,7 @@ export class ImageLayer {
     });
 
     rotContainer.on(Phaser.Input.Events.DRAG_END, (pointer: Phaser.Input.Pointer) => {
-      this.activeDragHandle = null;
+      this.setActiveDragHandle(null);
       if (!this.interactionsEnabled) return;
       // Recompute from the release point so the commit matches the preview
       // even if Ctrl was pressed/released between the last move tick and drop.
@@ -617,27 +714,13 @@ export class ImageLayer {
       this.redrawSelectionHandles();
     });
 
-    this.handleContainers.set("rot", rotContainer);
-
     // Create 4 Interactive Corner Resize Handles
-    for (const corner of worldCorners) {
-      const handle = this.scene.add.container(corner.x, corner.y);
-      handle.setDepth(DEPTH.SELECTION + 1);
-
-      const hGfx = this.scene.add.graphics();
-      hGfx.fillStyle(0xe89055, 1);
-      hGfx.lineStyle(1.5, 0x07060a, 1);
-      const hSize = 8 * invZoom;
-      hGfx.fillRect(-hSize / 2, -hSize / 2, hSize, hSize);
-      hGfx.strokeRect(-hSize / 2, -hSize / 2, hSize, hSize);
-      handle.add(hGfx);
-
-      handle.setSize(18 * invZoom, 18 * invZoom);
-      handle.setInteractive({ draggable: true });
-
-      this.setupCornerResize(handle, corner.id, img, sprite);
-      this.handleContainers.set(corner.id, handle);
+    for (const cornerId of CORNER_IDS) {
+      this.setupCornerResize(this.createHandle(cornerId), cornerId, img, sprite);
     }
+
+    // Draws the outline + stem and positions/scales the handles for the current zoom.
+    this.repositionHandles();
   }
 
   private setupCornerResize(
@@ -667,7 +750,7 @@ export class ImageLayer {
 
     handle.on(Phaser.Input.Events.DRAG_START, () => {
       if (!this.interactionsEnabled) return;
-      this.activeDragHandle = cornerId;
+      this.setActiveDragHandle(cornerId);
     });
 
     handle.on(Phaser.Input.Events.DRAG, (pointer: Phaser.Input.Pointer) => {
@@ -702,7 +785,7 @@ export class ImageLayer {
     });
 
     handle.on(Phaser.Input.Events.DRAG_END, (pointer: Phaser.Input.Pointer) => {
-      this.activeDragHandle = null;
+      this.setActiveDragHandle(null);
       if (!this.interactionsEnabled) return;
       const dragCellX = pointer.worldX / CELL;
       const dragCellY = pointer.worldY / CELL;
