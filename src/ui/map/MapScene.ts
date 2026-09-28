@@ -9,7 +9,7 @@
  *  - Token containers with owner halos, readable initials, and stack chip fan-out
  *  - Interactive transform handles (move, 4-corner resize, rotate)
  *  - Chebyshev/Euclidean measurement ruler with screen-constant scaling
- *  - Focus rect visualization and drag creation
+ *  - Focus rect visualization, drag creation, and in-place move/resize (Esc cancels)
  *  - Tool mode state machine with Space-to-pan override
  *  - Two-finger pan & pinch-zoom touch navigation
  *  - WebGL context loss recovery
@@ -46,9 +46,18 @@ import { MarkupLayer } from "./markupLayer";
 
 export type ToolMode = "none" | "markup" | "focus" | "fog" | "ruler";
 
+/** Duration of the smooth pan used when centering on a token or a shared view. */
+const CENTER_PAN_MS = 300;
+
+function pointerModifiers(pointer: Phaser.Input.Pointer): { ctrl: boolean; shift: boolean } {
+  const e = pointer.event as MouseEvent | null | undefined;
+  return { ctrl: e?.ctrlKey ?? false, shift: e?.shiftKey ?? false };
+}
+
 export class MapScene extends Phaser.Scene {
   private bgGfx!: Phaser.GameObjects.Graphics;
   private gridGfx!: Phaser.GameObjects.Graphics;
+  private focusMaskGfx!: Phaser.GameObjects.Graphics;
 
   private imageLayer!: ImageLayer;
   private markupLayer!: MarkupLayer;
@@ -67,6 +76,12 @@ export class MapScene extends Phaser.Scene {
   public showGridLines = true;
   public snapToGrid = true;
   public isDm = false;
+  // Hides the grid regardless of showGridLines (which updateGrid overwrites).
+  private gridSuppressed = false;
+  // Blocks user camera navigation (wheel, drag-pan, touch); programmatic framing still works.
+  private navigationLocked = false;
+  // Projector mode: no token/image/tool interaction at all — the pointer only navigates.
+  private viewOnly = false;
 
   // Tool Modes & Modifiers
   private currentToolMode: ToolMode = "none";
@@ -81,6 +96,12 @@ export class MapScene extends Phaser.Scene {
   private camStartX = 0;
   private camStartY = 0;
   private didMoveDuringPan = false;
+
+  // Canvas the release guards are attached to (null when headless)
+  private guardedCanvas: HTMLCanvasElement | null = null;
+
+  // Last camera zoom the image selection handles were fitted to
+  private lastZoom = 1;
 
   // Rail insets for rail-aware visible center zoom anchor
   public railLeft = 0;
@@ -129,6 +150,10 @@ export class MapScene extends Phaser.Scene {
     this.tokenLayer.onTokenMoveEnd = (e) => this.onTokenMoveEnd?.(e);
     this.tokenLayer.onTokenDoubleClick = (id) => this.onTokenDoubleClick?.(id);
 
+    // 5b. Outside-focus blackout (DEPTH.FOCUS_MASK = 4500)
+    this.focusMaskGfx = this.add.graphics();
+    this.focusMaskGfx.setDepth(DEPTH.FOCUS_MASK);
+
     // 6. Overlays (DEPTH.FOCUS_RULER = 5000)
     this.rulerOverlay = new RulerOverlay(this);
     this.focusOverlay = new FocusOverlay(this);
@@ -139,6 +164,7 @@ export class MapScene extends Phaser.Scene {
     this.drawBackground();
     this.redrawGrid();
     this.setupInput();
+    this.installPointerReleaseGuards();
 
     // Redraw on window resize
     this.scale.on(Phaser.Scale.Events.RESIZE, () => {
@@ -154,11 +180,20 @@ export class MapScene extends Phaser.Scene {
 
   override update(): void {
     // Check multi-touch navigation first
-    if (this.touchNav.update()) {
+    if (!this.navigationLocked && this.touchNav.update()) {
+      this.cancelCameraTweens();
       this.redrawGrid();
       this.rulerOverlay.redraw();
       this.focusOverlay.redraw();
       this.onViewportChanged?.(readViewport(this.cameras.main, CELL));
+    }
+
+    // Per-frame check (rather than at each zoom call site) so tweened zooms
+    // like frameBox's zoomTo also keep the selection handles screen-constant.
+    const zoom = this.cameras.main.zoom;
+    if (zoom !== this.lastZoom) {
+      this.lastZoom = zoom;
+      this.imageLayer.onZoomChanged();
     }
   }
 
@@ -190,15 +225,20 @@ export class MapScene extends Phaser.Scene {
 
     this.fogLayer.setDm(this.isDm);
     this.fogLayer.setupGrid(map.grid);
-    if (map.fogMask) {
-      this.fogLayer.updateMask(map.fogMask);
-    }
+    // Always apply — an empty mask means all-revealed and must clear the
+    // texture rather than leave stale fog behind.
+    this.fogLayer.updateMask(map.fogMask ?? "");
+    this.fogLayer.setFogToolActive(this.currentToolMode === "fog");
 
     this.tokenLayer.setDm(this.isDm);
     this.tokenLayer.setGrid(map.grid);
-    this.tokenLayer.setTokens(map.tokens);
+    this.tokenLayer.setFogMask(map.fogMask ?? "");
+    // A map switch or reload is not a move: snap, don't slide.
+    this.tokenLayer.setTokens(map.tokens, { animate: false });
 
+    this.focusOverlay.setGrid(map.grid);
     this.focusOverlay.setFocusRect(null);
+    this.syncFocusEditable();
     this.rulerOverlay.clear();
   }
 
@@ -208,10 +248,17 @@ export class MapScene extends Phaser.Scene {
 
   setProjectorMode(isProjector: boolean): void {
     this.fogLayer.setPitchBlack(isProjector);
-    this.tokenLayer.setTweenMoves(isProjector);
   }
 
-  frameBox(box: { x: number; y: number; width: number; height: number }, duration = 400): void {
+  /**
+   * Frame a cell-space box edge to edge: "fit" contains it, "fill"
+   * covers the visible canvas with it.
+   */
+  frameBox(
+    box: { x: number; y: number; width: number; height: number },
+    duration = 400,
+    mode: "fit" | "fill" = "fit",
+  ): void {
     const cam = this.cameras.main;
     const centerX = (box.x + box.width / 2) * CELL;
     const centerY = (box.y + box.height / 2) * CELL;
@@ -221,28 +268,72 @@ export class MapScene extends Phaser.Scene {
     // in the visible center rather than under a side rail.
     const visibleW = Math.max(1, cam.width - this.railLeft - this.railRight);
     const visibleH = Math.max(1, cam.height);
-    const targetZoom = Math.max(
-      0.01,
-      Math.min(10.0, Math.min(visibleW / worldW, visibleH / worldH) * 0.95),
-    );
+    const scale =
+      mode === "fill"
+        ? Math.max(visibleW / worldW, visibleH / worldH)
+        : Math.min(visibleW / worldW, visibleH / worldH);
+    const targetZoom = Math.max(0.01, Math.min(10.0, scale));
     // cam.pan() targets the physical center; offset so the box lands on the
     // visible center instead (see panToWorld for derivation).
     const panX = centerX + (this.railRight - this.railLeft) / (2 * targetZoom);
 
     if (duration > 0) {
-      cam.pan(panX, centerY, duration, "Power2");
-      cam.zoomTo(targetZoom, duration, "Power2");
+      cam.pan(panX, centerY, duration, "Power2", true);
+      // The zoom effect updates after the pan effect each frame, so its
+      // callback sees both applied.
+      cam.zoomTo(targetZoom, duration, "Power2", true, this.onCameraTweenStep);
     } else {
+      this.cancelCameraTweens();
       cam.setZoom(targetZoom);
-      const anchor = this.visibleCenterPx();
-      cam.scrollX = centerX - anchor.x / targetZoom;
-      cam.scrollY = centerY - anchor.y / targetZoom;
+      cam.centerOn(panX, centerY);
       cam.preRender();
     }
     this.redrawGrid();
     this.rulerOverlay.redraw();
     this.focusOverlay.redraw();
     this.onViewportChanged?.(readViewport(cam, CELL));
+  }
+
+  setGridSuppressed(suppressed: boolean): void {
+    if (suppressed === this.gridSuppressed) return;
+    this.gridSuppressed = suppressed;
+    this.redrawGrid();
+  }
+
+  /**
+   * Black out everything outside a cell-space box, or clear the blackout with
+   * null. Drawn in world space far past the map so it holds at any zoom.
+   */
+  setOutsideMask(box: { x: number; y: number; width: number; height: number } | null): void {
+    const g = this.focusMaskGfx?.clear();
+    if (!g || !box) return;
+    const far = 1e7;
+    const left = box.x * CELL;
+    const top = box.y * CELL;
+    const right = (box.x + box.width) * CELL;
+    const bottom = (box.y + box.height) * CELL;
+    g.fillStyle(0x000000, 1);
+    g.fillRect(-far, -far, 2 * far, top + far); // above
+    g.fillRect(-far, bottom, 2 * far, far - bottom); // below
+    g.fillRect(-far, top, left + far, bottom - top); // left
+    g.fillRect(right, top, far - right, bottom - top); // right
+  }
+
+  /**
+   * Disable every map interaction (token/image select, move, popovers, tools)
+   * so the pointer only pans/zooms — and not even that while navigation is locked.
+   */
+  setViewOnly(viewOnly: boolean): void {
+    if (viewOnly === this.viewOnly) return;
+    this.viewOnly = viewOnly;
+    this.focusOverlay.cancelGesture();
+    this.applyInteractiveState();
+    this.syncFocusEditable();
+  }
+
+  setNavigationLocked(locked: boolean): void {
+    this.navigationLocked = locked;
+    if (locked) this.isPanning = false;
   }
 
   updateGrid(grid: GridConfig): void {
@@ -261,6 +352,7 @@ export class MapScene extends Phaser.Scene {
     this.imageLayer.setGrid(grid);
     this.fogLayer.setupGrid(grid);
     this.tokenLayer.setGrid(grid);
+    this.focusOverlay.setGrid(grid);
   }
 
   updateImages(images: readonly MapImage[]): void {
@@ -284,7 +376,13 @@ export class MapScene extends Phaser.Scene {
   }
 
   updateFog(mask: FogMaskB64): void {
-    this.fogLayer.updateMask(mask);
+    this.fogLayer.updateMask(mask ?? "");
+    this.tokenLayer.setFogMask(mask ?? "");
+  }
+
+  /** Identity of the viewing player; tokens on fog they don't own hide from them. */
+  setViewerUserId(userId: string | null): void {
+    this.tokenLayer.setViewerUserId(userId);
   }
 
   setFocusRect(rect: FocusRect | null): void {
@@ -297,6 +395,8 @@ export class MapScene extends Phaser.Scene {
     this.fogLayer.setDm(isDm);
     this.tokenLayer.setDm(isDm);
   }
+
+
 
   setAssetSource(source: AssetSource): void {
     this.imageLayer.setAssetSource(source);
@@ -323,10 +423,20 @@ export class MapScene extends Phaser.Scene {
 
     // Reset temporary states
     this.rulerOverlay.clear();
-    this.focusOverlay.cancelDrag();
+    this.focusOverlay.cancelGesture();
     this.fogLayer.cancelStroke();
+    this.fogLayer.setFogToolActive(mode === "fog");
 
     this.applyInteractiveState();
+    this.syncFocusEditable();
+  }
+
+  /** The focus box shows handles and can be moved/resized only under the focus tool. */
+  private syncFocusEditable(): void {
+    this.focusOverlay.setEditable(
+      this.currentToolMode === "focus" && !this.viewOnly,
+      this.activeMap?.id ?? null,
+    );
   }
 
   get effectiveMode(): ToolMode {
@@ -335,9 +445,12 @@ export class MapScene extends Phaser.Scene {
   }
 
   private applyInteractiveState(): void {
-    const isNone = this.effectiveMode === "none";
-    this.imageLayer.setInteractiveState(isNone);
-    this.tokenLayer.setInteractiveState(isNone);
+    // Lock on the selected tool itself, not the Space-to-pan override:
+    // holding Space still pans (via effectiveMode) but must not re-enable
+    // image selection/resize or token move/click until the tool is cleared.
+    const enabled = this.currentToolMode === "none" && !this.viewOnly;
+    this.imageLayer.setInteractiveState(enabled);
+    this.tokenLayer.setInteractiveState(enabled);
   }
 
   /** True when the pointer is over token-layer content (map token or popover chip). */
@@ -386,31 +499,46 @@ export class MapScene extends Phaser.Scene {
     return { x: pt.x, y: pt.y };
   }
 
-  centerOn(cellX: number, cellY: number): void {
+  /** Smoothly pan so cell (cellX, cellY) lands on the visible center; duration 0 jumps. */
+  centerOn(cellX: number, cellY: number, duration = CENTER_PAN_MS): void {
+    this.panToWorld(cellX * CELL, cellY * CELL, duration);
+  }
+
+  /** Smoothly pan so world point (worldX, worldY) lands on the visible center; duration 0 jumps. */
+  panToWorld(worldX: number, worldY: number, duration = CENTER_PAN_MS): void {
     const cam = this.cameras.main;
-    // Rail-aware: place the world point under the visible center, not the
-    // physical canvas midpoint (which may sit under a side rail).
-    // getWorldPoint(sx) = scrollX + sx / zoom  =>  scrollX = wx - sx / zoom.
-    const anchor = this.visibleCenterPx();
-    cam.scrollX = cellX * CELL - anchor.x / cam.zoom;
-    cam.scrollY = cellY * CELL - anchor.y / cam.zoom;
-    cam.preRender();
+    // Phaser zooms about the camera midpoint, so cam.pan()/cam.centerOn() put
+    // a point at the physical center at any zoom; shift the target so it lands
+    // on the visible center between rails: panX = wx + (railRight - railLeft) / (2*zoom).
+    const panX = worldX + (this.railRight - this.railLeft) / (2 * cam.zoom);
+    if (duration > 0) {
+      // force: a newer center request retargets a pan already in flight.
+      cam.pan(panX, worldY, duration, "Power2", true, this.onCameraTweenStep);
+    } else {
+      this.cancelCameraTweens();
+      cam.centerOn(panX, worldY);
+      cam.preRender();
+    }
     this.redrawGrid();
     this.rulerOverlay.redraw();
     this.focusOverlay.redraw();
     this.onViewportChanged?.(readViewport(cam, CELL));
   }
 
-  panToWorld(worldX: number, worldY: number): void {
-    const cam = this.cameras.main;
-    // cam.pan() targets the physical center; shift the target so the point
-    // lands on the visible center: panX = wx + (railRight - railLeft) / (2*zoom).
-    const panX = worldX + (this.railRight - this.railLeft) / (2 * cam.zoom);
-    cam.pan(panX, worldY, 300, "Power2");
+  /** Per-frame refresh while a camera pan/zoom effect runs — the grid is culled to worldView. */
+  private readonly onCameraTweenStep = (cam: Phaser.Cameras.Scene2D.Camera): void => {
+    cam.preRender();
     this.redrawGrid();
     this.rulerOverlay.redraw();
     this.focusOverlay.redraw();
     this.onViewportChanged?.(readViewport(cam, CELL));
+  };
+
+  /** Stop any running pan/zoom effect so direct user navigation isn't overwritten next frame. */
+  private cancelCameraTweens(): void {
+    const cam = this.cameras.main;
+    cam.panEffect.reset();
+    cam.zoomEffect.reset();
   }
 
   zoomIn(factor = TOOLBAR_FACTOR): void {
@@ -439,7 +567,9 @@ export class MapScene extends Phaser.Scene {
    * sx/sy are screen px relative to the Phaser canvas.
    */
   zoomAtScreenPoint(factor: number, sx: number, sy: number): void {
+    if (this.navigationLocked) return;
     const cam = this.cameras.main;
+    this.cancelCameraTweens();
     zoomAtAnchor(cam, factor, sx, sy);
     this.redrawGrid();
     this.rulerOverlay.redraw();
@@ -453,7 +583,9 @@ export class MapScene extends Phaser.Scene {
    * pan branch.
    */
   panByScreenDelta(dxPx: number, dyPx: number): void {
+    if (this.navigationLocked) return;
     const cam = this.cameras.main;
+    this.cancelCameraTweens();
     cam.scrollX -= dxPx / cam.zoom;
     cam.scrollY -= dyPx / cam.zoom;
     cam.preRender();
@@ -465,6 +597,7 @@ export class MapScene extends Phaser.Scene {
 
   resetView(): void {
     const cam = this.cameras.main;
+    this.cancelCameraTweens();
     applyViewport(cam, 0, 0, 1.0, CELL);
     this.redrawGrid();
     this.rulerOverlay.redraw();
@@ -486,7 +619,7 @@ export class MapScene extends Phaser.Scene {
     const cam = this.cameras.main;
     const g = this.gridGfx.clear();
 
-    if (!this.showGridLines) return;
+    if (!this.showGridLines || this.gridSuppressed) return;
 
     const view = cam.worldView;
     g.lineStyle(1 / cam.zoom, this.lineColor, 1);
@@ -523,6 +656,12 @@ export class MapScene extends Phaser.Scene {
         this.spaceHeld = true;
         this.applyInteractiveState();
       }
+      // Esc abandons a focus box draw/move/resize mid-drag; the rest of the
+      // press becomes a no-op because no gesture is left to update or commit.
+      if (e.key === "Escape" && this.focusOverlay.isGesturing) {
+        e.preventDefault();
+        this.focusOverlay.cancelGesture();
+      }
     });
 
     window.addEventListener("keyup", (e: KeyboardEvent) => {
@@ -536,7 +675,9 @@ export class MapScene extends Phaser.Scene {
     this.input.on(
       Phaser.Input.Events.POINTER_WHEEL,
       (pointer: Phaser.Input.Pointer, _over: unknown[], _dx: number, dy: number) => {
+        if (this.navigationLocked) return;
         const factor = dy < 0 ? WHEEL_FACTOR : 1 / WHEEL_FACTOR;
+        this.cancelCameraTweens();
         zoomAtAnchor(cam, factor, pointer.x, pointer.y);
         this.redrawGrid();
         this.rulerOverlay.redraw();
@@ -552,7 +693,8 @@ export class MapScene extends Phaser.Scene {
       const isMiddle = pointer.middleButtonDown();
       const isLeft = pointer.leftButtonDown();
       const isRight = pointer.rightButtonDown();
-      const mode = this.effectiveMode;
+      // View-only ignores tools and layer content: any left/middle press pans.
+      const mode = this.viewOnly ? "none" : this.effectiveMode;
 
       // Right-click handling: clears ruler in ruler mode
       if (isRight) {
@@ -567,8 +709,11 @@ export class MapScene extends Phaser.Scene {
         // Don't steal the gesture from a token (or stack chip) drag, nor from
         // an image move/resize/rotate gesture: if the press began on
         // token- or image-layer content, those handlers own it.
-        if (isLeft && !isMiddle && this.isPointerOverToken(pointer)) return;
-        if (isLeft && !isMiddle && this.isPointerOverImage(pointer)) return;
+        if (!this.viewOnly && isLeft && !isMiddle) {
+          if (this.isPointerOverToken(pointer) || this.isPointerOverImage(pointer)) return;
+        }
+        if (this.navigationLocked) return;
+        this.cancelCameraTweens();
         this.isPanning = true;
         this.didMoveDuringPan = false;
         this.panStartX = pointer.x;
@@ -588,9 +733,9 @@ export class MapScene extends Phaser.Scene {
           this.fogLayer.addBrushCells(Math.floor(cellX), Math.floor(cellY), this.fogBrushRadius);
           this.fogLayer.redrawPreview(this.fogBrushMode === "paint");
         } else if (mode === "focus") {
-          const ctrl = pointer.event ? (pointer.event as MouseEvent).ctrlKey : false;
-          this.focusOverlay.startDrag(cellX, cellY);
-          this.focusOverlay.updateDrag(cellX, cellY, !ctrl && this.snapToGrid);
+          const { ctrl, shift } = pointerModifiers(pointer);
+          this.focusOverlay.beginGesture(cellX, cellY);
+          this.focusOverlay.updateGesture(cellX, cellY, !ctrl && this.snapToGrid, shift);
         } else if (mode === "ruler") {
           if (!this.rulerOverlay.pointA) {
             this.rulerOverlay.setPointA(cellX, cellY);
@@ -629,42 +774,107 @@ export class MapScene extends Phaser.Scene {
       if (mode === "fog" && pointer.isDown) {
         this.fogLayer.addBrushCells(Math.floor(cellX), Math.floor(cellY), this.fogBrushRadius);
         this.fogLayer.redrawPreview(this.fogBrushMode === "paint");
+      } else if (mode === "fog") {
+        // Hover preview: show exactly the cells the brush would paint/erase.
+        this.fogLayer.showHover(
+          Math.floor(cellX),
+          Math.floor(cellY),
+          this.fogBrushRadius,
+          this.fogBrushMode === "paint",
+        );
       } else if (mode === "focus" && pointer.isDown) {
-        const ctrl = pointer.event ? (pointer.event as MouseEvent).ctrlKey : false;
-        this.focusOverlay.updateDrag(cellX, cellY, !ctrl && this.snapToGrid);
+        const { ctrl, shift } = pointerModifiers(pointer);
+        this.focusOverlay.updateGesture(cellX, cellY, !ctrl && this.snapToGrid, shift);
+      } else if (mode === "focus") {
+        this.focusOverlay.updateHover(cellX, cellY);
       } else if (mode === "ruler" && this.rulerOverlay.pointA && !this.rulerOverlay.pointB) {
         this.rulerOverlay.setPreviewPoint(cellX, cellY);
       }
     });
 
-    // 5. Pointer Up
-    this.input.on(Phaser.Input.Events.POINTER_UP, (pointer: Phaser.Input.Pointer) => {
-      if (this.isPanning) {
-        this.isPanning = false;
-        if (!this.didMoveDuringPan && this.effectiveMode === "none") {
-          // Click dead zone (<= 3px): click on empty background deselects image
-          this.imageLayer.selectImage(null);
-        }
-        return;
-      }
-
-      const mode = this.effectiveMode;
-
-      if (mode === "fog") {
-        const stroke = this.fogLayer.endStroke();
-        if (stroke.length > 0) {
-          this.onFogStrokeCommit?.(stroke, this.fogBrushMode === "paint");
-        }
-      } else if (mode === "focus") {
-        const ctrl = pointer.event ? (pointer.event as MouseEvent).ctrlKey : false;
-        const mapId = this.activeMap?.id ?? "active";
-        const rect = this.focusOverlay.endDrag(mapId, !ctrl && this.snapToGrid);
-        if (rect) {
-          this.onFocusRectCommit?.(rect);
-        }
-      }
+    // Clear the fog hover preview when the pointer leaves the canvas.
+    this.input.on(Phaser.Input.Events.GAME_OUT, () => {
+      this.fogLayer.clearHover();
+      this.focusOverlay.clearHover();
     });
+
+    // 5. Pointer Up. Phaser reports a release off the canvas (over a rail, or
+    // outside the window) as POINTER_UP_OUTSIDE, which must end the gesture too.
+    this.input.on(Phaser.Input.Events.POINTER_UP, this.onPointerRelease, this);
+    this.input.on(Phaser.Input.Events.POINTER_UP_OUTSIDE, this.onPointerRelease, this);
   }
+
+  private onPointerRelease(pointer: Phaser.Input.Pointer): void {
+    if (this.isPanning) {
+      this.isPanning = false;
+      if (!this.didMoveDuringPan && this.effectiveMode === "none") {
+        // Click dead zone (<= 3px): click on empty background deselects image
+        this.imageLayer.selectImage(null);
+      }
+      return;
+    }
+
+    const mode = this.effectiveMode;
+
+    if (mode === "fog") {
+      const stroke = this.fogLayer.endStroke();
+      if (stroke.length > 0) {
+        this.onFogStrokeCommit?.(stroke, this.fogBrushMode === "paint");
+      }
+    } else if (mode === "focus") {
+      const { ctrl, shift } = pointerModifiers(pointer);
+      const mapId = this.activeMap?.id ?? "active";
+      const rect = this.focusOverlay.endGesture(mapId, !ctrl && this.snapToGrid, shift);
+      if (rect) {
+        this.onFocusRectCommit?.(rect);
+      }
+    }
+  }
+
+  /**
+   * Keep drags alive off the canvas but always honor the release.
+   *
+   * Capturing the pointer routes the compatibility mouse events to the canvas
+   * while the cursor is over the rails or outside the window, so Phaser keeps
+   * tracking the drag and sees the mouseup. Phaser's own off-canvas listener
+   * sits on window.top, which is the host page when we run in an iframe, so it
+   * can't be relied on.
+   */
+  private installPointerReleaseGuards(): void {
+    const canvas = this.game.canvas;
+    if (!canvas) return;
+    this.guardedCanvas = canvas;
+    canvas.addEventListener("pointerdown", this.onCanvasPointerDown);
+    canvas.addEventListener("mousemove", this.onCanvasMouseMove);
+  }
+
+  private removePointerReleaseGuards(): void {
+    this.guardedCanvas?.removeEventListener("pointerdown", this.onCanvasPointerDown);
+    this.guardedCanvas?.removeEventListener("mousemove", this.onCanvasMouseMove);
+    this.guardedCanvas = null;
+  }
+
+  private readonly onCanvasPointerDown = (e: PointerEvent): void => {
+    try {
+      this.guardedCanvas?.setPointerCapture(e.pointerId);
+    } catch {
+      // The pointer is already gone (released before this listener ran).
+    }
+  };
+
+  /**
+   * A release that never reached us (e.g. alt-tab mid-drag) leaves Phaser's
+   * pointer down. The first move with no buttons held ends the gesture there.
+   */
+  private readonly onCanvasMouseMove = (e: MouseEvent): void => {
+    // onMouseUp is the DOM entry point MouseManager uses; it's untyped.
+    const manager = this.input?.manager as
+      | (Phaser.Input.InputManager & { onMouseUp(event: MouseEvent): void })
+      | undefined;
+    if (manager?.mousePointer?.isDown && e.buttons === 0) {
+      manager.onMouseUp(e);
+    }
+  };
 
   // ── WebGL Context Restoration ──────────────────────────────────────────────
 
@@ -676,13 +886,14 @@ export class MapScene extends Phaser.Scene {
     if (this.activeMap) {
       this.imageLayer.setImages(this.activeMap.images);
       this.imageLayer.onContextRestored();
-      this.tokenLayer.setTokens(this.activeMap.tokens);
+      this.tokenLayer.setTokens(this.activeMap.tokens, { animate: false });
     }
     this.rulerOverlay.redraw();
     this.focusOverlay.redraw();
   }
 
   cleanUp(): void {
+    this.removePointerReleaseGuards();
     this.markupLayer?.destroy();
     this.imageLayer?.destroy();
     this.fogLayer?.destroy();

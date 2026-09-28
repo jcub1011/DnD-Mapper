@@ -3,8 +3,7 @@
  *
  * The opener (main window) launches a popup at `?view=sheet&sheetId=<id>`.
  * The popup boots the same bundle but skips Phaser/network (see main.ts) and
- * renders a single `<dndm-character-sheet>` as a pure BroadcastChannel client
- * (mirrors the `dndm-display-sync` projector pattern):
+ * renders a single `<dndm-character-sheet>` as a pure BroadcastChannel client:
  *
  * - opener -> popup: `{ type: "sheet-state", ... }` (full sheet snapshot +
  *   the context the sheet component needs: schema, templates, settings,

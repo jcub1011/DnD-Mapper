@@ -1,12 +1,12 @@
 /*
  * The RULES — the single source of truth for what a player may do and what the
- * state becomes. These run inside the KnockBox server's sandbox (via
- * `src/authority/authority.ts`), so they are pure functions with no
- * ambient I/O: no DOM, no console, no timers, and NO `Date` (the sandbox deletes
- * it — the authority passes `kb.now()` in as a clock).
+ * state becomes. The host (the DM's browser) runs these via `MatchView`
+ * (`src/game/view.ts`). They stay pure functions with no ambient I/O — no DOM,
+ * no console, no timers — and take the clock as a `now` argument, so the whole
+ * rules layer is testable without a browser.
  *
- * Clients never call these directly. A client sends an Intent and renders whatever
- * Patch or Snapshot the authority publishes.
+ * Guests never call these. A guest sends an Intent and renders the per-player
+ * snapshot the host publishes.
  */
 
 import type {
@@ -14,7 +14,6 @@ import type {
   AttributeRow,
   AttributeSchema,
   AttributeValue,
-  CampaignHeader,
   CharacterSheet,
   CustomTemplate,
   DndMapperSettings,
@@ -53,10 +52,15 @@ import {
   resolveEffectiveMaxHp,
   toMapSummary,
 } from "./domain.js";
-import { BUILTIN_ROLL_TEMPLATES, executeRoll, validateDiceTerms } from "./dice.js";
+import {
+  BUILTIN_ROLL_TEMPLATES,
+  executeRoll,
+  filterVisibleRolls,
+  validateDiceTerms,
+} from "./dice.js";
 import { seedColorForName } from "./color.js";
 import { snapToken } from "./snapping.js";
-import { clearFog, decodeFog, encodeFog, fillFog, setCellsFogged } from "./fog.js";
+import { clearFog, decodeFog, encodeFog, fillFog, isFogged, setCellsFogged } from "./fog.js";
 import {
   addImageToMap,
   createNewMap,
@@ -82,6 +86,7 @@ import {
   updateTokenOnMap,
 } from "./tokens.js";
 import type { Patch, PlayerInfo } from "./types.js";
+import { isImageVisibleToPlayer } from "./visibility.js";
 
 // ── Permission Policies ──────────────────────────────────────────────────────
 
@@ -311,8 +316,11 @@ function synthesizeSheetForToken(
  * sheet get a sheet. Sheets without tokens are normal (sheet-only sheets) and
  * are left alone. Missing `colorOverridden` flags on imported sheets default
  * to false.
+ *
+ * Exported for the host direct-load path (`MatchView.applyLoaded`): loaded
+ * slots normalize through the same repair the old chunked `commitImport` ran.
  */
-function ensureBoundPairs(
+export function ensureBoundPairs(
   fullMaps: readonly GameMap[],
   sheets: Readonly<Record<string, CharacterSheet>>,
   _activeMapId: string | null,
@@ -420,30 +428,20 @@ export function createState(players: readonly PlayerInfo[]): DndMapperState {
 // ── Player Lifecycle & Abandonment (Phase 11) ────────────────────────────────
 
 /**
- * Handles a player disconnecting from the session:
- *   1. If the DM drops, promotes the oldest remaining peer in the roster.
- *   2. If a non-DM drops:
- *      - Converts their tokens to NPCToken on the board, ownerUserId = null,
- *        recording representsUserId = leavingPlayerId so characters stay on the board.
- *      - Updates any owned character sheets: ownerUserId = null, representsUserId = leavingPlayerId.
- *      - Clears ownership on active combatants so DM can roll and manage them.
+ * Handles a non-DM player leaving the session:
+ *   - Converts their tokens to NPCToken on the board, ownerUserId = null,
+ *     recording representsUserId = leavingPlayerId so characters stay on the board.
+ *   - Updates any owned character sheets: ownerUserId = null, representsUserId = leavingPlayerId.
+ *   - Clears ownership on active combatants so DM can roll and manage them.
+ *
+ * There is no DM succession: the DM is the host, and the host leaving ends the
+ * lobby (locked decision "freeze on DM leave").
  */
 export function handlePlayerLeft(
   state: DndMapperState,
   leavingPlayerId: string,
-  roster: readonly PlayerInfo[],
 ): { state: DndMapperState; patch: Patch | null } {
-  let changed = false;
-
-  // 1. Owner succession: if leaving player was DM, promote oldest remaining peer
-  let newDmPlayerId = state.dmPlayerId;
-  if (leavingPlayerId === state.dmPlayerId) {
-    const successor = roster.find((p) => p.id !== leavingPlayerId)?.id ?? null;
-    newDmPlayerId = successor;
-    changed = true;
-  }
-
-  // 2. Maps & tokens: convert leaving player's tokens to NPCToken
+  // 1. Maps & tokens: convert leaving player's tokens to NPCToken
   const nextMaps: GameMap[] = [];
   let tokenChanged = false;
 
@@ -475,7 +473,7 @@ export function handlePlayerLeft(
     }
   }
 
-  // 3. Sheets: clear ownerUserId and set representsUserId on leaving player's sheets
+  // 2. Sheets: clear ownerUserId and set representsUserId on leaving player's sheets
   let sheetChanged = false;
   const nextSheets: Record<string, CharacterSheet> = {};
   for (const [id, sheet] of Object.entries(state.sheets)) {
@@ -491,10 +489,10 @@ export function handlePlayerLeft(
     }
   }
 
-  // 4. Combat: clear ownerUserId on leaving player's combatants
+  // 3. Combat: clear ownerUserId on leaving player's combatants
   let nextCombat = state.activeCombat;
+  let combatChanged = false;
   if (nextCombat) {
-    let combatChanged = false;
     const nextTurnOrder = nextCombat.turnOrder.map((c) => {
       if (c.ownerUserId === leavingPlayerId) {
         combatChanged = true;
@@ -507,40 +505,26 @@ export function handlePlayerLeft(
     });
     if (combatChanged) {
       nextCombat = { ...nextCombat, turnOrder: nextTurnOrder };
-      changed = true;
     }
   }
 
-  if (tokenChanged || sheetChanged || newDmPlayerId !== state.dmPlayerId) {
-    changed = true;
-  }
-
-  if (!changed) {
+  if (!tokenChanged && !sheetChanged && !combatChanged) {
     return { state, patch: null };
   }
 
   const nextState: DndMapperState = {
     ...state,
-    dmPlayerId: newDmPlayerId,
     maps: nextMaps,
     sheets: nextSheets,
     activeCombat: nextCombat,
   };
 
-  if (tokenChanged || sheetChanged) {
-    return {
-      state: nextState,
-      patch: {
-        kind: "full",
-        state: projectSnapshot(nextState),
-      },
-    };
-  }
-
-  // Only DM changed
   return {
     state: nextState,
-    patch: newDmPlayerId ? { kind: "dm", dmPlayerId: newDmPlayerId } : null,
+    patch: {
+      kind: "full",
+      state: projectSnapshot(nextState),
+    },
   };
 }
 
@@ -565,38 +549,290 @@ export function projectSnapshot(state: DndMapperState): DndMapperState {
   };
 }
 
-// ── Chunked Import Side-Table ────────────────────────────────────────────────
+// ── Per-Player Projection (Phase 02) ──────────────────────────────────────────
+//
+// Host-side pure projection: each guest receives only what they may see.
+// AUTHORITY is these functions. Client mirrors (`visibility.ts`, UI filters)
+// are prediction-only or DM-local rendering and must not win.
+//
+// Known leak, kept for legacy parity: fog masks stay broadcast. Documented
+// for DMs; see projectForPlayer. Tokens standing on fogged cells, however,
+// are stripped for viewers who neither DM nor own them (see
+// isTokenRevealedToViewer).
 
-interface PendingImport {
-  readonly campaign: CampaignHeader;
-  readonly totalChunks: number;
-  readonly chunks: Map<number, readonly GameMap[]>;
-  readonly createdAt: number;
-  readonly fromId: string;
+/** Whether players may see loaded-dice rules at all. Anything but an explicit
+ *  player-visible setting (`VisibleToAll` / legacy `AllPlayers`) is DM-only —
+ *  this gates both `Hidden` and host-only variants without leaking. */
+function areLoadedDiceRulesVisibleToPlayers(state: DndMapperState): boolean {
+  const v = state.settings.loadedDiceRuleVisibility;
+  return v === "VisibleToAll" || v === "AllPlayers";
 }
 
-const pendingImports = new Map<string, PendingImport>();
-
-/** Stale pending import timeout (5 minutes). */
-const PENDING_IMPORT_TIMEOUT_MS = 5 * 60 * 1000;
-
-export function clearPendingImports(): void {
-  pendingImports.clear();
-}
-
-export function clearPendingImportsForPlayer(playerId: string): void {
-  for (const [token, pending] of pendingImports.entries()) {
-    if (pending.fromId === playerId) {
-      pendingImports.delete(token);
+/** Ids of tokens hidden from non-DM viewers, across all full maps. */
+function hiddenTokenIds(state: DndMapperState): Set<string> {
+  const ids = new Set<string>();
+  for (const m of state.maps) {
+    if (!isFullMap(m)) continue;
+    for (const t of m.tokens) {
+      if (t.hidden) ids.add(t.id);
     }
   }
+  return ids;
 }
 
-function sweepStalePendingImports(now: number): void {
-  for (const [token, pending] of pendingImports.entries()) {
-    if (now - pending.createdAt > PENDING_IMPORT_TIMEOUT_MS) {
-      pendingImports.delete(token);
+/**
+ * Whether a viewer's client may know a token exists at its current cell.
+ * Tokens on fogged cells are visible only to the DM and to the token's owner
+ * (matched on either `ownerUserId` or `representsUserId`, mirroring sheet
+ * ownership). NPC tokens with no owner are DM-only while fogged. Tokens on
+ * revealed cells (or when no fog is painted) stay visible to everyone, subject
+ * to the `hidden` flag handled by the caller.
+ */
+export function isTokenRevealedToViewer(
+  map: GameMap,
+  token: Token,
+  viewer: string,
+): boolean {
+  if (!map.fogMask || map.fogMask.length === 0) return true;
+  const fogged = isFogged(
+    decodeFog(map.fogMask),
+    map.grid,
+    Math.floor(token.x),
+    Math.floor(token.y),
+  );
+  if (!fogged) return true;
+  return token.ownerUserId === viewer || token.representsUserId === viewer;
+}
+
+function projectMapForPlayer(
+  map: GameMap | MapSummary,
+  dm: boolean,
+  viewer = "",
+): GameMap | MapSummary {
+  if (dm || !isFullMap(map)) return map;
+  return {
+    ...map,
+    tokens: map.tokens.filter((t) => !t.hidden && isTokenRevealedToViewer(map, t, viewer)),
+    images: map.images.filter((img) => isImageVisibleToPlayer(img, false)),
+  };
+}
+
+/** Projects one sheet: null means "drop" (caller emits `sheetRemoved`). */
+function projectSheetForPlayer(
+  sheet: CharacterSheet,
+  viewer: string,
+  state: DndMapperState,
+): CharacterSheet | null {
+  if (!mayViewSheet(state, viewer, sheet)) return null;
+  if (mayViewSheetNotesAndHp(state, viewer, sheet)) return sheet;
+  return { ...sheet, notes: "", hp: null };
+}
+
+function projectCombatForPlayer(
+  combat: CombatState | null,
+  removedIds: Set<string>,
+  dm: boolean,
+): CombatState | null {
+  if (combat === null || dm) return combat;
+  const turnOrder = combat.turnOrder
+    .filter((c) => !removedIds.has(c.tokenId))
+    .map((c) => (c.pendingInitiative === null ? c : { ...c, pendingInitiative: null }));
+  return {
+    ...combat,
+    turnOrder,
+    currentTurnIndex:
+      turnOrder.length === 0 ? 0 : Math.min(combat.currentTurnIndex, turnOrder.length - 1),
+  };
+}
+
+/**
+ * Projects authoritative state for one player. The DM fast path returns the
+ * shared bandwidth snapshot unchanged. A null/unknown playerId projects as a
+ * stranger (default-deny).
+ */
+export function projectForPlayer(state: DndMapperState, playerId: string | null): DndMapperState {
+  const viewer = playerId ?? "";
+  const dm = isDm(state, viewer);
+  const snapshot = projectSnapshot(state);
+  if (dm) return snapshot;
+
+  const maps = snapshot.maps.map((m) => projectMapForPlayer(m, false, viewer));
+  // Combatants whose tokens are hidden OR fog-stripped for this viewer drop
+  // out of the turn order (same set the map projection above removes).
+  const removedIds = removedTokenIdsForViewer(state, viewer);
+  const sheets: Record<string, CharacterSheet> = {};
+  for (const [id, sheet] of Object.entries(snapshot.sheets)) {
+    const projected = projectSheetForPlayer(sheet, viewer, state);
+    if (projected !== null) sheets[id] = projected;
+  }
+  return {
+    ...snapshot,
+    maps,
+    sheets,
+    rollLog: filterVisibleRolls(snapshot.rollLog, viewer, false, state.settings.rollsVisibleToPlayers),
+    activeCombat: projectCombatForPlayer(snapshot.activeCombat, removedIds, false),
+    loadedDiceRules: areLoadedDiceRulesVisibleToPlayers(state) ? snapshot.loadedDiceRules : [],
+  };
+}
+
+function hadVisibleToken(prevState: DndMapperState, tokenId: string): boolean {
+  for (const m of prevState.maps) {
+    if (!isFullMap(m)) continue;
+    const token = m.tokens.find((t) => t.id === tokenId);
+    if (token) return !token.hidden;
+  }
+  return false;
+}
+
+/** Full map holding a token, looked up by the token's mapId. */
+function mapForToken(state: DndMapperState, token: Token): GameMap | null {
+  for (const m of state.maps) {
+    if (isFullMap(m) && m.id === token.mapId) return m;
+  }
+  return null;
+}
+
+/**
+ * Whether a non-DM viewer may know about this token at its current cell:
+ * the `hidden` flag aside, fogged cells are owner-only (see
+ * `isTokenRevealedToViewer`). Unknown maps fail open — without the map we
+ * cannot judge fog, so the token passes through.
+ */
+function isTokenKnownToViewer(
+  state: DndMapperState,
+  token: Token,
+  viewer: string,
+): boolean {
+  const map = mapForToken(state, token);
+  if (!map) return true;
+  return isTokenRevealedToViewer(map, token, viewer);
+}
+
+/**
+ * Tombstone decision for fog-stripped tokens: did the viewer know about this
+ * token before the mutation? Judged from the previous position/record when
+ * available (a token that just moved onto fog was had; one that sat in fog
+ * was not).
+ */
+function wasTokenKnownToViewer(
+  prevState: DndMapperState,
+  token: Token,
+  viewer: string,
+): boolean {
+  let prev: Token = token;
+  for (const m of prevState.maps) {
+    if (!isFullMap(m)) continue;
+    const found = m.tokens.find((t) => t.id === token.id);
+    if (found) {
+      prev = found;
+      break;
     }
+  }
+  if (prev.hidden) return false;
+  return isTokenKnownToViewer(prevState, prev, viewer);
+}
+
+/** Ids of tokens stripped from a non-DM viewer: hidden or fog-concealed. */
+function removedTokenIdsForViewer(state: DndMapperState, viewer: string): Set<string> {
+  const ids = hiddenTokenIds(state);
+  for (const m of state.maps) {
+    if (!isFullMap(m)) continue;
+    for (const t of m.tokens) {
+      if (!t.hidden && !isTokenRevealedToViewer(m, t, viewer)) ids.add(t.id);
+    }
+  }
+  return ids;
+}
+
+function hadVisibleImage(prevState: DndMapperState, imageId: string): boolean {
+  for (const m of prevState.maps) {
+    if (!isFullMap(m)) continue;
+    const image = m.images.find((img) => img.id === imageId);
+    if (image) return isImageVisibleToPlayer(image, false);
+  }
+  return false;
+}
+
+/**
+ * Projects one patch for one player. Returns null when the player learns
+ * nothing from it: a roll they may not see, or a hide-tombstone for something
+ * they never had.
+ *
+ * Tombstones: a newly-hidden token/image projects to `tokenRemoved` /
+ * `imageRemoved` for viewers who had it, null for those who didn't — decided
+ * from `prevState` (pre-mutation). Without `prevState` the safe direction is
+ * assumed (had it): a `tokenRemoved` for an unseen id is a no-op in
+ * `applyPatch`, while withholding from a viewer who had it would leave a
+ * ghost. Future caller: MatchView / the upstream per-recipient delta hook
+ * (KnockBox-Games#62) should pass the pre-mutation state.
+ */
+export function projectPatchForPlayer(
+  patch: Patch,
+  playerId: string | null,
+  state: DndMapperState,
+  prevState: DndMapperState | null = null,
+): Patch | null {
+  const viewer = playerId ?? "";
+  if (isDm(state, viewer)) return patch;
+  switch (patch.kind) {
+    case "full":
+      return { kind: "full", state: projectForPlayer(state, playerId) };
+    case "map":
+      return { ...patch, map: projectMapForPlayer(patch.map, false, viewer) as GameMap };
+    case "token": {
+      if (!patch.token.hidden) {
+        // Fog strip: a non-hidden token the viewer may not know about (on
+        // fog they don't own through) tombstones exactly like a hidden one.
+        if (!isTokenKnownToViewer(state, patch.token, viewer)) {
+          const had = prevState ? wasTokenKnownToViewer(prevState, patch.token, viewer) : true;
+          return had ? { kind: "tokenRemoved", tokenId: patch.token.id } : null;
+        }
+        return patch;
+      }
+      const had = prevState ? hadVisibleToken(prevState, patch.token.id) : true;
+      return had ? { kind: "tokenRemoved", tokenId: patch.token.id } : null;
+    }
+    case "tokenRemoved":
+      return patch;
+    case "sheet": {
+      const projected = projectSheetForPlayer(patch.sheet, viewer, state);
+      if (projected === null) return { kind: "sheetRemoved", sheetId: patch.sheet.id };
+      return projected === patch.sheet ? patch : { kind: "sheet", sheet: projected };
+    }
+    case "sheetRemoved":
+      return patch;
+    case "combat":
+      return patch.combat === null
+        ? patch
+        : {
+            kind: "combat",
+            combat: projectCombatForPlayer(
+              patch.combat,
+              removedTokenIdsForViewer(state, viewer),
+              false,
+            ),
+          };
+    case "roll": {
+      const visible =
+        state.settings.rollsVisibleToPlayers || patch.roll.rollerUserId === viewer;
+      return visible ? patch : null;
+    }
+    case "image": {
+      if (isImageVisibleToPlayer(patch.image, false)) return patch;
+      const had = prevState ? hadVisibleImage(prevState, patch.image.id) : true;
+      return had ? { kind: "imageRemoved", imageId: patch.image.id } : null;
+    }
+    case "imageRemoved":
+      return patch;
+    case "loadedDiceRules":
+      return areLoadedDiceRulesVisibleToPlayers(state)
+        ? patch
+        : { kind: "loadedDiceRules", rules: [] };
+    default:
+      // Fog (documented broadcast leak), grid, settings, markup, mapList,
+      // schema, templates, hostKeys, rollLogCleared, viewport, dm, phase —
+      // broadcast as-is.
+      return patch;
   }
 }
 
@@ -619,7 +855,7 @@ function isFocusRect(obj: unknown): obj is FocusRect {
 }
 
 /**
- * Deterministic, sandbox-safe SVG validator for freehand markup.
+ * Deterministic, DOM-free SVG validator for freehand markup.
  * Strictly enforces an allowlist of harmless vector tags and attributes.
  * Rejects any scripts, event handlers, hrefs, or external references.
  */
@@ -725,8 +961,6 @@ export function applyIntent(
   const intent = action as Record<string, unknown>;
   const kind = intent.kind;
   if (typeof kind !== "string") return null;
-
-  sweepStalePendingImports(now);
 
   switch (kind) {
     // ── Maps ────────────────────────────────────────────────────────────────
@@ -1444,18 +1678,19 @@ export function applyIntent(
       if (!isDm(state, fromId)) return null;
       if (typeof intent.imageId !== "string" || typeof intent.layerOrder !== "number") return null;
       const fullMaps = state.maps.filter(isFullMap);
-      const { maps: nextMaps, image: updated } = reorderMapImage(
+      const { maps: nextMaps, map: updatedMap } = reorderMapImage(
         fullMaps,
         intent.imageId,
         intent.layerOrder,
       );
-      if (!updated) return null;
+      if (!updatedMap) return null;
       const nextState: DndMapperState = { ...state, maps: nextMaps };
+      // Several images' layerOrder can change, so ship the whole map.
       return {
         state: nextState,
         patch: {
-          kind: "image",
-          image: updated,
+          kind: "map",
+          map: updatedMap,
         },
       };
     }
@@ -1781,106 +2016,6 @@ export function applyIntent(
         patch: {
           kind: "map",
           map: targetMap,
-        },
-      };
-    }
-
-    // ── Chunked Campaign Import Protocol ────────────────────────────────────
-    case "beginImport": {
-      if (!isDm(state, fromId)) return null;
-      if (
-        !intent.campaign ||
-        typeof intent.campaign !== "object" ||
-        typeof intent.chunkCount !== "number"
-      ) {
-        return null;
-      }
-      const token = typeof intent.token === "string" ? intent.token : generateGuid();
-      pendingImports.set(token, {
-        campaign: intent.campaign as CampaignHeader,
-        totalChunks: intent.chunkCount,
-        chunks: new Map<number, readonly GameMap[]>(),
-        createdAt: now,
-        fromId,
-      });
-      // Broadcast nothing until commitImport
-      return { state, patch: null };
-    }
-
-    case "importChunk": {
-      if (!isDm(state, fromId)) return null;
-      if (
-        typeof intent.token !== "string" ||
-        typeof intent.index !== "number" ||
-        !Array.isArray(intent.maps)
-      ) {
-        return null;
-      }
-      const pending = pendingImports.get(intent.token);
-      if (!pending || pending.fromId !== fromId) return null;
-      pending.chunks.set(intent.index, intent.maps as GameMap[]);
-      return { state, patch: null };
-    }
-
-    case "commitImport": {
-      if (!isDm(state, fromId)) return null;
-      if (typeof intent.token !== "string") return null;
-      const pending = pendingImports.get(intent.token);
-      if (!pending || pending.fromId !== fromId) return null;
-
-      // Ensure all chunks arrived
-      if (pending.chunks.size < pending.totalChunks) {
-        pendingImports.delete(intent.token);
-        return null;
-      }
-
-      const allMaps: GameMap[] = [];
-      for (let i = 0; i < pending.totalChunks; i++) {
-        const chunk = pending.chunks.get(i);
-        if (!chunk) {
-          pendingImports.delete(intent.token);
-          return null;
-        }
-        allMaps.push(...chunk);
-      }
-      pendingImports.delete(intent.token);
-
-      const header = pending.campaign;
-      const activeMapId = header.activeMapId ?? allMaps[0]?.id ?? null;
-      // N:1 binding: imported campaigns may predate sheets entirely —
-      // repair orphan tokens and normalize color flags before going live.
-      // Sheet-only sheets are kept as-is.
-      const repaired = ensureBoundPairs(
-        allMaps,
-        header.sheets ?? {},
-        activeMapId,
-        header.attributeSchema ?? state.attributeSchema,
-      );
-      const nextState: DndMapperState = {
-        ...state,
-        phase: "Playing",
-        settings: header.settings ?? state.settings,
-        attributeSchema: header.attributeSchema ?? state.attributeSchema,
-        activeMapId,
-        sheets: repaired.sheets,
-        customTemplates: header.customTemplates ?? {},
-        globalRollTemplates: header.globalRollTemplates ?? [],
-        activeSchemaTemplateId: header.activeSchemaTemplateId ?? null,
-        initiativeAttributeName: header.initiativeAttributeName ?? null,
-        activeCombat: header.activeCombat ?? null,
-        loadedDiceRules: header.loadedDiceRules ?? [],
-        maps: repaired.maps,
-        // Ephemeral marker so every client can notify once that the DM
-        // loaded a save. Uses the import token as the id (unique per load)
-        // and the authority clock — no `Date` in the sandbox.
-        announcement: { id: intent.token as string, loadedAt: now },
-      };
-
-      return {
-        state: nextState,
-        patch: {
-          kind: "full",
-          state: projectSnapshot(nextState),
         },
       };
     }

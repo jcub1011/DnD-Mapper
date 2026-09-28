@@ -7,6 +7,7 @@ import {
   createDefaultDndMapperState,
   type CharacterSheet,
 } from "../../game/domain";
+import { projectForPlayer } from "../../game/rules";
 
 function makeSheet(id: string, name: string, ownerUserId: string | null = null): CharacterSheet {
   return {
@@ -360,11 +361,18 @@ describe("<dndm-character-sheet>", () => {
     expect(onSetSheetMaxHp).toHaveBeenCalledWith("sheet-1", 40);
   });
 
-  it("hides unowned sheets and respects player visibility settings", async () => {
+  it("lists host-projected sheets: unviewable sheets never reach the panel", async () => {
     const npcSheet = makeSheet("sheet-npc", "Goblin", null); // unassigned NPC
     const playerSheet = makeSheet("sheet-p1", "Alice Hero", "player-1");
 
-    el.sheets = { "sheet-npc": npcSheet, "sheet-p1": playerSheet };
+    // Visibility is owned by host projection: the panel lists whatever the
+    // host published for this player, with no client-side visibility filter.
+    const hostState = {
+      ...createDefaultDndMapperState("dm-1"),
+      sheets: { "sheet-npc": npcSheet, "sheet-p1": playerSheet },
+    };
+    const projected = projectForPlayer(hostState, "player-1");
+    el.sheets = projected.sheets;
     el.isDm = false;
     el.currentUserId = "player-1";
     el.settings = { ...createDefaultDndMapperState().settings, playersCanSeeOtherSheets: false };

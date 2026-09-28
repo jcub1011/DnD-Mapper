@@ -1,15 +1,15 @@
 /*
- * The WIRE CONTRACT. Every value here crosses the boundary between the authority
- * module (which the KnockBox server runs, sandboxed) and the clients that render
- * it, so every value must be STRICT JSON:
+ * The WIRE CONTRACT. Every value here crosses the relay between the host (the
+ * DM's browser) and the guests that render it, so every value must be STRICT
+ * JSON:
  *
  *   - no `undefined` — use `null` (an optional property that is sometimes absent
  *     serializes to nothing and reads back as `undefined`, which the local
  *     emulator's fidelity check rejects outright)
  *   - no Date / Map / Set / class instances / functions / cycles
  *
- * Nothing here imports Phaser, Lit, or the DOM: `src/game/` is shared by the
- * authority module and the client, and the authority runs in a bare sandbox.
+ * Nothing here imports Phaser, Lit, or the DOM: `src/game/` stays pure so the
+ * rules and the host store are testable without a browser.
  */
 
 import type {
@@ -17,7 +17,6 @@ import type {
   AttributeRow,
   AttributeSchema,
   AttributeValue,
-  CampaignHeader,
   CenterViewportRequest,
   CharacterSheet,
   CustomTemplate,
@@ -142,21 +141,10 @@ export type Intent =
   | { readonly kind: "saveCampaign"; readonly slotName?: string }
   | { readonly kind: "loadCampaign"; readonly slotId: string }
   | { readonly kind: "deleteCampaignSave"; readonly slotId: string }
-  // campaign loading
+  // campaign loading (direct host swap — see MatchView.applyLoaded; the old
+  // chunked beginImport/importChunk/commitImport protocol was removed in
+  // Phase 03: the host holds full maps, so no chunk budget applies)
   | { readonly kind: "requestMap"; readonly mapId: string }
-  | {
-      readonly kind: "beginImport";
-      readonly campaign: CampaignHeader;
-      readonly chunkCount: number;
-      readonly token?: string;
-    }
-  | {
-      readonly kind: "importChunk";
-      readonly token: string;
-      readonly index: number;
-      readonly maps: readonly GameMap[];
-    }
-  | { readonly kind: "commitImport"; readonly token: string }
   | { readonly kind: "startSession" }
   // sheets (10 intents; assignCharacterToPlayer in Phase 11)
   | { readonly kind: "createSheet"; readonly characterName: string; readonly scopedMapId?: string | null; readonly ownerUserId?: string | null; readonly color?: string | null }
@@ -300,9 +288,6 @@ export type Patch =
   | { readonly kind: "hostKeys"; readonly keys: readonly string[] }
   | { readonly kind: "combat"; readonly combat: CombatState | null }
   | { readonly kind: "markup"; readonly mapId: string; readonly markupSvg: string | null };
-
-/** Import chunk budget for campaign streaming (~39% of 512 KiB cap). */
-export const CHUNK_BUDGET = 200_000;
 
 /** Max broadcast frame byte limit guard (~78% of 512 KiB cap). */
 export const MAX_FRAME_BYTES = 400_000;

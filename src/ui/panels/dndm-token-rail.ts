@@ -2,7 +2,6 @@ import { html, nothing, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { CharacterSheet, Token } from "../../game/domain";
 import { getReadableTextColor } from "../../game/color";
-import { isTokenVisibleToPlayer } from "../../game/visibility";
 import { GameElement } from "../app/GameElement";
 import { toastService } from "../toast/toastService";
 import "../modals/dndm-token-details-modal";
@@ -71,8 +70,11 @@ export class DndmTokenRail extends GameElement {
 
   private static readonly LONG_PRESS_MS = 500;
 
+  /** Tokens to list. Hiding is owned by host projection
+   *  (`projectForPlayer`): guests never receive hidden tokens, and the DM
+   *  manages the full truth here — so no client-side filter runs. */
   private get visibleTokens(): readonly Token[] {
-    return (this.tokens ?? []).filter((t) => isTokenVisibleToPlayer(t, this.isDm));
+    return (this.tokens ?? []);
   }
 
   private get selectedToken(): Token | null {
@@ -141,11 +143,9 @@ export class DndmTokenRail extends GameElement {
     const host = this.closest(".dndm-canvas-area") as HTMLElement | null;
     if (!host) return;
     const hostRect = host.getBoundingClientRect();
-    // Measure wrapping top floats (toolbar / inspector / banner) and bottom footer.
+    // Measure wrapping top floats (toolbar / banner) and bottom footer.
     const topEls = Array.from(
-      host.querySelectorAll<HTMLElement>(
-        ".dndm-canvas-toolbar, .dndm-canvas-inspector, .dndm-initiative-banner",
-      ),
+      host.querySelectorAll<HTMLElement>(".dndm-canvas-toolbar, .dndm-initiative-banner"),
     );
     const footer = host.querySelector<HTMLElement>(".dndm-rollfooter");
     let bottom = 12;

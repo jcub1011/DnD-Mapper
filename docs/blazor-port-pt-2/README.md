@@ -18,10 +18,10 @@ Each phase plan provides a complete, self-contained technical specification incl
 | :--- | :--- | :--- |
 | **[`phase-06-character-sheets.md`](phase-06-character-sheets.md)** | Character Sheets, Attribute Schemas, Status Effects | 15 authority verbs, effective HP calculation, markdown notes, `<dndm-character-sheet>`, token double-click navigation. |
 | **[`phase-07-dice-and-roll-log.md`](phase-07-dice-and-roll-log.md)** | 3D Physics Dice, Quick Roll Footer, Roll Log | `dice-box-threejs` vendoring, 38 textures & 75 sounds, `<dndm-quick-roll-footer>`, `DiceAnimationTracker`, 50-roll capped log. |
-| **[`phase-08-loaded-dice.md`](phase-08-loaded-dice.md)** | Loaded Dice Engine, DM Secret Tampering | Sandboxed `LoadedDiceProcessor`, compound conditions & modifications, DM host key streaming (30 msg/s), player indicators. |
+| **[`phase-08-loaded-dice.md`](phase-08-loaded-dice.md)** | Loaded Dice Engine, DM Secret Tampering | Host-side `LoadedDiceProcessor` (runs in `applyIntent` on the DM's browser), compound conditions & modifications, DM host key streaming (throttled; per-player fan-out vs. the 30 msg/s relay limit is an open risk), player indicators. |
 | **[`phase-09-combat-and-initiative.md`](phase-09-combat-and-initiative.md)** | Initiative & Combat Tracker | `WaitingForRolls` -> `Active` state machine, DEX tie-breaker sorting, batch NPC rolling, active turn golden halo on map. |
-| **[`phase-10-markup-and-display.md`](phase-10-markup-and-display.md)** | Freehand Canvas Markup, Projector Theater Mode | Smooth Bezier SVG drawing, cell-unit storage (1/50 scale), Space-to-pan pass-through, 100% pitch-black fog projector view. |
-| **[`phase-11-vtf-export-and-lifecycle.md`](phase-11-vtf-export-and-lifecycle.md)** | Campaign Exporter (.vtf), Player Lifecycle | Browser `CompressionStream` ZIP packager, save slot export, disconnect -> NPC conversion, DM reassignment, 84-verb audit. |
+| **[`phase-10-markup-and-display.md`](phase-10-markup-and-display.md)** | Freehand Canvas Markup, Projector Popout | Smooth Bezier SVG drawing, cell-unit storage (1/50 scale), Space-to-pan pass-through, 100% pitch-black fog projector view. |
+| **[`phase-11-vtf-export-and-lifecycle.md`](phase-11-vtf-export-and-lifecycle.md)** | Campaign Exporter (.vtf), Player Lifecycle | Browser `CompressionStream` ZIP packager, save slot export, disconnect -> NPC conversion, DM character reassignment (no DM succession: the lobby freezes/ends when the DM host leaves), 84-verb audit. |
 
 ---
 
@@ -41,8 +41,8 @@ graph TD
 
 ## 4. Invariant Checklist for All Phases
 
-- [ ] **512 KiB WebSocket Ceiling**: Patches must remain narrowed (e.g. `{ kind: "sheet" }`, `{ kind: "roll" }`). Never broadcast monolithic state collections.
-- [ ] **30 msg/s Rate Limit**: Text inputs must debounce by 300ms; host key streaming throttled; markup drawing buffers strokes locally and commits only on `pointerup`.
+- [ ] **512 KiB WebSocket Ceiling**: Under host authority the host sends each non-host player its own full `projectForPlayer` snapshot (no deltas), so the per-player snapshot is what must fit — `src/game/snapshotBudget.test.ts` guards it. Keep the narrowed `Patch` kinds (e.g. `{ kind: "sheet" }`, `{ kind: "roll" }`) anyway: today they are only an accept signal, but per-recipient deltas (KnockBox-Games#62) would ship them again.
+- [ ] **30 msg/s Rate Limit**: Text inputs must debounce by 300ms; host key streaming throttled (and remember each accepted intent fans out to N−1 players — open risk, see [`../architecture-rewrite/phase-06-verification.md`](../architecture-rewrite/phase-06-verification.md)); markup drawing buffers strokes locally and commits only on `pointerup`.
 - [ ] **Cell-Unit Geometry**: All persisted coordinates, dimensions, and markup paths must be in cell units (tokens at `x.5, y.5`, markup scaled by `1 / cellPixels`).
-- [ ] **Authority Sandboxing**: `src/game/` code must remain pure and free of DOM, `Date`, `Math.random` (unless seeded), `setTimeout`, or Node globals.
+- [ ] **Pure Game Core**: There is no sandbox — the DM's browser is the host and runs the rules. `src/game/` still stays pure for testability: no DOM, no `Date` (the host passes `Date.now()` in as `now`), no `Math.random` (unless seeded), no `setTimeout`, no Node globals; log via `createLogger` (`src/log.ts`).
 - [ ] **Light DOM CSS Namespacing**: All ported CSS selectors must be explicitly scoped with `.dndm-*` class prefixes to prevent global style leakage.

@@ -17,7 +17,7 @@ greenfield inside a fixed frame.
 
 | | |
 | --- | --- |
-| Bundler | Vite 8 (Rolldown-based — `vite.authority.config.ts` uses `build.rolldownOptions`) |
+| Bundler | Vite 8 (Rolldown-based) — one app build, no separate authority bundle |
 | Renderer | **Phaser 4.2.1** — not 3.x |
 | UI | **Lit 3** web components, rendered into **light DOM** |
 | Tests | Vitest 4 (`environment: "node"`; `happy-dom` is installed but unwired) |
@@ -28,17 +28,14 @@ greenfield inside a fixed frame.
 
 ```
 src/
-  game/          ENGINE-AGNOSTIC. Shared by the authority module AND the client.
-                 No DOM, no Phaser, no Lit.
-    types.ts     The wire contract
-    rules.ts     Pure rules
-    view.ts      MatchView — the client's read-only replica
+  game/          ENGINE-AGNOSTIC and pure. No DOM, no Phaser, no Lit; the clock is passed in
+                 as `now`. Kept pure for testability — nothing sandboxes it.
+    types.ts     The wire contract (Intent, Patch)
+    rules.ts     Pure rules: applyIntent, permission policies, projectForPlayer
+    view.ts      MatchView — the HOST store: the DM browser's truth
     emitter.ts   22-line typed emitter
-  authority/     Bundled to dist/authority.js; runs in the SERVER sandbox
-    kb.ts        ABI types
-    authority.ts ENTRY: createAuthority(kb) + config
   net/           Gameplay ↔ transport seam
-    authorityController.ts   The one controller
+    authorityController.ts   The one controller; wraps KBAuthority with perRecipient
     launch.ts                Launch-mode detection
     knockboxPlugin.ts        Phaser global-plugin config per launch mode
   ui/
@@ -52,11 +49,14 @@ addons/knockbox/   CLI-managed, hash-verified. DO NOT EDIT.
 
 ## The three rules the platform will not bend on
 
-From the template's own README, and all three are load-bearing for this port:
+Adapted from the template's own README (which was written for server authority), and all three are
+load-bearing for this port:
 
-1. **`isHost` is `false` on every client**, including the lobby creator. Never branch game logic on
-   it. The member holding lobby powers is the **owner** — gate DM UI on `isOwner`, and handle
-   `owner-changed`.
+1. **The DM is the host.** This game runs host authority in every launch mode, so the lobby
+   creator's browser has `isHost: true` and `authority: 'host'` and holds the truth; guests have
+   `isHost: false`. The DM is `roster[0]` — the host — and `MatchView` records it as `dmPlayerId`.
+   DM-only UI keys off that; there is no owner succession to handle
+   ([`06`](06-state-and-authority.md#freeze-on-dm-leave)).
 2. **Patches must carry absolute values.** A broadcast delta can overtake a point-to-point snapshot
    on a real socket, so re-applying a patch must be safe. `{ x: 5 }`, never `{ dx: +1 }`.
 3. **State is strict JSON.** No `undefined` (use `null`), no `Date`/`Map`/`Set`, no class instances,
@@ -95,87 +95,13 @@ click-through. `game-app` is `z-index:1` and owns all interaction.
 `Scale.RESIZE` at displayScale 1 means canvas coordinates equal viewport CSS pixels, so DOM rects
 map straight on with no conversion — convenient for anchoring Lit UI to world positions.
 
-## The authority sandbox
+## The authority sandbox (not used)
 
-The server runs `dist/authority.js` in **Jint 4.16.1**, one `Engine` per lobby, single-threaded off
-a per-lobby actor queue.
-
-```csharp
-// Games\JsAuthorityRuntime.cs:83-113
-var engine = new Engine(o => {
-    o.Strict().LimitMemory(options.MaxMemoryBytes)
-     .TimeoutInterval(_callTimeout).RegexTimeoutInterval(_callTimeout);
-    if (options.MaxStatements > 0) o.MaxStatements(options.MaxStatements);
-    o.Constraints.StackOverflowGuard = true;
-    o.Constraints.MaxArraySize = options.MaxArrayLength;
-});
-engine.Global.Delete("Date");
-```
-
-| Knob | Default | Meaning |
-| --- | --- | --- |
-| `AuthorityMaxMemoryBytes` | **32 MiB** | per-invocation allocation budget |
-| `AuthorityCallTimeoutMs` | **250 ms** | wall-clock per module call |
-| `AuthorityMaxScriptBytes` | **1 MiB** | max size of `authority.js` |
-| `AuthorityTickHzMax` | **20 Hz** | clamps `config.tickHz` |
-| `AuthorityMaxArrayLength` | 10,000,000 | array growth bound |
-| `AuthorityMaxConsecutiveOverruns` | **3** | then the lobby is **closed** |
-| `AuthorityQueueCapacity` | 256 | actor inbound channel |
-
-Also: no CLR access, **no module loader** (so `import` fails at load — the module must bundle to a
-single file), `Date` deleted (`kb.now()` is the only clock — `engine.Global.Delete("Date")` at
-`JsAuthorityRuntime.cs:121`), and per-call constraints re-armed each invocation.
-
-> **Two constraints in that snippet are off by default.** `AuthorityMaxStatements` and
-> `AuthorityRecursionLimit` both default to **0**, and the `> 0` guards mean neither is armed —
-> arming them costs a measured **4.4× interpreter slowdown**, which the source explains at
-> `JsAuthorityRuntime.cs:76-82`. So there is **no deterministic runaway guard**: an infinite loop is
-> caught by the 250 ms wall clock and `MaxMemoryBytes`, nothing else. That is fine in practice, but
-> do not design as though a statement ceiling will catch a pathological input first.
-
-Failure modes worth internalising:
-- **3 consecutive tick overruns** or **5 consecutive contained throws** → the lobby is closed with
-  `authority-failed`.
-- `budgetRemainingMs()` lets a module bail cleanly before it overruns. It is real
-  (`JsAuthorityRuntime.cs:275-280`; the local peer returns a flat 250), but **`src/authority/kb.ts`
-  does not declare it** — that file is a hand-written mirror of the ABI, so using the call means
-  adding it to the `Kb` interface first.
-- There is a `--authority-bench <game-dir>` CLI mode to measure the module against the real budget
-  in CI. **Use it** once the fog/token state grows.
-
-### The guards that keep you honest locally
-
-Two mechanisms enforce the sandbox before deployment, and they **do not cover the same files**:
-
-```json
-// tsconfig.authority.json — an explicit four-file include, no globs
-"include": [
-  "src/authority/kb.ts", "src/authority/authority.ts",
-  "src/game/types.ts",   "src/game/rules.ts"
-]
-```
-
-```js
-// eslint.config.js:55 — a glob for src/authority/, explicit for src/game/
-files: ["src/authority/**/*.ts", "src/game/rules.ts", "src/game/types.ts"],
-ignores: ["src/authority/**/*.test.ts", "src/authority/fakeKb.ts"],
-```
-
-The ESLint block bans `Date`, `console`, `fetch`, `setTimeout`, `setInterval`, `process`,
-`document`, `window`, **and any non-relative import**.
-
-The difference matters, so here is the rule in full:
-
-| New file | `tsconfig.authority.json` | `eslint.config.js` |
-| --- | --- | --- |
-| `src/game/*.ts` (shared) | **must be added** | **must be added** |
-| `src/authority/*.ts` | **must be added** | covered by the glob |
-| `src/authority/*.test.ts`, `fakeKb.ts` | not included (correct — they are test-only) | deliberately ignored |
-
-> **Every new shared module under `src/game/` must be added to both lists.** A new `src/game/fog.ts`
-> that nobody registers is typechecked against the DOM lib and may call `Date.now()` — and will
-> fail only in production, inside a sandbox with no console. `src/game/` is where the port will add
-> most of its files (fog, grid, tokens, maps, wire), so this is a recurring chore, not a one-off.
+The platform can run a game-supplied `serverAuthority` module in a Jint sandbox (no `Date`, a
+`kb.now()` clock, a 250 ms / 32 MiB per-call budget, lobby closed after repeated overruns). **This
+game does not use it:** the manifest has no `serverAuthority` key, so every lobby runs host
+authority ([Host mode](#host-mode-phase-0-spike-findings)) and none of the sandbox's constraints or
+local guards apply.
 
 ## Wire limits
 
@@ -190,11 +116,15 @@ Non-configurable — a `const`, not an option. Two enforcement sites with **diff
 
 | Direction | Enforcement | Failure |
 | --- | --- | --- |
-| Client → server | `WebSocketHandler.cs:954-992` | Socket closed with **1009** `MessageTooBig` |
-| Authority → clients | `Games\ServerAuthority.cs:442-451` | **Frame silently dropped**, logged server-side; clients never converge |
+| Client → server (any inbound frame) | `WebSocketHandler.cs:954-992` | Socket closed with **1009** `MessageTooBig` |
+| Server authority → clients (legacy path, `Games\ServerAuthority.cs:442-451`) | not used by this game | **Frame silently dropped**, logged server-side |
 
-The second is the dangerous one. An oversized snapshot does not error — the game just stops
-updating for everyone, with no client-visible signal.
+In host mode a host → guest state frame is an ordinary *inbound* frame from the DM's socket, so it
+meets the first row: an oversized per-player snapshot is never relayed, the guest never converges,
+and nothing on the guest says why. Either way the game just stops updating, with no player-visible
+signal. Each per-player snapshot is bounded by one active map
+([`06`](06-state-and-authority.md#strategy--three-rules)), but **nothing measures it before send**
+today ([`06`](06-state-and-authority.md#guardrails)).
 
 Note also that **1009 is not in the SDK's terminal set** — `addons/knockbox/kb-core.js:28` (this
 repo's vendored copy) sets `TERMINAL_CLOSE_CODE = 1008` and `isTerminalClose` tests only that. So a
@@ -203,11 +133,11 @@ retries forever. Upstream this logic has since moved to `KnockBox-Games/web/kb-p
 the vendored copy is the one that ships in this game, and it is what the line reference above
 means.
 
-**This is the single nastiest interaction in the platform**, and it cuts both ways: an oversized
-frame *from* the authority is dropped silently server-side, and an oversized frame *to* the server
-closes the socket in a way no SDK recognises as fatal. Neither direction produces an error a player
-or a developer can see. Everything in [`06`](06-state-and-authority.md) about patch narrowing and
-chunked import exists because of this paragraph.
+**This is the single nastiest interaction in the platform.** An oversized frame closes the socket in
+a way no SDK recognises as fatal, and in host mode the socket that sends every state frame is the
+**DM's** — so one oversized snapshot can put the host in a reconnect loop that resends it. No error
+reaches a player or a developer. Everything in [`06`](06-state-and-authority.md) about bounding the
+snapshot to one map exists because of this paragraph.
 
 ### Rate limiting
 
@@ -226,6 +156,10 @@ the SDK *does* treat as terminal — `_stopped = true`, no reconnect. The player
 until the iframe is rebuilt.
 
 `GameMessagesPerSecond`/`Burst` are operator-editable at runtime; `MaxMessageBytes` is not.
+
+In host mode the DM's connection carries **every** state frame — one `sendTo` per guest per accepted
+intent — so the DM's budget is divided by the table size, and a 1008 on the DM's socket ends the
+session for everyone. See [`06`](06-state-and-authority.md#fan-out-budget).
 
 ### Backpressure
 
@@ -276,13 +210,99 @@ case "host": …SendRawToGame(lobby.HostId, bytes);
 default:     if (lobby.Contains(m.To) && …) SendRawToGame(m.To, bytes);
 ```
 
-In server-authority lobbies the relay additionally reads the `_kb` discriminator and **drops
-client-sent `_kb:"delta"|"state"` frames** — only the server may publish state.
+> **Server-mode only:** in server-authority lobbies the relay additionally reads the `_kb`
+> discriminator and drops client-sent `_kb:"delta"|"state"` frames — only the server may publish
+> state. Host-mode lobbies (this game) relay them untouched, which is what lets the DM's per-player
+> snapshots through at all — and why any peer can forge one
+> ([Forgery posture](#forgery-posture--accepted-under-dm-trusted-model)).
 
 **The escape hatch:** `KBAuthority` ignores any payload lacking the `_kb` envelope —
-*"not ours (a raw plugin game message) — ignore"* (`kb-authority.js:203-205`). So a game can send
+*"not ours (a raw plugin game message) — ignore"* (`kb-authority.js:218-220`). So a game can send
 raw peer-to-peer messages on the same socket that bypass the authority entirely. Useful for
 presence, cursors, or transfer signalling — but **not** for bulk bytes, per the numbers above.
+
+## Host mode (Phase 0 spike findings)
+
+This game runs host authority. `export/GAME.json` has **no `serverAuthority` key**, which opts every
+lobby out of the server sandbox. First verified on scratch branch `spike/phase-00-host-mode`
+(manifest key absent, boot path code-cited, harness green, branch deleted): the platform falls back
+to the host contract in `normalizeReady` (`addons/knockbox/kb-core.js:145-158` — `authority`
+defaults to `'host'`, owner derivable only when we ARE the host). This section replaces the relay
+description above for this game's lobbies.
+
+### Truth table
+
+| | Server-authority (legacy) | Host mode (this game) |
+| --- | --- | --- |
+| `authority` on `ready` | `'server'` | `'host'` (the default when the server sends no `authority` field) |
+| `isHost` | `false` on **every** client, incl. creator | `true` on the lobby creator (DM), `false` on guests |
+| `ownerId` / `isOwner` | creator until `kb.setOwner` moves it | creator (DM) initially; same `setOwner` / `owner-changed` mechanism |
+| `sendToHost` goes to | the server actor, never a player (`knockbox-plugin.js:164-177`) | the DM player's browser — `Hub.deliver` targets `peers[0]` (`knockbox-local.js:115-126`); tabs deliver only when `isHost()` (`_onGame:306-311`, self-echo `send:316-326`) |
+| State fan-out from the authority | server broadcast | DM → each guest: one `sendTo(pid, {_kb:'state'})` per non-host player under `perRecipient` (relay `default:` case, not `case "all"`) |
+| Kick / open-close enforced by | server (non-owner sends ignored) | DM host client (same opcodes, host-enforced) |
+| `from` on state frames | `'server'` (reserved sender id) | DM's `playerId` — there is no `'server'` sender |
+
+### What activates in `KBAuthority`
+
+With `authority:'host'`, the branches that are dead under server authority come alive
+(`addons/knockbox/kb-authority.js`; `src/net/authorityController.ts` constructs it with
+`{ perRecipient: true }`):
+
+* Guest sync on ready (`172-177`); host renders its own projected view into `currentView` and
+  re-pushes everyone on a host reconnect (`178-184`).
+* Host re-sends state on any roster change, joins and leaves (`189-196`). `_broadcastState`
+  (`200-215`) under `perRecipient` loops the roster: the host's own projection becomes its
+  `currentView`, every other player gets `sendTo(pid, {_kb:'state', state: snapshot(pid)})`.
+* Host-only intent handling (`224-244`): a non-null `applyIntent` result is **only an accept
+  signal** — under `perRecipient` the host calls `_broadcastState()` (a per-player snapshot to each
+  guest), never `sendToAll(delta)`. Host-only sync answers with that one guest's projection
+  (`245-247`).
+* The `from !== 'server'` forgery guards (`252`, `261`) go **inert** — the check requires
+  `net.authority === 'server'`, so in host mode it never fires.
+* Guests adopt `payload.state` as `currentView` and keep no model; `applyPatch`/`applySnapshot` are
+  unused (`MatchView` no longer implements them). `currentView` is deep-frozen under the local
+  transport (dev only) so an accidental write throws.
+* `broadcastState()` (`142-146`) is the public host-only re-publish, used after a save load.
+
+DM intent → guest convergence was first demonstrated on the spike with two `KnockBoxLocalPeer`
+`process` peers and **no** `authority:` option (true host mode, no virtual server actor). The same
+shape is now the permanent test: `src/net/authorityController.test.ts` — guest intents validate on
+the host, each guest converges on its own projection, late join and `broadcastState` converge.
+
+### Forgery posture — accepted under DM-trusted model
+
+In host mode **any peer can forge `_kb` frames** — the spike harness proved a delta stamped
+`from:'evil-peer'` is adopted, and the same holds for the `_kb:'state'` frames guests now render
+directly; the relay does not drop client state frames in host lobbies. This is accepted: the rewrite's locked decisions are **DM trusted** (no server
+anti-cheat) and **freeze on DM leave**. Do not reintroduce per-frame authentication later; the
+answer to malicious guests is the lobby kick, not the wire protocol.
+
+### Live-relay limits still bind host→guest; saves are exempt
+
+Only the *sender* of state changes (DM browser instead of server actor). The path is the same
+relay, so all of the above still applies to host→guest frames: the 512 KiB ceiling, 30 msg/s + 60
+burst with terminal 1008 on violation, and `OutboundCapacity 1024 / DropOldest` with no acks or
+sequencing. Two consequences are new with host mode and `perRecipient`, and both are **open**:
+
+- **Fan-out multiplier.** Every accepted intent costs N−1 `sendTo` frames from the DM's socket (the
+  DM's own intents also round-trip the relay via `sendToHost` → `case "host"`). At 16 seats that is
+  ~2 accepted intents/s sustained before a terminal 1008 on the host — and `updateHostKeys` alone
+  may dispatch up to 20/s. To verify in Phase 06 ("16-player fan-out"); see
+  [`06`](06-state-and-authority.md#fan-out-budget).
+- **Unguarded snapshot size.** The per-player snapshot is built and sent inside the CLI-managed
+  addon, so nothing measures it before it hits the relay. `guardSize`/`utf8Length`
+  (`src/game/wire.ts`) remain as the frame measure for the parked per-recipient delta hook
+  (KnockBox-Games#62); `src/game/snapshotBudget.test.ts` bounds a large campaign's projection under
+  400 KiB, but no runtime check exists. See [`06`](06-state-and-authority.md#guardrails).
+
+Loading a campaign no longer needs a wire protocol at all: the DM's browser is the authority, so a
+save slot is swapped directly into `MatchView` and fanned out as ordinary per-player snapshots
+([`06`](06-state-and-authority.md#getting-a-campaign-into-the-authority)). The old chunked
+`beginImport`/`importChunk`/`commitImport` protocol is gone.
+
+Saves are exempt: `src/storage/` holds zero references to `sendTo*`, `KnockBox`, `WebSocket`,
+`fetch(` or the transport — persistence is pure-local IndexedDB writes with no network leg, so the
+relay budget never sees it.
 
 ## Launch modes
 
@@ -293,13 +313,16 @@ export type LaunchMode = "platform" | "local-tab" | "solo";
 
 | Mode | Trigger | Authority |
 | --- | --- | --- |
-| `solo` | default | your module, emulated in-process |
-| `local-tab` | `?kbLocal=tab` | your module, emulated on the elected tab |
-| `platform` | `#kbTicket=…` | the real server, sandboxed |
+| `solo` | default | the DM's browser — host of a one-player in-process lobby |
+| `local-tab` | `?kbLocal=tab` | the DM's browser — the elected tab (index 0) |
+| `platform` | `#kbTicket=…` | the DM's browser — the lobby creator; the real server only relays |
 
-**All three run the same server-authoritative code path**, so there is no single-player path that
-can rot. The one emulation gap: locally the module's state lives inside the elected peer, so closing
-*that* tab ends the session. The real server survives it.
+**All three run the same host-authoritative code path** (`isHost: true` and `authority: 'host'` on
+the DM), so there is no single-player path that can rot. There is also **no emulation gap** any
+more: in every mode the truth lives in the DM's `MatchView`, so closing or reloading the DM's tab
+ends the session everywhere, the real platform included. That is the locked **freeze on DM leave**
+decision (no host migration); the Phase 04 "waiting for DM" overlay is not built yet
+([`06`](06-state-and-authority.md#freeze-on-dm-leave)).
 
 `?kbLocal=tab` in two browser tabs is the real networked path with no server, and it is the primary
 development loop for this port.
@@ -310,8 +333,9 @@ development loop for this port.
    `location.hash` the moment it starts.
 2. The controller must be constructed **synchronously in the same task** as `fx.init()`, because
    `KBAuthority` requests its first snapshot from the transport's `ready` event, which a fast
-   transport may fire immediately. `AuthorityController` carries a second guard for this
-   (`authorityController.ts:68-72`).
+   transport may fire immediately. The `AuthorityController` constructor carries a second guard
+   for this (`src/net/authorityController.ts`, the `ORDERING GUARD` block): if `net.playerId` is
+   already set it re-sends `{_kb:'sync'}` and re-emits the roster.
 
 Preserve both when the map scene is added.
 
@@ -322,17 +346,16 @@ npm install             # required — node_modules is absent
 npm run dev             # http://localhost:5173
 npm run dev             # + open ?kbLocal=tab in TWO tabs for the networked path
 npm test                # vitest
-npm run typecheck       # BOTH TS projects (app + authority)
-npm run build           # typecheck → app bundle → authority bundle
+npm run typecheck       # the one TS project
+npm run build           # typecheck → app bundle
 npm run lint
 npm run manifest:check
 npm run export:game     # → dist-game/<id>.kbg
 ```
 
-**Build-order trap, documented twice in the template README:** `dist/authority.js` is written by a
-*second* Vite pass after the app build has emptied `dist/`. A bare `vite build` afterwards silently
-deletes it, and the next pack fails with `serverAuthority module not found`. **Always go through
-`npm run build`.**
+There is **one TypeScript project and one Vite build**. No authority bundle, no second build pass,
+and so no build-order trap: `export/GAME.json` names no `serverAuthority` module for the pack step
+to look for.
 
 ### The template rename is still pending
 
@@ -351,8 +374,9 @@ is part of phase 1:
 | CSS classes | `.game-*`, `game-shake`, `game-boot` |
 | Manifest | `export/GAME.json` — `id`, `name`, `version`, `description`, `author`, `license`, `homepage`, `bugs`, `tags` |
 
-Keep the `"KnockBox"` plugin key, the `this.knockbox` mapping, and the `serverAuthority` filename
-`authority.js` — those are platform contract, not naming.
+Keep the `"KnockBox"` plugin key and the `this.knockbox` mapping — those are platform contract,
+not naming. Do **not** add a `serverAuthority` key back to the manifest: its presence is what would
+switch lobbies to server authority.
 
 **Picking `id` matters:** it is the catalog key, the install directory *and* the URL segment, so
 renaming later is a reinstall rather than a metadata edit.
@@ -379,7 +403,10 @@ The template's style is distinctive and the port should not read as foreign:
 - `import type { … }` for type-only imports; `override` mandatory; `readonly` where possible.
 - Arrow-function class properties for bound handlers:
   `private readonly onStateChanged = (): void => {}`.
-- No store library. One authoritative state server-side, one read-only replica client-side, Lit
-  `@state()` fields mirroring it.
+- No store library. Truth lives in the DM's `MatchView`; guests render the host's per-player
+  projection (`currentView`) and keep no model. Lit `@state()` fields mirror whichever the
+  controller's `state` returns.
 - FX fire from **observed confirmed state changes**, never from the click — a deliberate
-  anti-optimism pattern under server authority. **Keep this for token moves and fog strokes.**
+  anti-optimism pattern. It still holds under host authority, including on the DM's own browser:
+  the host's intents go through the same `applyIntent` path and may be rejected. **Keep this for
+  token moves and fog strokes.**

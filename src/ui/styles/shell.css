@@ -354,25 +354,39 @@ dndm-toolbar {
   margin: 0 0.2rem;
 }
 
-/* ─── Floating Inspector ────────────────────────────────────── */
-.dndm-canvas-inspector {
-  position: absolute;
-  top: 0.75rem;
-  right: calc(0.75rem + var(--dndm-rail-pad-right));
-  width: 260px;
-  z-index: 6;
-  pointer-events: auto;
+/* ─── Image Properties Panel ────────────────────────────────── */
+/* Pin to the bottom of the right rail when the content above is short. */
+.dndm-rail-content > dndm-image-inspector {
+  margin-top: auto;
 }
 
+/* Two-column grid of captioned number fields; inputs fill their cell. */
 .dndm-imgi-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.4rem;
-  margin-bottom: 0.5rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
 }
 
-.dndm-imgi-grid .dndm-label {
-  margin-bottom: 0;
+.dndm-imgi-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.dndm-imgi-grid .dndm-input--num {
+  width: 100%;
+  height: 28px;
+  padding: 0 0.5rem;
+}
+
+/* Sits beside Rotation, bottom-aligned with its input. */
+.dndm-imgi-aspect {
+  align-self: end;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .dndm-imgi-opacity-readout {
@@ -382,19 +396,28 @@ dndm-toolbar {
   margin-left: 0.3rem;
 }
 
-.dndm-imgi-aspect {
-  margin-bottom: 0.5rem;
-}
-
-.dndm-imgi-lock {
-  margin-bottom: 0.5rem;
-}
-
-.dndm-imgi-layer {
+/* Caption on the left, control on the right. */
+.dndm-imgi-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.3rem;
-  margin-bottom: 0.75rem;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 28px;
+  margin-bottom: 0.5rem;
+}
+
+.dndm-imgi-row .dndm-label {
+  margin-bottom: 0;
+}
+
+/* Wraps under the caption, then onto further lines, when the rail is narrow. */
+.dndm-imgi-layer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
 }
 
 .dndm-imgi-layer-readout {
@@ -407,7 +430,13 @@ dndm-toolbar {
 
 .dndm-imgi-actions {
   display: flex;
-  justify-content: flex-end;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--dndm-border);
+}
+
+.dndm-imgi-actions .dndm-btn {
+  flex: 1 1 auto;
 }
 
 /* ─── Map Switcher Panel ────────────────────────────────────── */
@@ -515,6 +544,30 @@ dndm-toolbar {
 
 .dndm-layer-row--hidden {
   opacity: 0.5;
+}
+
+.dndm-layer-row--dragging {
+  opacity: 0.35;
+}
+
+/* Inset shadows so the drop indicator never shifts row layout mid-drag. */
+.dndm-layer-row--drop-above {
+  box-shadow: inset 0 2px 0 var(--dndm-ember);
+}
+
+.dndm-layer-row--drop-below {
+  box-shadow: inset 0 -2px 0 var(--dndm-ember);
+}
+
+.dndm-layer-drag-handle {
+  flex: 0 0 auto;
+  cursor: grab;
+  color: var(--dndm-text-muted);
+  user-select: none;
+}
+
+.dndm-layer-drag-handle:active {
+  cursor: grabbing;
 }
 
 .dndm-layer-clickarea {

@@ -14,6 +14,5 @@
   "thumbnail": "thumb.svg",
   "minPlayers": 1,
   "maxPlayers": 16,
-  "tags": ["vtt", "dnd", "tabletop", "maps"],
-  "serverAuthority": "authority.js"
+  "tags": ["vtt", "dnd", "tabletop", "maps"]
 }

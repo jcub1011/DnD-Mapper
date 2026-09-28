@@ -20,10 +20,10 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
 3. **Loaded Dice Engine & DM Secret Tampering**
 4. **Initiative & Combat Tracker**
 5. **Freehand Canvas Markup Overlay**
-6. **Display / Projector Theater Mode**
+6. **Display / Projector Popout**
 7. **Campaign Exporter (.vtf Packager)**
 8. **Player Lifecycle & Character Abandonment Reassignment**
-9. **Remaining Sandboxed Authority Verbs (~40 Verbs)**
+9. **Remaining Authority Verbs (~40 Verbs)** — validated by the host (the DM's browser) in `applyIntent`
 10. **Scoped CSS Migration & Light DOM Namespacing**
 
 ---
@@ -48,7 +48,7 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
 | **Loaded Dice** | `LoadedDiceProcessor.cs`, `LoadedDiceRulesPanel.razor`, `dndMapperHostInput.js` | Domain records in `domain.ts`, no evaluation/UI | **Pending (Phase 8)** |
 | **Initiative & Combat** | `HostInitiativePanel.razor`, `InitiativeBanner.razor`, `TurnOrderSorter.cs` | `CombatState` record stub, no tracker/turn logic | **Pending (Phase 9)** |
 | **Canvas Markup** | `MarkupOverlay.razor`, `Map.MarkupSvg` | `markupSvg` field on `GameMap`, no drawing UI/scene | **Pending (Phase 10)** |
-| **Projector View** | `DndMapperDisplay.razor` (dedicated route), `DisplayProjection.cs` | None (needs in-app theater mode / popup window) | **Pending (Phase 10)** |
+| **Projector View** | `DndMapperDisplay.razor` (dedicated route), `DisplayProjection.cs` | None (needs a popout window) | **Pending (Phase 10)** |
 | **VTF Export** | `VtfPackager.cs` (pack), `dndMapperVtfPackager.js` | None (import only) | **Pending (Phase 11)** |
 | **Player Lifecycle** | `HandlePlayerLeft` -> convert to NPC, `RepresentsUserId` | Non-owner leave tolerated, but no token conversion | **Pending (Phase 11)** |
 
@@ -188,7 +188,7 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
   - Replicated in match state with a **cap of 50 rolls** (`RollLogCap = 50`).
   - Each `RollResult` stores: roller ID, forcedBy ID, timestamp, formula string, modifier breakdown, individual die results (`DieRoll` with `sides`, `value`, `discarded: boolean`), total, mode, flat modifier, attribute modifier, natural 20 / natural 1 flags, applied loaded-dice rules (`LoadedDiceRuleStamp[]`), original dice terms (`DiceTerm[]`), original attribute reference (`AttributeRef | null`), and linked token ID.
 - **Visibility Filtering**:
-  - `rollsVisibleToPlayers` session setting: Under KnockBox broadcast mode, delta patches are broadcast identically to all peers; when this setting is false, `MatchView` and the UI filter non-DM views so players only see their own rolls client-side (matching Part 1 Decision `D2`).
+  - `rollsVisibleToPlayers` session setting: when false, the host drops other players' rolls from each non-DM player's snapshot (`filterVisibleRolls` inside `projectForPlayer`, `src/game/rules.ts`), so players only ever receive their own rolls. No client-side roll filter is needed — the data is simply absent.
   - DM can toggle secret rolls.
 - **Modal `<dndm-roll-history>`**: Searchable, filterable modal viewing all rolls from the session.
 
@@ -203,9 +203,9 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
 - `Pages/Components/LoadedDice/LoadedDiceRulesPanel.razor` (and `.cs`, `.css`)
 - `wwwroot/js/dndMapperHostInput.js` (138 lines)
 
-#### 2. Sandboxed Rule Processor
+#### 2. Host-Side Rule Processor
 - **Execution Hook**:
-  - Evaluates rules purely inside the authority sandbox on every roll before committing the `RollResult`.
+  - Evaluates rules on the host (the DM's browser) inside `applyIntent` on every roll, before committing the `RollResult`. There is no sandbox; the processor is pure `src/game/` code so it stays unit-testable.
 - **Target Filtering**:
   - Target character sheet IDs, or unattributed "GM" rolls (`Guid.Empty`), or all rolls.
 - **Conditions**:
@@ -226,14 +226,14 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
   - `rerollOn`: Reroll once if face is in `values`.
 - **Auditing & Stamping**:
   - Matched rule IDs and names are stamped on `RollResult.appliedRules` as `LoadedDiceRuleStamp` objects.
-  - `LoadedDiceRuleVisibility`: Under broadcast mode, rule stamps are filtered client-side in player roll log views according to setting (`Hidden` = never shown to players, `VisibleToHostOnly` = rendered only in DM client, `VisibleToAll` = rendered for all players).
+  - `LoadedDiceRuleVisibility` (`Hidden` = never shown to players, `VisibleToHostOnly` = DM only, `VisibleToAll` = all players): the host withholds `loadedDiceRules` from player snapshots unless the setting is `VisibleToAll` (or legacy `AllPlayers`). The `appliedRules` stamps on each `RollResult` are **not** stripped by `projectForPlayer` today, so the player roll log still hides them client-side according to the setting.
   - `LoadedDicePlayerIndicator`: Visual cue on player screen (`None`, `Subtle`, `Obvious`).
 
 #### 3. Host Key Streaming (`dndMapperHostInput.js` Port)
 - Track keys currently held by the DM using `keydown`/`keyup`/`blur` listeners on the host browser.
 - Ignore key events when the active focused element is an input, textarea, or contenteditable field to prevent text entry from triggering loaded dice rules.
 - Normalize key names (e.g. `" "` -> `"Space"`).
-- Debounce and send `updateHostKeys` intents to the authority without exceeding the 30 msg/s rate limit.
+- Throttle `updateHostKeys` intents (max one per 50 ms). The DM *is* the host, so the intent loops back to the DM's own `applyIntent` rather than crossing the relay — but every accepted update triggers a full per-player snapshot fan-out (N−1 frames). At up to 20 updates/s with several players that can exceed the relay's 30 msg/s (60 burst, 1008 close); this is an open risk to verify in architecture-rewrite Phase 06 ([`phase-06-verification.md`](../architecture-rewrite/phase-06-verification.md)).
 
 #### 4. UI Components
 - `<dndm-loaded-dice-panel>`:
@@ -330,7 +330,7 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
 
 ---
 
-### Subsystem 6: Display / Projector Theater Mode
+### Subsystem 6: Display / Projector Popout
 
 #### 1. Legacy References
 - `Pages/DndMapperDisplay.razor` (and `.cs`, `.css` — 513 lines CSS)
@@ -341,7 +341,7 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
 #### 2. Platform Architecture Adaptation
 - In legacy, this was a second URL route (`/room/dnd-mapper/{code}/display`).
 - In KnockBox-Games, games run as single-entry-point bundles in an iframe.
-- **Solution**: Port the display view as an **in-app Theater Mode** (fullscreen button) or **Detached Popup Window** (`window.open('', '_blank')` sharing client state via `BroadcastChannel` or second client instance).
+- **Solution**: Port the display view as a **popout window** (`?view=display`) driven by the DM's window over `postMessage`, so the DM keeps full control in their own window and the popout can be shown on a TV/projector or screen-shared. (An in-app fullscreen Theater Mode was removed because it took board control away from the DM.)
 
 #### 3. Display Projection Rules
 - Uses `DisplayProjection`:
@@ -391,12 +391,14 @@ Part 1 deliberately deferred all non-mapper RPG subsystems to de-risk rendering,
     - Their token is converted from `PlayerToken` to `NPCToken` so it remains on the board.
     - Set `Token.representsUserId` and `CharacterSheet.representsUserId` to the disconnected player's ID.
     - Display "(originally played by ...)" subtitle in the token and sheet UI.
+  - This runs on the host (`handlePlayerLeft`, applied through `MatchView`/`AuthorityController`), which also clears combatant ownership.
+  - When the DM leaves: there is **no DM succession** (locked decision "freeze on DM leave"). The DM's browser is the host, so the host leaving ends the lobby on every transport.
 - **DM Reassignment**:
   - Provide a "Reassign Character" action in `<dndm-token-panel>` and `<dndm-character-sheet>` allowing the DM to assign the abandoned token and sheet to any connected player.
 
 ---
 
-### Subsystem 9: Sandboxed Authority Verbs (84 Total Verbs)
+### Subsystem 9: Authority Verbs (84 Total Verbs, Validated on the Host)
 
 #### 1. Legacy References
 - `Services/Logic/Games/DndMapperGameEngine.cs` (84 total verbs across 83 async methods, 3,703 lines)
@@ -493,7 +495,8 @@ The table below accounts for all 84 legacy verbs across Part 1 (already implemen
 | | `syncClientState` | Phase 11 | Full state synchronization request |
 
 #### 3. Wire Contract & 512 KiB Frame Protection
-- Authority patches must remain **narrowed**:
+- Under host authority with `perRecipient: true`, the host sends each non-host player its own full `projectForPlayer` snapshot on every accepted intent — there are no deltas on the wire. The per-player snapshot is what must fit under 512 KiB (`src/game/snapshotBudget.test.ts`).
+- The narrowed `Patch` kinds below are currently only an accept signal from the rules (patch narrowing is dormant; `projectPatchForPlayer` is parked for KnockBox-Games#62, per-recipient deltas). Keep producing them **narrowed** so they are ready when deltas return:
   - `{ kind: "sheet", sheet: CharacterSheet }` (single sheet)
   - `{ kind: "sheetRemoved", sheetId: string }`
   - `{ kind: "roll", roll: RollResult }` (single roll result appended)
@@ -560,7 +563,7 @@ graph TD
 
 ### [Phase 8: Loaded Dice Engine & DM Secret Tampering](phase-08-loaded-dice.md)
 *Detailed technical plan: [`phase-08-loaded-dice.md`](phase-08-loaded-dice.md)*
-1. Sandboxed `LoadedDiceProcessor`: pure condition evaluator and modification applier.
+1. `LoadedDiceProcessor`: pure condition evaluator and modification applier, run on the host inside `applyIntent`.
 2. Authority integration: intercept rolls, apply matched rules, stamp `appliedRules`.
 3. Host key streaming: `keydown`/`keyup` tracking on DM client, debounced intent updates.
 4. UI: `<dndm-loaded-dice-panel>` in DM left rail, player indicator indicators (`LoadedDicePlayerIndicator`).
@@ -578,13 +581,13 @@ graph TD
 1. Interactive SVG drawing layer on Phaser stage, pen/eraser/color/width tools, undo/redo, clear all.
 2. Pixel-to-cell transformation and storage in `GameMap.markupSvg`.
 3. Spacebar bypass for panning.
-4. Display theater mode: In-app fullscreen / detached window with 100% fog opacity, focus rect auto-framing, 250ms token animations, roll ticker.
+4. Display popout: detached window with 100% fog opacity, focus rect auto-framing, 250ms token animations, roll ticker.
 
 ### [Phase 11: Campaign Exporter (.vtf Packager) & Final Parity Polish](phase-11-vtf-export-and-lifecycle.md)
 *Detailed technical plan: [`phase-11-vtf-export-and-lifecycle.md`](phase-11-vtf-export-and-lifecycle.md)*
 1. Client-side `.vtf` ZIP packager (`CompressionStream('deflate-raw')`) packaging manifest, scenes, entities, images, and extensions.
 2. "Export" button on save slots in `<dndm-saves-panel>`.
-3. Disconnect handling: Player token -> NPC token conversion, `RepresentsUserId` preservation, and DM reassignment UI.
+3. Disconnect handling: Player token -> NPC token conversion, `RepresentsUserId` preservation, and the DM's character-reassignment UI. (No DM succession — the lobby freezes/ends when the DM host leaves.)
 4. End-to-end parity audit against legacy Blazor app.
 
 ---
@@ -593,12 +596,12 @@ graph TD
 
 | Risk / Invariant | Impact | Mitigation Strategy |
 | :--- | :--- | :--- |
-| **512 KiB WebSocket Frame Ceiling** | Broadcast dropped silently or 1009 socket kill | Always use narrowed patches (`kind: "sheet"`, `kind: "roll"`). Never broadcast full sheets dictionary. |
-| **Intent Rate Limits (30 msg/s, 60 burst)** | 1008 terminal socket close | Debounce sheet text inputs (`300 ms`). Never send network intents on pointer-move during markup. |
+| **512 KiB WebSocket Frame Ceiling** | Frame dropped silently or 1009 socket kill | Each player receives a full per-player snapshot, so keep that projection under budget (`src/game/snapshotBudget.test.ts`; inactive maps ship as `MapSummary`). Keep patches narrowed (`kind: "sheet"`, `kind: "roll"`) for the future delta path (#62). |
+| **Intent Rate Limits (30 msg/s, 60 burst)** | 1008 terminal socket close | Debounce sheet text inputs (`300 ms`). Never send network intents on pointer-move during markup. Remember the host's outbound side: each accepted intent fans out N−1 snapshot frames, so a high-rate intent stream (e.g. `updateHostKeys` at 20/s) multiplies — open risk, verify in architecture-rewrite Phase 06 ([`phase-06-verification.md`](../architecture-rewrite/phase-06-verification.md)). |
 | **Cell-Unit vs. Pixel Coordinates** | Silent half-cell alignment drift | Persist all geometry (tokens, images, fog, markup) in cell units. Scale markup by `1 / CellPixels` on commit. |
 | **Three.js Main-Thread Jitter** | Rolling 10 NPC dice freezes frame rate | Prewarm dice boxes upon entering combat; stagger roll triggers across animation frames. |
 | **WebGL Context Ceiling (8–16 max)** | Context loss crashes Phaser battlemap | Do NOT instantiate separate DiceBox/Three.js contexts per token or user. Use a single shared transparent Three.js overlay canvas across the entire viewport. |
-| **KnockBox Delta Broadcast Mode** | Per-recipient delta filtering not supported by server | In KnockBox (`ServerAuthority.cs`), `perRecipient: false` broadcasts deltas to `"all"`. Secret data (rolls visible only to DM, hidden sheets, loaded dice stamps) must be filtered client-side in `MatchView` and Lit components (Decision D2). |
-| **Authority Sandbox Restrictions** | Server runtime error | No DOM, no timers, no `Date` object in `src/game/` (use `kb.now()`). Pure deterministic functions only. |
+| **Secret Data on the Wire** | Players read hidden state from devtools | Reversed from the server-authority plan: the DM's browser is the host and `kb-authority.js` runs with `perRecipient: true`, so the host sends each player its own `projectForPlayer` snapshot. Hidden/fogged tokens, hidden images, unviewable sheets (notes/HP redacted), other players' rolls, hidden/fogged combatants, `pendingInitiative` and non-public `loadedDiceRules` never leave the host. Client-side gates remain as defence-in-depth. Known gaps: fog masks are still broadcast (legacy parity) and `appliedRules` stamps are gated client-side only. |
+| **Pure Game Core** | Untestable rules, hidden clock dependencies | No sandbox exists (the host is a browser), but `src/game/` stays pure for testability: no DOM, no timers, no `Date` — the host passes `Date.now()` in as `now`. Log via `createLogger` (`src/log.ts`). |
 | **Light DOM CSS Collisions** | Unintended global styling bleed | Prefix all ported CSS rules with `.dndm-*` component namespaces. |
 | **Spoilers Before Dice Settle** | Results visible in log while dice roll | Use `DiceAnimationTracker` to hide roll log entry until 3D dice finish tumbling. |

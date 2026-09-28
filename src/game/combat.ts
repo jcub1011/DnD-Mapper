@@ -4,7 +4,7 @@
  * Rules:
  *   1. Pure functions only — no ambient I/O, no DOM, no Node globals.
  *   2. Strict sorting: initiative descending, players before NPCs, alphabetical name.
- *   3. Shared between authority module and client view.
+ *   3. Run by the host store (`MatchView`) via the rules.
  */
 
 import {

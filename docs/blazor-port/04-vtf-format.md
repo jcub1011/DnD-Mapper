@@ -284,8 +284,8 @@ browser JS, and this repo has no server to stream bytes through anyway.
 
 ## Implementation plan
 
-Target: `src/vtf/`. This is client-side only — **the authority sandbox has no `fetch`, no file
-access, and cannot participate.**
+Target: `src/vtf/`. This runs in the DM's browser only — the DM picks the file, and the DM's
+browser is also the host that holds the campaign, so no other peer needs to participate.
 
 ```
 src/vtf/
@@ -296,9 +296,11 @@ src/vtf/
   import.test.ts Fixtures
 ```
 
-Import produces a `DndMapperState` in the DM's browser. Note that getting it from there into the
-**authority** is a separate protocol, not one big intent — see
-[`06`](06-state-and-authority.md#getting-a-campaign-into-the-authority).
+Import produces a `DndMapperState` in the DM's browser — which is the host, so there is no upload
+protocol. It takes the same path as loading a save slot: the image blobs are `publish()`ed, the
+state is applied directly to the host store, and each player then receives their own projected
+snapshot. See
+[`06`](06-state-and-authority.md).
 
 Use `DecompressionStream('deflate-raw')`, so no ZIP library is needed — mirroring how the legacy
 exporter uses `CompressionStream`.

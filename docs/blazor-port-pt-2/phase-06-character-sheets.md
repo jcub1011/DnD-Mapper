@@ -10,14 +10,14 @@ This subsystem provides the foundation upon which combat initiative (Phase 9) an
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        Character Sheet Subsystem                       │
 ├─────────────────────────┬────────────────────────┬─────────────────────┤
-│   Domain & Authority    │    Client Replica      │       Lit UI        │
+│  Domain & Host Rules    │    Client Replica      │       Lit UI        │
 ├─────────────────────────┼────────────────────────┼─────────────────────┤
-│ • 22 sandboxed verbs    │ • Narrowed patch merge │ • <dndm-character-  │
+│ • 22 host-checked verbs │ • Per-player snapshot  │ • <dndm-character-  │
 │ • Effective HP resolver │ • Debounced intent     │   sheet>            │
 │ • Attribute schemas     │   emission (300ms)     │ • Presets modal     │
 │ • Permission policies   │ • Right-rail routing   │ • Cascade warning   │
 │ • Status effect library │ • Token double-click   │ • Status badges     │
-│ • Custom templates      │ • Client-side hiding   │ • Template manager  │
+│ • Custom templates      │ • UI gates (defence)   │ • Template manager  │
 └─────────────────────────┴────────────────────────┴─────────────────────┘
 ```
 
@@ -234,18 +234,21 @@ Implement pure calculation functions in `src/game/domain.ts`:
     - Injects default values for newly added attributes.
 
 ### 4.3 Snapshot & Replica Visibility Filtering
-In KnockBox server authority (`ServerAuthority.cs`), delta patches (`perRecipient: false`) are broadcast to all connected clients (`"all"`). To enforce `settings.playersCanSeeOtherSheets`:
-- In `MatchView` and the `<dndm-character-sheet>` component:
-  - If `!isDm(state, localUserId)` and `!state.settings.playersCanSeeOtherSheets`:
-    - The client UI strictly filters the visible sheet list to sheets where `sheet.ownerUserId === localUserId`.
-    - Sheets belonging to other players or unowned NPC sheets are hidden from player view.
-- In initial snapshot projection (if `perRecipient` snapshot is configured), omit sheets where `sheet.ownerUserId !== playerId`.
+The DM's browser is the host and runs `kb-authority.js` with `perRecipient: true`: on every accepted intent the host sends each non-host player its own `projectForPlayer` snapshot (`src/game/rules.ts`). To enforce `settings.playersCanSeeOtherSheets` and the notes/HP policy:
+- **On the host (`projectForPlayer`)**:
+  - Sheets failing `mayViewSheet` are dropped from that player's snapshot entirely.
+  - Sheets the player may view but not read in full (`mayViewSheetNotesAndHp` false) ship with `notes` and `hp` redacted.
+  - The DM's projection is unchanged.
+- **In the `<dndm-character-sheet>` component** (defence-in-depth only):
+  - If `!isDm(state, localUserId)` and `!state.settings.playersCanSeeOtherSheets`, the UI still filters the visible sheet list to sheets where `sheet.ownerUserId === localUserId`. The data is already absent; the gate just keeps the UI honest if the projection ever regresses.
 
 ---
 
 ## 5. Client Replica & Replication (`src/game/view.ts`)
 
-Extend `MatchView.applyPatch`:
+> **Superseded by host authority.** `MatchView` is now the host store only; guests have no `applyPatch` half and simply render `authority.currentView` (their per-player snapshot). On the host, sheet changes land through `rules.applyIntent`, whose returned `Patch` is just an accept signal. The merge below is kept as the reference shape for per-recipient deltas (KnockBox-Games#62).
+
+Original plan — extend `MatchView.applyPatch`:
 
 ```ts
 case "sheet": {
@@ -422,7 +425,7 @@ Create `src/ui/styles/sheet.css` and `src/ui/styles/status-effects.css` ported f
 2. **`src/game/rules.test.ts` (Permission suite)**:
    - Players cannot edit sheets owned by others when `sheetEditByOthers` is `HostOnly` or `OwnersAndHost`.
    - DM can edit any sheet regardless of settings.
-   - Client-side visibility filtering hides unowned sheets when `playersCanSeeOtherSheets` is false for non-DM players.
+   - Projection matrix (`src/game/projection.test.ts`): `projectForPlayer` drops unowned sheets when `playersCanSeeOtherSheets` is false for non-DM players, redacts `notes`/`hp` where `mayViewSheetNotesAndHp` fails, and leaves the DM's view unchanged.
 3. **`src/ui/panels/dndm-character-sheet.test.ts`**:
    - Renders vital stats, ability cards, and status effects.
    - Fast typing does not saturate intent channel (verifying 300ms debounce).

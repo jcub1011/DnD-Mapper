@@ -215,9 +215,9 @@ describe("Auto-Spawn on Session Start", () => {
 
 describe("handlePlayerLeft (Abandonment & Lifecycle)", () => {
   it("converts player tokens to NPCToken and sets representsUserId", () => {
-    const { state, roster } = makeLifecycleState();
+    const { state } = makeLifecycleState();
 
-    const { state: nextState } = handlePlayerLeft(state, "user-alice", roster);
+    const { state: nextState } = handlePlayerLeft(state, "user-alice");
 
     const fullMap = nextState.maps[0] as GameMap;
     const token = fullMap.tokens.find((t) => t.id === "tok-alice");
@@ -228,9 +228,9 @@ describe("handlePlayerLeft (Abandonment & Lifecycle)", () => {
   });
 
   it("clears sheet ownerUserId and records representsUserId", () => {
-    const { state, roster } = makeLifecycleState();
+    const { state } = makeLifecycleState();
 
-    const { state: nextState } = handlePlayerLeft(state, "user-alice", roster);
+    const { state: nextState } = handlePlayerLeft(state, "user-alice");
 
     const sheet = nextState.sheets["sheet-alice"];
     expect(sheet).toBeDefined();
@@ -239,28 +239,27 @@ describe("handlePlayerLeft (Abandonment & Lifecycle)", () => {
   });
 
   it("clears combatant ownerUserId in active combat", () => {
-    const { state, roster } = makeLifecycleState();
+    const { state } = makeLifecycleState();
 
-    const { state: nextState } = handlePlayerLeft(state, "user-alice", roster);
+    const { state: nextState } = handlePlayerLeft(state, "user-alice");
 
     expect(nextState.activeCombat?.turnOrder[0].ownerUserId).toBeNull();
   });
 
-  it("promotes oldest remaining peer when DM leaves", () => {
-    const { state, roster } = makeLifecycleState();
+  it("never promotes a successor (freeze on DM leave)", () => {
+    const { state } = makeLifecycleState();
 
-    const { state: nextState } = handlePlayerLeft(state, "user-dm", roster);
+    const { state: nextState } = handlePlayerLeft(state, "user-dm");
 
-    // DM left, first remaining player in roster is Alice
-    expect(nextState.dmPlayerId).toBe("user-alice");
+    expect(nextState.dmPlayerId).toBe("user-dm");
   });
 });
 
 describe("DM Reassignment Actions", () => {
   it("allows DM to reassign an abandoned token to another sheet", () => {
-    const { state, roster } = makeLifecycleState();
+    const { state } = makeLifecycleState();
     // Simulate Alice having left
-    const { state: abandonedState } = handlePlayerLeft(state, "user-alice", roster);
+    const { state: abandonedState } = handlePlayerLeft(state, "user-alice");
 
     // DM creates Bob's sheet, then moves Alice's old token onto it
     const created = applyIntent(
@@ -298,8 +297,8 @@ describe("DM Reassignment Actions", () => {
   });
 
   it("allows DM to reassign abandoned sheet via assignCharacterToPlayer", () => {
-    const { state, roster } = makeLifecycleState();
-    const { state: abandonedState } = handlePlayerLeft(state, "user-alice", roster);
+    const { state } = makeLifecycleState();
+    const { state: abandonedState } = handlePlayerLeft(state, "user-alice");
 
     const result = applyIntent(
       abandonedState,
@@ -326,8 +325,8 @@ describe("DM Reassignment Actions", () => {
   });
 
   it("rejects reassignTokenSheet if issued by non-DM", () => {
-    const { state, roster } = makeLifecycleState();
-    const { state: abandonedState } = handlePlayerLeft(state, "user-alice", roster);
+    const { state } = makeLifecycleState();
+    const { state: abandonedState } = handlePlayerLeft(state, "user-alice");
 
     const result = applyIntent(
       abandonedState,

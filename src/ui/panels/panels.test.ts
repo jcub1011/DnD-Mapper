@@ -393,7 +393,8 @@ describe("UI Panels and Canvas Controls (07 — UI Shell)", () => {
       };
 
       el.image = image;
-      el.maxLayerOrder = 2;
+      el.layerRank = 0;
+      el.layerCount = 3;
       el.onSetLocked = onSetLocked;
       el.onClose = onClose;
 
@@ -414,6 +415,40 @@ describe("UI Panels and Canvas Controls (07 — UI Shell)", () => {
       expect(closeBtn).not.toBeNull();
       closeBtn.click();
       expect(onClose).toHaveBeenCalledTimes(1);
+
+      el.remove();
+    });
+
+    it("emits target stacking ranks and disables buttons at the ends", async () => {
+      const el = document.createElement("dndm-image-inspector") as DndmImageInspector;
+      const onReorder = vi.fn();
+      el.image = makeImage("img1", 0);
+      el.layerRank = 0;
+      el.layerCount = 3;
+      el.onReorder = onReorder;
+
+      document.body.appendChild(el);
+      await el.updateComplete;
+
+      const btn = (title: string) =>
+        el.querySelector(`button[title="${title}"]`) as HTMLButtonElement;
+      expect(btn("Send to back").disabled).toBe(true);
+      expect(btn("Lower").disabled).toBe(true);
+      expect(el.querySelector(".dndm-imgi-layer-readout")?.textContent).toContain("1 / 3");
+
+      btn("Raise").click();
+      expect(onReorder).toHaveBeenLastCalledWith(1);
+      btn("Bring to front").click();
+      expect(onReorder).toHaveBeenLastCalledWith(2);
+
+      el.layerRank = 2;
+      await el.updateComplete;
+      expect(btn("Raise").disabled).toBe(true);
+      expect(btn("Bring to front").disabled).toBe(true);
+      btn("Lower").click();
+      expect(onReorder).toHaveBeenLastCalledWith(1);
+      btn("Send to back").click();
+      expect(onReorder).toHaveBeenLastCalledWith(0);
 
       el.remove();
     });
@@ -605,5 +640,86 @@ describe("UI Panels and Canvas Controls (07 — UI Shell)", () => {
 
       el.remove();
     });
+
+    it("lists tied layerOrders in the same stacking order the canvas draws", async () => {
+      const el = document.createElement("dndm-layer-panel") as DndmLayerPanel;
+      // Both at 0: canvas draws the later array entry (b) on top.
+      el.activeMap = {
+        ...makeMap("m1", "Dungeon"),
+        images: [makeImage("a", 0), makeImage("b", 0)],
+      };
+
+      document.body.appendChild(el);
+      await el.updateComplete;
+
+      const names = Array.from(el.querySelectorAll(".dndm-layer-name")).map((n) =>
+        n.textContent?.trim(),
+      );
+      expect(names).toEqual(["Image b", "Image a"]);
+
+      el.remove();
+    });
+
+    it("drag-to-reorder emits the dropped row's stacking rank", async () => {
+      const el = document.createElement("dndm-layer-panel") as DndmLayerPanel;
+      const onReorderImage = vi.fn();
+      el.activeMap = {
+        ...makeMap("m1", "Dungeon"),
+        images: [makeImage("a", 0), makeImage("b", 1), makeImage("c", 2)],
+      };
+      el.onReorderImage = onReorderImage;
+
+      document.body.appendChild(el);
+      await el.updateComplete;
+
+      // Displayed top → bottom: c, b, a
+      const rows = () => Array.from(el.querySelectorAll("li.dndm-layer-row"));
+      expect(rows().every((r) => r.getAttribute("draggable") === "true")).toBe(true);
+
+      const drag = (fromRow: number, toRow: number) => {
+        rows()[fromRow].dispatchEvent(new Event("dragstart", { bubbles: true }));
+        rows()[toRow].dispatchEvent(new Event("dragover", { bubbles: true, cancelable: true }));
+        rows()[toRow].dispatchEvent(new Event("drop", { bubbles: true, cancelable: true }));
+      };
+
+      // Drag top row (c) onto the bottom row → rank 0
+      drag(0, 2);
+      expect(onReorderImage).toHaveBeenLastCalledWith("c", 0);
+
+      // Drag bottom row (a) onto the top row → rank 2
+      drag(2, 0);
+      expect(onReorderImage).toHaveBeenLastCalledWith("a", 2);
+
+      // Dropping on itself is a no-op
+      onReorderImage.mockClear();
+      drag(1, 1);
+      expect(onReorderImage).not.toHaveBeenCalled();
+
+      el.remove();
+    });
   });
 });
+
+function makeImage(id: string, layerOrder: number): MapImage {
+  return {
+    id,
+    name: `Image ${id}`,
+    contentType: "image/png",
+    shareToken: null,
+    x: 0,
+    y: 0,
+    width: 4,
+    height: 4,
+    originalWidth: 100,
+    originalHeight: 100,
+    rotation: 0,
+    opacity: 1,
+    layerOrder,
+    locked: false,
+    hidden: false,
+    byteSize: 1,
+    wasDownscaled: false,
+    originalLongEdgePx: 100,
+    displayLongEdgePx: 100,
+  };
+}

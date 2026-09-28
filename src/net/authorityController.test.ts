@@ -1,11 +1,11 @@
 /*
  * Tier 2 of the KnockBox local dev loop: the whole networked path with no server.
  *
- * KnockBoxLocalPeer in `mode: 'process'` runs several peers in one JS realm, and
- * the `authority:` option runs this game's REAL authority module as a virtual
- * server actor over that transport — stamping its broadcasts `from: 'server'` and
- * telling every peer `isHost: false` / `authority: 'server'`, exactly as the real
- * server does. So these tests exercise the production code path, not a stand-in.
+ * KnockBoxLocalPeer in `mode: 'process'` runs several peers in one JS realm with
+ * NO virtual server actor — the first peer is the host (`isHost: true` /
+ * `authority: 'host'`), exactly as the relay reports live. The host peer's
+ * MatchView is the truth; guests render the per-player snapshot it publishes. So these
+ * tests exercise the production code path, not a stand-in.
  *
  * IMPORT DISCIPLINE: only kb-authority.js and knockbox-local.js may be imported
  * here. `knockbox-plugin.js` throws at factory time without Phaser, so anything
@@ -17,10 +17,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import KBAuthority from "../../addons/knockbox/kb-authority.js";
 import KnockBoxLocal from "../../addons/knockbox/knockbox-local.js";
 import type { KnockBoxPlugin } from "../../addons/knockbox/knockbox-phaser";
-import { createAuthority } from "../authority/authority";
 import type { MatchState, Patch } from "../game/types";
 import { MatchView } from "../game/view";
 import { isFullMap } from "../game/domain";
+import type { GameMap } from "../game/domain";
+import { createDefaultDndMapperState, createDefaultGridConfig } from "../game/domain";
 import { AuthorityController } from "./authorityController";
 import type { KnockBoxTransport } from "./transport";
 
@@ -37,15 +38,14 @@ afterEach(() => {
 });
 
 function makePeer(playerId: string): Peer {
-  // EVERY peer gets `authority:` — only the elected one instantiates the actor,
-  // but all of them must report authority:'server' so the sender-side relay rules
-  // and KBAuthority's `from !== 'server'` forgery check behave as they will live.
+  // TRUE host mode: no `authority:` option, so no virtual server actor. The
+  // first peer is elected host (isHost:true, authority:'host') and its
+  // MatchView host store is the truth — exactly as the relay reports live.
   const peer = new KnockBoxLocalPeer({
     mode: "process",
     channel: "test-lobby",
     playerId,
     displayName: playerId.toUpperCase(),
-    authority: createAuthority,
   });
   open.push(peer);
   return peer;
@@ -55,10 +55,34 @@ function asTransport(peer: Peer): KnockBoxTransport {
   return peer as unknown as KnockBoxTransport;
 }
 
-function attachView(peer: Peer): MatchView {
+/**
+ * A bare per-recipient KBAuthority over MatchView, as production wires it.
+ * `state` is what the peer renders: the host's truth, or a guest's projection.
+ */
+function attachView(peer: Peer): { readonly state: Readonly<MatchState> } {
   const view = new MatchView();
-  new KBAuthority<MatchState, Patch>(peer as unknown as KnockBoxPlugin, view);
-  return view;
+  // Mirror what AuthorityController.emitRoster does: feed the host store its
+  // membership so DM-gated intents validate (and DM seeds to roster[0]).
+  const feedRoster = (): void => {
+    view.setRoster(
+      peer.players.map((p: { id: string; displayName: string }) => ({
+        id: p.id,
+        displayName: p.displayName,
+      })),
+    );
+  };
+  peer.events.on("ready", feedRoster);
+  peer.events.on("player-joined", feedRoster);
+  peer.events.on("player-left", feedRoster);
+  feedRoster();
+  const authority = new KBAuthority<MatchState, Patch>(peer as unknown as KnockBoxPlugin, view, {
+    perRecipient: true,
+  });
+  return {
+    get state(): Readonly<MatchState> {
+      return peer.isHost ? view.state : (authority.currentView ?? view.state);
+    },
+  };
 }
 
 /** Start a peer and wait until its replica has settled to `expected` members. */
@@ -72,17 +96,17 @@ function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 20));
 }
 
-describe("server-authority mode over the local transport", () => {
-  it("tells every peer it is NOT the host", async () => {
+describe("host-authority mode over the local transport", () => {
+  it("elects the first peer as host", async () => {
     const a = makePeer("a");
     const viewA = attachView(a);
     await startAndSettle(a, 1);
 
-    // The single most important difference from host-authoritative mode: nobody
-    // is host, not even the peer that created the lobby.
-    expect(a.isHost).toBe(false);
-    expect(a.authority).toBe("server");
-    // Lobby powers still belong to someone — the creator, until the module moves it.
+    // The single most important fact of host-authoritative mode: the lobby
+    // creator IS the host, and the relay reports authority:'host'.
+    expect(a.isHost).toBe(true);
+    expect(a.authority).toBe("host");
+    // Lobby powers belong to the host — the creator, until it moves them.
     expect(a.isOwner).toBe(true);
     expect(a.ownerId).toBe("a");
     expect(viewA.state.dmPlayerId).toBe("a");
@@ -99,6 +123,7 @@ describe("server-authority mode over the local transport", () => {
     await vi.waitFor(() => expect(a.players).toHaveLength(2));
 
     expect(b.isHost).toBe(false);
+    expect(b.authority).toBe("host");
     expect(b.isOwner).toBe(false);
 
     // DM creates a map
@@ -172,7 +197,7 @@ describe("server-authority mode over the local transport", () => {
     await vi.waitFor(() => expect(viewA.state.maps).toHaveLength(2));
   });
 
-  it("ends the local session when the ACTOR peer leaves (real servers do not)", async () => {
+  it("ends the local session when the HOST leaves (no migration)", async () => {
     const a = makePeer("a");
     attachView(a);
     await startAndSettle(a, 1);
@@ -185,7 +210,7 @@ describe("server-authority mode over the local transport", () => {
       closed = true;
     });
 
-    a.destroy(); // "a" is players[0]: both the lobby owner AND the emulated actor
+    a.destroy(); // "a" is players[0]: both the lobby owner AND the host
     await vi.waitFor(() => expect(closed).toBe(true));
   });
 });
@@ -199,6 +224,7 @@ describe("AuthorityController", () => {
 
     expect(controller.playerId).toBe("a");
     expect(controller.isOwner).toBe(true);
+    expect(controller.isHost).toBe(true);
 
     const mapNames: string[] = [];
     controller.events.on("changed", ({ state }) => {
@@ -242,5 +268,192 @@ describe("AuthorityController", () => {
     peer.sendToHost({ _kb: "intent", action: { kind: "createMap", name: "Never Received" } });
     await settle();
     expect(changes).toBe(0);
+  });
+
+  it("projects per player: guests never receive hidden tokens", async () => {
+    const hostPeer = makePeer("dm-1");
+    const host = new AuthorityController(asTransport(hostPeer));
+    hostPeer.start();
+    await vi.waitFor(() => expect(hostPeer.players).toHaveLength(1));
+
+    const guestPeer = makePeer("guest-1");
+    const guest = new AuthorityController(asTransport(guestPeer));
+    guestPeer.start();
+    await vi.waitFor(() => expect(guestPeer.players).toHaveLength(2));
+    await vi.waitFor(() => expect(hostPeer.players).toHaveLength(2));
+
+    host.sendIntent({ kind: "createMap", name: "Dungeon" });
+    await vi.waitFor(() => expect(host.view.state.maps).toHaveLength(1));
+    await vi.waitFor(() => expect(guest.state.maps).toHaveLength(1));
+
+    const mapId = (host.view.state.maps[0] as { id: string }).id;
+
+    // Guest spawns a token (creates a bound sheet pair via full-state sync).
+    guest.sendIntent({
+      kind: "spawnToken",
+      mapId,
+      token: {
+        type: "PlayerToken",
+        name: "Ranger",
+        color: "#0f0",
+        iconKind: "Initial",
+        x: 4.5,
+        y: 4.5,
+        sheetId: null,
+        hidden: false,
+      },
+    });
+    await vi.waitFor(() => {
+      const map = guest.state.maps[0];
+      expect(isFullMap(map) && map.tokens.length === 1).toBe(true);
+    });
+
+    const tokenId = ((): string => {
+      const map = host.view.state.maps[0];
+      if (!isFullMap(map)) throw new Error("expected a full map");
+      return map.tokens[0].id;
+    })();
+
+    // DM hides the token.
+    host.sendIntent({ kind: "setTokenHidden", tokenId, hidden: true });
+    await vi.waitFor(() => {
+      const map = host.view.state.maps[0];
+      expect(isFullMap(map) && map.tokens[0].hidden).toBe(true);
+    });
+
+    // The guest's projected view drops the token entirely — no hidden bytes
+    // cross the wire — while the host keeps the truth.
+    await vi.waitFor(() => {
+      const map = guest.state.maps[0];
+      expect(isFullMap(map) && map.tokens.length === 0).toBe(true);
+    });
+    const guestBytes = JSON.stringify(guest.state);
+    expect(guestBytes).not.toContain(tokenId);
+    const hostMap = host.view.state.maps[0];
+    expect(isFullMap(hostMap) && hostMap.tokens.length === 1).toBe(true);
+
+    host.destroy();
+    guest.destroy();
+  });
+
+  it("turns a leaving guest's tokens into NPCs for the host and the remaining guests", async () => {
+    const hostPeer = makePeer("dm-1");
+    const host = new AuthorityController(asTransport(hostPeer));
+    hostPeer.start();
+    await vi.waitFor(() => expect(hostPeer.players).toHaveLength(1));
+
+    const leaverPeer = makePeer("guest-1");
+    const leaver = new AuthorityController(asTransport(leaverPeer));
+    leaverPeer.start();
+    const stayerPeer = makePeer("guest-2");
+    const stayer = new AuthorityController(asTransport(stayerPeer));
+    stayerPeer.start();
+    await vi.waitFor(() => expect(hostPeer.players).toHaveLength(3));
+
+    host.sendIntent({ kind: "createMap", name: "Dungeon" });
+    await vi.waitFor(() => expect(leaver.state.maps).toHaveLength(1));
+    const mapId = host.view.state.maps[0].id;
+
+    // DM spawns a character and hands it to guest-1 (sheet + its tokens).
+    host.sendIntent({
+      kind: "spawnToken",
+      mapId,
+      token: {
+        type: "PlayerToken",
+        name: "Ranger",
+        color: "#0f0",
+        iconKind: "Initial",
+        x: 4.5,
+        y: 4.5,
+        sheetId: null,
+        hidden: false,
+      },
+    });
+    await vi.waitFor(() => expect(Object.keys(host.view.state.sheets)).toHaveLength(1));
+    const sheetId = Object.keys(host.view.state.sheets)[0];
+    host.sendIntent({ kind: "assignCharacterToPlayer", sheetId, playerId: "guest-1" });
+    await vi.waitFor(() => {
+      const map = stayer.state.maps[0];
+      expect(isFullMap(map) && map.tokens[0]?.ownerUserId).toBe("guest-1");
+    });
+
+    leaver.destroy();
+    leaverPeer.destroy();
+    await vi.waitFor(() => expect(hostPeer.players).toHaveLength(2));
+
+    const npc = { type: "NPCToken", ownerUserId: null, representsUserId: "guest-1" };
+    const hostMap = host.view.state.maps[0];
+    expect(isFullMap(hostMap) && hostMap.tokens[0]).toMatchObject(npc);
+    // KBAuthority's own roster-change fan-out already carries the conversion.
+    await vi.waitFor(() => {
+      const map = stayer.state.maps[0];
+      expect(isFullMap(map) && map.tokens[0]).toMatchObject(npc);
+    });
+
+    host.destroy();
+    stayer.destroy();
+  });
+
+  it("applies a loaded save on the host and converges guests (no chunked import)", async () => {
+    function makeLoadedMap(id: string, name: string, listOrder: number): GameMap {
+      return {
+        id,
+        name,
+        grid: createDefaultGridConfig(),
+        images: [],
+        tokens: [],
+        createdUtc: "2026-09-08T00:00:00.000Z",
+        listOrder,
+        defaultSpawnPosition: null,
+        markupSvg: null,
+        fogMask: "",
+      };
+    }
+
+    const hostPeer = makePeer("dm-1");
+    const host = new AuthorityController(asTransport(hostPeer));
+    hostPeer.start();
+    await vi.waitFor(() => expect(hostPeer.players).toHaveLength(1));
+
+    const guestPeer = makePeer("guest-1");
+    const guest = new AuthorityController(asTransport(guestPeer));
+    guestPeer.start();
+    await vi.waitFor(() => expect(guestPeer.players).toHaveLength(2));
+    await vi.waitFor(() => expect(hostPeer.players).toHaveLength(2));
+
+    // A slot as loadSlot returns it: Lobby phase, no DM owner.
+    const loaded: MatchState = {
+      ...createDefaultDndMapperState(),
+      phase: "Lobby",
+      maps: [makeLoadedMap("m1", "Hall", 0), makeLoadedMap("m2", "Crypt", 1)],
+      activeMapId: "m1",
+      dmPlayerId: null,
+    };
+
+    host.applyLoadedCampaign(loaded);
+
+    // Host swaps directly: full maps live, session Playing, roster DM kept.
+    await vi.waitFor(() => expect(host.view.state.maps).toHaveLength(2));
+    expect(host.view.state.phase).toBe("Playing");
+    expect(host.view.state.activeMapId).toBe("m1");
+    expect(host.view.state.dmPlayerId).toBe("dm-1");
+    expect(host.view.state.announcement).toBeDefined();
+
+    // Guest converges to the projected snapshot: active map full, the other
+    // a summary — same fan-out shape as intent-driven mutations.
+    await vi.waitFor(() => expect(guest.state.maps).toHaveLength(2));
+    const guestActive = guest.state.maps.find((m) => m.id === "m1")!;
+    const guestInactive = guest.state.maps.find((m) => m.id === "m2")!;
+    expect(isFullMap(guestActive)).toBe(true);
+    expect(isFullMap(guestInactive)).toBe(false);
+
+    // A guest has no host store: loading there is a silent no-op.
+    guest.applyLoadedCampaign(loaded);
+    await settle();
+    expect(guest.view.state.maps).toHaveLength(0);
+    expect(host.view.state.maps).toHaveLength(2);
+
+    host.destroy();
+    guest.destroy();
   });
 });

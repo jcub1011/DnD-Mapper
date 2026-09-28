@@ -62,7 +62,7 @@ Make the template *this* game, and stand up the Phaser map surface with nothing 
 
 ## Phase 2 — Domain model and `.vtf` import
 
-1. `src/game/` types per [`03`](03-domain-model.md). **Register each new file in `tsconfig.authority.json` and `eslint.config.js`.**
+1. `src/game/` types per [`03`](03-domain-model.md). **Keep `src/game/` pure** — no DOM, clock passed in as `now`, logging via `createLogger` — so it stays testable without a browser.
 2. Pure helpers: snapping, fog bitset, token stacking. Tests first — these are silent-corruption bugs.
 3. `src/vtf/` — a `Blob`-backed unzip (never slurp the archive), safe paths, import, per
    [`04`](04-vtf-format.md).
@@ -111,33 +111,42 @@ Everything in [`05`](05-rendering.md), rendering imported data locally with no n
 
 Everything in [`06`](06-state-and-authority.md).
 
-1. `MatchState`, `Intent`, narrowed `Patch`; `MatchView.applyPatch` merging by kind.
+The DM's browser is the host in every launch mode; there is no server-authority module.
+
+1. `MatchState`, `Intent`, narrowed `Patch` (parked as an accept signal until KnockBox-Games#62).
 2. `rules.ts`: intent handling + permission policies. Illegal → `null`.
-3. `authority.ts`: `createAuthority`, snapshot projection (**active map full, others summarised**), DM succession.
-4. **The campaign-loading protocol** — chunked `beginImport`/`importChunk`/`commitImport`, plus
-   `requestMap` and the `{ kind: "map" }` patch
-   ([`06`](06-state-and-authority.md#getting-a-campaign-into-the-authority)). Without this an
-   imported campaign cannot reach the authority at all, and the naive version bricks the DM's
-   socket.
-5. `guardSize` + `utf8Length` + a snapshot-budget test sized to actually fail without narrowing.
-6. Wire the scene to controller events; render only confirmed state (fog preview excepted).
-7. `BlobShareAssetSource` over `IdbBlobTransport` — multiplayer art in `solo` and `local-tab`.
+3. `view.ts`: the host store — `MatchView.applyIntent` (clock = `Date.now()`), `snapshot(forPlayerId)`
+   = `projectForPlayer` (**active map full, others summarised**; hidden info stripped for non-DM
+   players), `applyLoaded`, `handlePlayerLeft`, and `setRoster` seeding `dmPlayerId` from the host.
+4. `authorityController.ts` over `kb-authority.js` with `perRecipient: true`: on every accepted
+   intent, roster change or host reconnect, each non-host player gets their own snapshot via
+   `sendTo`. Guests render `currentView`.
+5. **Loading a campaign is a direct apply** — re-`publish()` the image blobs, `view.applyLoaded`,
+   then `broadcastState`. No import protocol, no `requestMap`: the host already holds every map.
+6. **Freeze on DM leave** — the host leaving ends the lobby on every transport; no succession. A
+   non-DM leave converts their tokens/sheets to NPCs and clears combatant ownership.
+7. `guardSize` + `utf8Length` + a snapshot-budget test on the per-player projection
+   (`src/game/snapshotBudget.test.ts`).
+8. Wire the scene to controller events; render only confirmed state (fog preview excepted).
+9. `BlobShareAssetSource` over `IdbBlobTransport` — multiplayer art in `solo` and `local-tab`.
 
 **Done when:**
 - [ ] Two tabs via `?kbLocal=tab`: DM moves a token, the player sees it. (The DM is the tab you
-      opened **first** — that tab wins the election and lands at `players[0]`.)
+      opened **first** — that tab wins the election, becomes the host and lands at `roster[0]`.)
 - [ ] Fog painting syncs; the DM sees 0.45 opacity, the player 1.0.
 - [ ] A player cannot move a token they don't own under `OwnerOrHost`.
 - [ ] A forged intent from a non-DM is rejected (test it directly).
-- [ ] **A worst-case snapshot stays under 400 KB** — automated test, with a fixture large enough
-      that the un-narrowed `Patch = MatchState` version would *fail* it. 8 maps is only ~300 KB and
-      proves nothing; use ~24.
-- [ ] A large campaign imports through chunked intents, and no single frame approaches 512 KiB.
-- [ ] Switching to a summarised map fetches it via `requestMap` and renders fog/tokens correctly.
-- [ ] The platform's bench shows calls well inside the 250 ms budget — from a built
-      `KnockBox-Games` checkout: `KnockBox.Server --authority-bench <game-dir>`. It drives `tick` by
-      default and **exits non-zero when a call blows the budget**, so wire it into CI once fog and
-      token counts are realistic.
+- [ ] **A worst-case per-player snapshot stays under 400 KiB** — automated test with a
+      24-map / 50-sheet / 100-token campaign. 8 maps is only ~300 KB and proves nothing.
+- [ ] A hidden token, a fogged token the player does not own, and a redacted sheet field never
+      appear in that player's snapshot (the projection matrix tests).
+- [ ] Loading a large save applies directly on the host and every player converges on a fresh
+      snapshot.
+- [ ] Switching the active map sends each player the new active map in full.
+- [ ] Closing the DM's tab ends the session for every player — expected, not a bug.
+- [ ] At 16 seats, sustained drag / fog painting / `updateHostKeys` does not trip the 30 msg/s
+      limit on the DM's socket (measured against the real relay — the burst of 60 hides it in
+      short tests).
 - [ ] A late joiner receives full state; a reconnect within 60 s resumes.
 - [ ] Strict-JSON fidelity checks pass (no `undefined`, no `Date`).
 - [ ] **Local emulation:** the player tab sees map art via `IdbBlobTransport`. With `publish()`
@@ -154,7 +163,8 @@ Everything in [`07`](07-ui-shell.md). Largest surface, lowest risk.
 1. `<dndm-app>` shell; rails with resize/collapse; toolbar.
 2. Map list, layer panel, token panel, image inspector.
 3. Modals: confirm, map settings, permissions; toasts.
-4. Lobby view; DM gating on `isOwner` + `owner-changed`.
+4. Lobby view; DM gating on `state.dmPlayerId` vs the local player id (`isOwner` only for lobby
+   powers); a "waiting for DM" freeze overlay.
 5. Saves panel and `.vtf` import UI.
 
 **Done when:**
@@ -184,16 +194,17 @@ Each needs its own scope pass; do not treat this table as a plan.
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
 | **Phaser 4 APIs differ from 3.x** | Rework in phase 3 | Spike day one of phase 1; record findings in [`05`](05-rendering.md) |
-| **Snapshot exceeds 512 KiB** | Silent sync failure | Active-map-only snapshots; `guardSize`; automated budget test |
+| **Snapshot exceeds 512 KiB** | Silent sync failure | Active-map-only per-player snapshots; `guardSize`; automated budget test (`snapshotBudget.test.ts`). Per-recipient snapshots are not size-checked at send time today |
+| **Fan-out vs the 30 msg/s limit** | Each accepted intent is N−1 frames from the DM's socket; a 16-player table fits ~2 accepts/s, and a 1008 close on the DM ends the session | Measure at 16 seats against the real relay; coalesce high-rate intents host-side; the parked delta hook (KnockBox-Games#62) |
+| **The session dies with the DM** | A DM tab crash or close ends the lobby for everyone | Accepted ("freeze on DM leave"); saves are local and auto-saved, so the DM reloads and re-opens |
+| **A guest forges state frames to other guests** | A modified client could show another guest a fake view | Accepted ("DM trusted"); the answer is the lobby kick. Guests still cannot change the truth except through intents the host accepts |
 | **Phase 0 slips** | Platform multiplayer art delayed | `BlobTransport` seam; phases 1–4 unaffected, and art still works in `solo`/`local-tab` |
 | **Phase 0's coordination overruns** | The real schedule risk, not the server code | Start the `addons-v*` release early and in parallel; ship phaser + web only and defer Godot via `KNOWN_GODOT_GAPS` ([`09`](09-blob-share-server-spec.md#client-addon--the-expensive-half)) |
 | **Art works in dev, fails on the platform** | Structural, until phase 0 ships | Keep the `publish()`-removed placeholder check in every asset test pass |
-| **An imported campaign can't reach the authority** | Terminal: 1009 close, endless reconnect | The chunked import protocol, with a measured per-chunk budget ([`06`](06-state-and-authority.md#getting-a-campaign-into-the-authority)) |
 | **`.vtf` fidelity gaps** | Corrupt user data | Get a real file early; test cell-centre/corner and fog bit layout hard |
 | **Cell-vs-pixel confusion** | Silent half-cell offsets | Encode units in type names; assert in tests |
 | **`scrollX` mistaken for the top-left world coord** | Everything drifts, but only at zoom ≠ 1 | The zoom-1/4/10 assertion in phase 1; `applyViewport` is the only writer |
 | **Rotated-image origin mismatch** | Visible misplacement | Explicit acceptance check in phase 3 |
 | **Forgotten `publish()`** | Works in dev, fails in prod | Keep the local blob store separate from the DM's library ([`09`](09-blob-share-server-spec.md)) |
-| **New `src/game/` file escapes sandbox guards** | Production-only failure | Checklist item in every phase touching `src/game/` |
 | **Scope creep from the deferred 60%** | v1 never ships | D1 is the contract; new work goes to phase 6+ |
 | **Scoped-CSS volume underestimated** | Phase 5 overruns | 4,658 lines across 34 `.razor.css` files need de-scoping, not copying ([`07`](07-ui-shell.md#the-css-12-copies-88-is-work)); a third belongs to phase 6+ components and defers with them |

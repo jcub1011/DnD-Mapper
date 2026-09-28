@@ -1,7 +1,7 @@
 /*
  * Pure token domain helpers.
  *
- * Runs in the sandbox (no DOM, no Date, no Node).
+ * Pure (no DOM, no Date, no Node).
  */
 
 import type { GameMap, NewToken, Token } from "./domain.js";

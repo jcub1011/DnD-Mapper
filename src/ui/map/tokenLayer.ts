@@ -8,9 +8,9 @@ import Phaser from "phaser";
 import { DEPTH } from "./depth";
 import { CELL } from "./viewport";
 import type { CharacterSheet, GridConfig, Token } from "../../game/domain";
+import { decodeFog, isFogged, type FogMaskBytes } from "../../game/fog";
 import { TOKEN_RADIUS, TOKEN_OWNER_HALO_RADIUS, TOKEN_STACK_CHIP_RADIUS } from "../../game/domain";
 import { snapToken } from "../../game/snapping";
-import { isTokenVisibleToPlayer } from "../../game/visibility";
 import {
   groupTokensIntoStacks,
   getStackChipPositions,
@@ -23,6 +23,37 @@ export interface TokenDragEvent {
   tokenId: string;
   x: number;
   y: number;
+}
+
+/** Slide duration when another participant's move arrives. */
+const MOVE_TWEEN_MS = 250;
+/** Fade duration when a token leaves this viewer's projection (e.g. into fog). */
+const FADE_OUT_MS = 300;
+/** Fade duration when a token enters this viewer's projection (e.g. out of fog). */
+const FADE_IN_MS = 300;
+/** How long a local drop outranks updates still carrying the pre-drag position. */
+const PENDING_MOVE_TTL_MS = 1500;
+/** Cell-space tolerance for "same position" comparisons. */
+const POS_EPSILON = 1e-3;
+
+/** A drop this viewer made that the authority has not echoed back yet. */
+interface PendingLocalMove {
+  fromX: number;
+  fromY: number;
+  x: number;
+  y: number;
+  at: number;
+}
+
+interface DragState {
+  tokenId: string;
+  startX: number;
+  startY: number;
+  didDrag: boolean;
+}
+
+function samePos(ax: number, ay: number, bx: number, by: number): boolean {
+  return Math.abs(ax - bx) < POS_EPSILON && Math.abs(ay - by) < POS_EPSILON;
 }
 
 export class TokenLayer {
@@ -41,13 +72,39 @@ export class TokenLayer {
     lineColor: "#222",
   };
   private isDm = false;
-  private tweenMoves = false;
+  private viewerUserId: string | null = null;
+  private fogBytes: FogMaskBytes = new Uint8Array(0);
+  // Remote moves slide; the mover's own drops snap. A local drop is recorded
+  // here so the authority's echo (or a stale pre-drop update) never animates.
+  private readonly pendingLocalMoves = new Map<string, PendingLocalMove>();
+  // Running slides, keyed by token, with their world-space target so repeated
+  // rebuilds (sheets, turn ring) don't restart an in-flight slide.
+  private readonly moveTweens = new Map<
+    string,
+    { tween: Phaser.Tweens.Tween; x: number; y: number }
+  >();
+  // Drag state lives on the layer, not in listener closures: rebuildTokens
+  // replaces listeners, and a mid-drag rebuild must not lose it.
+  private activeDrag: DragState | null = null;
+  private activeChipDrag: DragState | null = null;
+  // Containers of tokens that left the list, fading out before destruction.
+  // Detached from tokenContainers so rebuilds and hit tests ignore them.
+  private readonly fadingOut = new Map<
+    string,
+    { container: Phaser.GameObjects.Container; tween: Phaser.Tweens.Tween }
+  >();
+  // Tokens that just entered the list, fading up to `alpha` (1, or the DM's
+  // hidden-token ghost). updateVisibility leaves their alpha to the tween.
+  private readonly fadingIn = new Map<string, { tween: Phaser.Tweens.Tween; alpha: number }>();
   private expandedStackCell: string | null = null;
   private activeTurnTokenId: string | null = null;
   // Client-side move gate. Mirrors the server's mayMoveToken decision for the
   // current user (wired from dndm-app via MapScene). Denied tokens render
   // click-only and never emit onTokenMoveEnd.
   private canMoveToken: (token: Token) => boolean = () => true;
+  // Sticky tool lock: while a map tool is selected, tokens stay
+  // non-interactive across rebuilds (setTokens on every state sync).
+  private interactionsEnabled = true;
 
   public onTokenMoveEnd?: (event: TokenDragEvent) => void;
   public onTokenDoubleClick?: (tokenId: string) => void;
@@ -81,12 +138,35 @@ export class TokenLayer {
     this.rebuildTokens();
   }
 
-  setTweenMoves(enabled: boolean): void {
-    this.tweenMoves = enabled;
-  }
-
   setGrid(grid: GridConfig): void {
     this.grid = grid;
+  }
+
+  /** Identity of the viewing player; fogged tokens they don't own are hidden. */
+  setViewerUserId(userId: string | null): void {
+    if (this.viewerUserId === userId) return;
+    this.viewerUserId = userId;
+    this.updateVisibility();
+  }
+
+  /** Current fog bitset (base64); empty means all-revealed. */
+  setFogMask(maskB64: string): void {
+    this.fogBytes = decodeFog(maskB64 ?? "");
+    this.updateVisibility();
+  }
+
+  /**
+   * Whether this token's cell is concealed from the current viewer: standing
+   * on fog while the viewer is neither DM nor owner (owner or represented
+   * user — NPC tokens with no owner are DM-only in fog).
+   */
+  private isFogConcealed(token: Token): boolean {
+    if (this.isDm) return false;
+    if (this.fogBytes.length === 0) return false;
+    if (!isFogged(this.fogBytes, this.grid, Math.floor(token.x), Math.floor(token.y))) {
+      return false;
+    }
+    return token.ownerUserId !== this.viewerUserId && token.representsUserId !== this.viewerUserId;
   }
 
   setSheets(sheets: Readonly<Record<string, CharacterSheet>>): void {
@@ -94,19 +174,23 @@ export class TokenLayer {
     this.rebuildTokens();
   }
 
-  setTokens(tokens: readonly Token[]): void {
+  /** Apply the token list. `animate: false` snaps every token (map switch,
+   *  context restore); otherwise other participants' moves slide. */
+  setTokens(tokens: readonly Token[], opts: { animate?: boolean } = {}): void {
     this.tokens = tokens;
-    this.rebuildTokens();
+    this.rebuildTokens(opts.animate ?? true);
   }
 
-  /** Tokens the current viewer may see. Players exclude hidden tokens so a
-   *  hidden stack-top never masks the visible tokens beneath it. */
+  /** Tokens to stack and render. Hiding is owned by host projection
+   *  (`projectForPlayer`): guests never receive hidden tokens. Fog concealment
+   *  is enforced server-side too, with `updateVisibility` re-checking it
+   *  client-side (covers patch races). The DM renders the full truth, with
+   *  hidden tokens ghosted in `updateVisibility`. */
   private visibleTokens(): readonly Token[] {
-    if (this.isDm) return this.tokens;
-    return this.tokens.filter((t) => isTokenVisibleToPlayer(t, false));
+    return this.tokens;
   }
 
-  /** Stacks built from viewer-visible tokens only, plus a cell-key lookup. */
+  /** Stacks built from the projected tokens, plus a cell-key lookup. */
   private stacksForViewer(): { stacks: TokenStack[]; byCell: Map<string, TokenStack> } {
     const stacks = groupTokensIntoStacks(this.visibleTokens());
     const byCell = new Map<string, TokenStack>();
@@ -155,74 +239,102 @@ export class TokenLayer {
       const stack = byCell.get(this.cellKeyOf(token));
       const isStackedBehind =
         stack !== undefined && stack.tokens.length > 1 && stack.tokens[0].id !== token.id;
+      // A token sliding onto an occupied cell stays visible until it lands;
+      // the slide's onComplete re-runs this to settle the stack.
+      const isSliding = this.moveTweens.has(token.id);
 
-      if (isStackedBehind) {
+      if (isSliding && !token.hidden && !this.isFogConcealed(token)) {
+        container.setVisible(true);
+        this.applyAlpha(token.id, container, 1.0);
+      } else if (isStackedBehind) {
         container.setVisible(false);
       } else if (!topVisibleById.has(token.id)) {
-        // Hidden from this viewer (players only — DM sees everything).
+        // Stacked behind another token — hidden regardless of viewer.
+        container.setVisible(false);
+      } else if (this.isFogConcealed(token)) {
+        // Standing on fog the viewer neither DMs nor owns: concealed.
+        // (Server projection already strips these for guests; this covers
+        // the host DM's own view state and any race between patches.)
         container.setVisible(false);
       } else if (token.hidden) {
-        // DM-only branch: DM sees hidden tokens ghosted.
+        // DM-only branch: the DM renders the full truth, so hidden tokens
+        // arrive here and render ghosted. Guests never receive them.
         container.setVisible(true);
-        container.setAlpha(0.5);
+        this.applyAlpha(token.id, container, 0.5);
       } else {
         container.setVisible(true);
-        container.setAlpha(1.0);
+        this.applyAlpha(token.id, container, 1.0);
       }
     }
   }
 
-  private rebuildTokens(): void {
+  /** Set a token's resting alpha, deferring to a fade-in already headed there. */
+  private applyAlpha(
+    tokenId: string,
+    container: Phaser.GameObjects.Container,
+    alpha: number,
+  ): void {
+    const fading = this.fadingIn.get(tokenId);
+    if (fading) {
+      if (fading.alpha === alpha) return;
+      this.stopFadeIn(tokenId);
+    }
+    container.setAlpha(alpha);
+  }
+
+  private rebuildTokens(animate = true): void {
+    if (!animate) {
+      for (const id of [...this.fadingOut.keys()]) this.cancelFadeOut(id);
+      for (const id of [...this.fadingIn.keys()]) this.stopFadeIn(id);
+    }
+
     // Remove obsolete containers
     const activeIds = new Set(this.tokens.map((t) => t.id));
     for (const [id, container] of this.tokenContainers.entries()) {
       if (!activeIds.has(id)) {
-        container.destroy(true);
+        this.stopMoveTween(id);
+        // Leaving mid-fade-in: fade out from wherever the fade-in got to.
+        this.stopFadeIn(id);
+        this.pendingLocalMoves.delete(id);
+        if (this.activeDrag?.tokenId === id) this.activeDrag = null;
         this.tokenContainers.delete(id);
+        if (animate) this.fadeOutAndDestroy(id, container);
+        else container.destroy(true);
       }
     }
 
     const { byCell: stackMap } = this.stacksForViewer();
+    const entered: string[] = [];
 
     for (const token of this.tokens) {
       let container = this.tokenContainers.get(token.id);
       const isNew = !container;
-      const targetX = token.x * CELL;
-      const targetY = token.y * CELL;
 
       if (isNew) {
-        container = this.scene.add.container(targetX, targetY);
+        if (animate) entered.push(token.id);
+        // Back in view before its fade finished: drop the ghost outright.
+        this.cancelFadeOut(token.id);
+        container = this.scene.add.container(token.x * CELL, token.y * CELL);
         container.setDepth(DEPTH.TOKENS);
         this.tokenContainers.set(token.id, container);
+        this.pendingLocalMoves.delete(token.id);
       } else {
         container!.removeAll(true);
         // Drop stale input listeners from the previous build; otherwise every
         // setTokens() accumulates duplicate DRAG_END handlers with stale
         // closures that fight over the container position.
         container!.removeAllListeners();
-        if (
-          this.tweenMoves &&
-          this.scene.tweens &&
-          (Math.abs(container!.x - targetX) > 1 || Math.abs(container!.y - targetY) > 1)
-        ) {
-          this.scene.tweens.killTweensOf(container!);
-          this.scene.tweens.add({
-            targets: container!,
-            x: targetX,
-            y: targetY,
-            duration: 250,
-            ease: "Quad.easeOut",
-          });
-        } else {
-          container!.setPosition(targetX, targetY);
-        }
+        this.positionContainer(container!, token, animate);
       }
 
       const cellKey = this.cellKeyOf(token);
       const stack = stackMap.get(cellKey);
       this.populateTokenContainer(container!, token, {
-        draggable: this.isDirectlyMovable(token, stack),
+        draggable: this.interactionsEnabled && this.isDirectlyMovable(token, stack),
       });
+      if (!this.interactionsEnabled) {
+        container!.disableInteractive();
+      }
 
       // Add stack count badge if multiple *visible* tokens share this cell
       if (stack && stack.tokens.length > 1 && stack.tokens[0].id === token.id) {
@@ -234,6 +346,8 @@ export class TokenLayer {
     }
 
     this.updateVisibility();
+    // After updateVisibility, so each fade targets the token's resting alpha.
+    for (const id of entered) this.fadeIn(id);
 
     // If active popover is open, update or close it
     if (this.expandedStackCell) {
@@ -244,6 +358,147 @@ export class TokenLayer {
         this.closePopover();
       }
     }
+  }
+
+  /**
+   * Move an existing container to its token's position. Other participants'
+   * moves slide; this viewer's own drops snap (the container already sits at
+   * the drop point), and a container under the pointer is left alone.
+   */
+  private positionContainer(
+    container: Phaser.GameObjects.Container,
+    token: Token,
+    animate: boolean,
+  ): void {
+    if (this.activeDrag?.tokenId === token.id) return;
+
+    const targetX = token.x * CELL;
+    const targetY = token.y * CELL;
+
+    const pending = this.pendingLocalMoves.get(token.id);
+    if (pending) {
+      const isStale =
+        !samePos(token.x, token.y, pending.x, pending.y) &&
+        samePos(token.x, token.y, pending.fromX, pending.fromY) &&
+        Date.now() - pending.at < PENDING_MOVE_TTL_MS;
+      this.stopMoveTween(token.id);
+      if (isStale) {
+        // Update sent before the authority applied our move: hold the drop.
+        container.setPosition(pending.x * CELL, pending.y * CELL);
+        return;
+      }
+      // Our move echoed back (possibly re-snapped by the host), was
+      // superseded, or timed out: adopt the authoritative position instantly.
+      this.pendingLocalMoves.delete(token.id);
+      container.setPosition(targetX, targetY);
+      return;
+    }
+
+    const running = this.moveTweens.get(token.id);
+    if (running && running.x === targetX && running.y === targetY) return;
+    this.stopMoveTween(token.id);
+
+    const moved = Math.abs(container.x - targetX) > 1 || Math.abs(container.y - targetY) > 1;
+    if (!animate || !moved || !this.scene.tweens) {
+      container.setPosition(targetX, targetY);
+      return;
+    }
+
+    const tween = this.scene.tweens.add({
+      targets: container,
+      x: targetX,
+      y: targetY,
+      duration: MOVE_TWEEN_MS,
+      ease: "Quad.easeOut",
+      onComplete: () => {
+        if (this.moveTweens.get(token.id)?.tween !== tween) return;
+        this.moveTweens.delete(token.id);
+        this.updateVisibility();
+      },
+    });
+    this.moveTweens.set(token.id, { tween, x: targetX, y: targetY });
+  }
+
+  private stopMoveTween(tokenId: string): void {
+    const running = this.moveTweens.get(tokenId);
+    if (!running) return;
+    this.moveTweens.delete(tokenId);
+    running.tween.stop();
+  }
+
+  /**
+   * Fade out a token that left this viewer's list, then destroy it. The host
+   * strips tokens that move into fog (or are hidden/deleted), so this is the
+   * only signal the viewer gets; the fade happens where the token was last
+   * seen and never slides toward where it went.
+   */
+  private fadeOutAndDestroy(tokenId: string, container: Phaser.GameObjects.Container): void {
+    if (!container.visible || !this.scene.tweens) {
+      container.destroy(true);
+      return;
+    }
+    container.disableInteractive();
+    container.removeAllListeners();
+    const tween = this.scene.tweens.add({
+      targets: container,
+      alpha: 0,
+      duration: FADE_OUT_MS,
+      ease: "Quad.easeIn",
+      onComplete: () => {
+        if (this.fadingOut.get(tokenId)?.container === container) this.fadingOut.delete(tokenId);
+        container.destroy(true);
+      },
+    });
+    this.fadingOut.set(tokenId, { container, tween });
+  }
+
+  private cancelFadeOut(tokenId: string): void {
+    const fading = this.fadingOut.get(tokenId);
+    if (!fading) return;
+    this.fadingOut.delete(tokenId);
+    fading.tween.stop();
+    fading.container.destroy(true);
+  }
+
+  /**
+   * Fade in a token that just entered this viewer's list (out of fog,
+   * unhidden, or added). It appears in place at its new position; tokens
+   * that enter hidden behind a stack simply show up when they surface.
+   */
+  private fadeIn(tokenId: string): void {
+    const container = this.tokenContainers.get(tokenId);
+    if (!container || !container.visible || !this.scene.tweens) return;
+    const alpha = container.alpha;
+    container.setAlpha(0);
+    const tween = this.scene.tweens.add({
+      targets: container,
+      alpha,
+      duration: FADE_IN_MS,
+      ease: "Quad.easeOut",
+      onComplete: () => {
+        if (this.fadingIn.get(tokenId)?.tween === tween) this.fadingIn.delete(tokenId);
+      },
+    });
+    this.fadingIn.set(tokenId, { tween, alpha });
+  }
+
+  private stopFadeIn(tokenId: string): void {
+    const fading = this.fadingIn.get(tokenId);
+    if (!fading) return;
+    this.fadingIn.delete(tokenId);
+    fading.tween.stop();
+  }
+
+  /** Record and emit a drop made by this viewer. */
+  private commitLocalMove(token: Token, x: number, y: number): void {
+    this.pendingLocalMoves.set(token.id, {
+      fromX: token.x,
+      fromY: token.y,
+      x,
+      y,
+      at: Date.now(),
+    });
+    this.onTokenMoveEnd?.({ tokenId: token.id, x, y });
   }
 
   private populateTokenContainer(
@@ -310,8 +565,12 @@ export class TokenLayer {
 
     // Hit Area & Interactivity. Stacked tops and tokens the viewer may not
     // move are click-only (open popover / sheet); singles the viewer may move
-    // are draggable.
+    // are draggable. While a tool is selected everything is fully disabled.
     container.setSize(radius * 2, radius * 2);
+    if (!this.interactionsEnabled) {
+      container.disableInteractive();
+      return;
+    }
     this.applyDraggable(container, opts.draggable);
 
     this.setupContainerInput(container, token, opts);
@@ -340,6 +599,7 @@ export class TokenLayer {
 
   /** Shared click behavior: toggle the stack popover for multi-token stacks. */
   private handleTokenClick(token: Token): void {
+    if (!this.interactionsEnabled) return;
     const cellKey = this.cellKeyOf(token);
     if (this.expandedStackCell === cellKey) {
       this.closePopover();
@@ -353,6 +613,7 @@ export class TokenLayer {
   }
 
   private openTokenSheet(tokenId: string, sheetId: string | null): void {
+    if (!this.interactionsEnabled) return;
     this.onTokenDoubleClick?.(tokenId);
     if (sheetId) {
       window.dispatchEvent(
@@ -388,11 +649,13 @@ export class TokenLayer {
     token: Token,
     opts: { draggable: boolean },
   ): void {
+    if (!this.interactionsEnabled) return;
     if (!opts.draggable) {
       // Click-only token (stack top or no move permission): single click
       // toggles the stack popover, double-click opens the sheet.
       let lastClickTime = 0;
       container.on(Phaser.Input.Events.POINTER_UP, () => {
+        if (!this.interactionsEnabled) return;
         const now = Date.now();
         if (now - lastClickTime < 350) {
           this.openTokenSheet(token.id, token.sheetId);
@@ -405,21 +668,27 @@ export class TokenLayer {
     }
 
     let lastClickTime = 0;
-    let didDrag = false;
-    let dragStartX = 0;
-    let dragStartY = 0;
 
     container.on(Phaser.Input.Events.DRAG_START, (_pointer: Phaser.Input.Pointer) => {
-      didDrag = false;
-      dragStartX = container.x;
-      dragStartY = container.y;
+      if (!this.interactionsEnabled) return;
+      // Grabbing a token mid-slide takes over from the slide.
+      this.stopMoveTween(token.id);
+      this.activeDrag = {
+        tokenId: token.id,
+        startX: container.x,
+        startY: container.y,
+        didDrag: false,
+      };
     });
 
     container.on(
       Phaser.Input.Events.DRAG,
       (_pointer: Phaser.Input.Pointer, dragX: number, dragY: number) => {
-        if (Math.hypot(dragX - dragStartX, dragY - dragStartY) > 3) {
-          didDrag = true;
+        if (!this.interactionsEnabled) return;
+        const drag = this.activeDrag;
+        if (drag?.tokenId !== token.id) return;
+        if (Math.hypot(dragX - drag.startX, dragY - drag.startY) > 3) {
+          drag.didDrag = true;
           this.closePopover();
         }
         container.setPosition(dragX, dragY);
@@ -427,7 +696,10 @@ export class TokenLayer {
     );
 
     container.on(Phaser.Input.Events.DRAG_END, (pointer: Phaser.Input.Pointer) => {
-      if (!didDrag) {
+      const drag = this.activeDrag;
+      if (drag?.tokenId === token.id) this.activeDrag = null;
+      if (!this.interactionsEnabled) return;
+      if (!drag?.didDrag) {
         // Handle click / stack toggle / double click
         const now = Date.now();
         if (now - lastClickTime < 350) {
@@ -444,17 +716,14 @@ export class TokenLayer {
       const finalPos = this.resolveDrop(container, pointer);
 
       container.setPosition(finalPos.x * CELL, finalPos.y * CELL);
-      this.onTokenMoveEnd?.({
-        tokenId: token.id,
-        x: finalPos.x,
-        y: finalPos.y,
-      });
+      this.commitLocalMove(token, finalPos.x, finalPos.y);
     });
   }
 
   // ── Stack Popover & Chips Fan-out ──────────────────────────────────────────
 
   openPopover(stack: TokenStack): void {
+    if (!this.interactionsEnabled) return;
     this.expandedStackCell = `${stack.cell.cellX},${stack.cell.cellY}`;
     this.renderPopover(stack);
   }
@@ -466,6 +735,10 @@ export class TokenLayer {
   }
 
   private renderPopover(stack: TokenStack): void {
+    if (!this.interactionsEnabled) {
+      this.closePopover();
+      return;
+    }
     this.popoverContainer.removeAll(true);
     this.popoverGfx.clear();
 
@@ -515,40 +788,52 @@ export class TokenLayer {
         chipContainer.add(txt);
       }
 
-      const movable = this.canMoveToken(t);
+      const movable = this.interactionsEnabled && this.canMoveToken(t);
       if (!movable) chipContainer.setAlpha(0.65);
       chipContainer.setSize(chipRadius * 2, chipRadius * 2);
       this.applyDraggable(chipContainer, movable);
       chipContainer.setData("tokenChipId", t.id);
 
       if (movable) {
-        let didChipDrag = false;
-        let chipStartX = 0;
-        let chipStartY = 0;
         chipContainer.on(Phaser.Input.Events.DRAG_START, () => {
-          didChipDrag = false;
-          chipStartX = chipContainer.x;
-          chipStartY = chipContainer.y;
+          if (!this.interactionsEnabled) return;
+          this.activeChipDrag = {
+            tokenId: t.id,
+            startX: chipContainer.x,
+            startY: chipContainer.y,
+            didDrag: false,
+          };
         });
         chipContainer.on(
           Phaser.Input.Events.DRAG,
           (_pointer: Phaser.Input.Pointer, dragX: number, dragY: number) => {
-            if (Math.hypot(dragX - chipStartX, dragY - chipStartY) > 3) {
-              didChipDrag = true;
+            if (!this.interactionsEnabled) return;
+            const drag = this.activeChipDrag;
+            if (drag?.tokenId !== t.id) return;
+            if (Math.hypot(dragX - drag.startX, dragY - drag.startY) > 3) {
+              drag.didDrag = true;
             }
             chipContainer.setPosition(dragX, dragY);
           },
         );
         chipContainer.on(Phaser.Input.Events.DRAG_END, (pointer: Phaser.Input.Pointer) => {
-          if (!didChipDrag) return;
+          const drag = this.activeChipDrag;
+          if (drag?.tokenId === t.id) this.activeChipDrag = null;
+          if (!this.interactionsEnabled) return;
+          if (!drag?.didDrag) return;
           const finalPos = this.resolveDrop(chipContainer, pointer);
-          this.onTokenMoveEnd?.({ tokenId: t.id, x: finalPos.x, y: finalPos.y });
+          // Park the map container at the drop now so the authority's echo
+          // snaps in place rather than sliding out of the stack.
+          this.stopMoveTween(t.id);
+          this.tokenContainers.get(t.id)?.setPosition(finalPos.x * CELL, finalPos.y * CELL);
+          this.commitLocalMove(t, finalPos.x, finalPos.y);
           this.closePopover();
         });
       }
 
       let lastChipClick = 0;
       chipContainer.on(Phaser.Input.Events.POINTER_UP, () => {
+        if (!this.interactionsEnabled) return;
         const now = Date.now();
         if (now - lastChipClick < 350) {
           this.openTokenSheet(t.id, t.sheetId);
@@ -561,27 +846,20 @@ export class TokenLayer {
   }
 
   setInteractiveState(enabled: boolean): void {
+    this.interactionsEnabled = enabled;
     if (!enabled) {
+      // Disabling input mid-drag drops the gesture without a DRAG_END.
+      this.activeDrag = null;
+      this.activeChipDrag = null;
       for (const container of this.tokenContainers.values()) {
         container.disableInteractive();
       }
       this.closePopover();
       return;
     }
-    // Re-apply the per-token policy (stack tops stay click-only).
-    const { byCell } = this.stacksForViewer();
-    const byId = new Map(this.tokens.map((t) => [t.id, t] as const));
-    for (const [id, container] of this.tokenContainers.entries()) {
-      const token = byId.get(id);
-      if (!token) {
-        container.disableInteractive();
-        continue;
-      }
-      this.applyDraggable(
-        container,
-        this.isDirectlyMovable(token, byCell.get(this.cellKeyOf(token))),
-      );
-    }
+    // Rebuilds while locked strip container listeners without re-attaching
+    // them; a full rebuild restores the per-token policy and its listeners.
+    this.rebuildTokens();
   }
 
   /** True when the game object belongs to this layer (map token or popover chip). */
@@ -600,6 +878,12 @@ export class TokenLayer {
   }
 
   destroy(): void {
+    for (const id of [...this.moveTweens.keys()]) this.stopMoveTween(id);
+    for (const id of [...this.fadingOut.keys()]) this.cancelFadeOut(id);
+    for (const id of [...this.fadingIn.keys()]) this.stopFadeIn(id);
+    this.pendingLocalMoves.clear();
+    this.activeDrag = null;
+    this.activeChipDrag = null;
     this.closePopover();
     this.popoverGfx.destroy();
     this.popoverContainer.destroy(true);

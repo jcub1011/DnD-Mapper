@@ -1,7 +1,8 @@
 /*
- * Root application shell for D&D Mapper. A pure VIEW over the replicated match
- * state: it renders what the authority published and turns clicks into intents.
- * It never computes game state — that lives in src/authority/, which the server runs.
+ * Root application shell for D&D Mapper. A pure VIEW over the match state: it
+ * renders what the controller exposes (the host's truth on the DM's browser, the
+ * per-player projection on guests) and turns clicks into intents. It never
+ * computes game state — the host store (src/game/view.ts) and rules do.
  *
  * Replaces the template's <game-app> and implements Phase 5 UI Shell (07-ui-shell.md).
  */
@@ -15,6 +16,7 @@ import type { DndmImageUpload } from "../upload/dndm-image-upload";
 import {
   createDefaultDndMapperState,
   isFullMap,
+  sortImagesByLayer,
   type AttributePreset,
   type AttributeValue,
   type GameMap,
@@ -25,18 +27,14 @@ import {
   type Token,
 } from "../../game/domain";
 import type { Intent, MatchState } from "../../game/types";
-import {
-  buildCampaignHeader,
-  hasCampaignContent,
-  sendChunkedImport,
-} from "../../game/campaignImport";
+import { hasCampaignContent } from "../../game/campaignImport";
 import { AUTO_SLOT_ID, AUTO_SLOT_NAME } from "../../storage/schema";
 import { createLogger } from "../../log";
 import type { GameController } from "../../net/controller";
 import type { LaunchMode } from "../../net/launch";
 import { LibraryService } from "../../storage/libraryService";
 import { fx } from "../fx/fx";
-import { fullscreenExitIcon, fullscreenIcon, gearIcon, lockIcon } from "../icons";
+import { gearIcon, lockIcon } from "../icons";
 import type { MapScene, ToolMode } from "../map/MapScene";
 import { CELL } from "../map/viewport";
 import { toDisplayRoster } from "../roster";
@@ -66,10 +64,11 @@ import "../panels/dndm-token-rail";
 import "../toast/dndm-toast";
 import "../upload/dndm-image-upload";
 import "../markup/dndm-markup-overlay";
-import "../display/dndm-display-roll-ticker";
+import "../display/dndm-display-popout-view";
 import "../panels/dndm-sheet-popout-view";
 import { parseSheetPopoutParams } from "../panels/sheetPopout";
-import { filterDisplayImages, filterDisplayTokens } from "../display/displayProjection";
+import { DisplayPopoutHost, isDisplayPopoutSearch } from "../display/displayPopout";
+import { projectForPlayer } from "../../game/rules";
 import { resolveActiveTurnTokenId } from "../../game/combat";
 import { canMoveToken } from "../../game/visibility";
 import { getReadableTextColor, resolveDiceColor, resolveDiceColorForToken } from "../../game/color";
@@ -170,8 +169,9 @@ export class DndmApp extends GameElement {
   @state() private rollHistoryOpen = false;
   @state() private diceSoundEnabled = false;
   @state() private diceScale: number = loadDiceScale(DEFAULT_DICE_SCALE);
-  @state() private projectorMode =
-    typeof window !== "undefined" && window.location?.search?.includes("view=display");
+  /** Projector popout window (`?view=display`): map-only client of the DM window. */
+  private readonly isDisplayPopout =
+    typeof window !== "undefined" && isDisplayPopoutSearch(window.location?.search ?? "");
 
   /**
    * Whole-character-sheet popout (`?view=sheet&sheetId=<id>`). Renders only the
@@ -185,23 +185,13 @@ export class DndmApp extends GameElement {
   private seenRollIds = new Set<string>();
   // Save-loaded announcements already toasted (ids are import tokens).
   private seenAnnouncementIds = new Set<string>();
-  // Boot auto-restore prompt state. The check runs once per session, only for
-  // the DM, and only after the lobby has started (phase Playing).
+  // Boot auto-restore prompt state. The check runs once per session for the
+  // DM: if the `__auto__` slot holds a campaign at boot, it is staged for the
+  // restore prompt. No lobby-phase coupling and no live-state comparison —
+  // guests never prompt (not DM), and the offer is declinable.
   private autoRestoreChecked = false;
-  // Whether the live session was still empty when the first authority state
-  // arrived. Recorded once: a fresh boot starts empty, while a multiplayer
-  // join's first snapshot already carries the room's campaign — those must
-  // never be offered a local auto-save restore.
-  private bootLiveWasEmpty: boolean | null = null;
   @state() private autoRestoreCandidate: MatchState | null = null;
-  /**
-   * In-flight `requestMap` fetches for maps currently held as summaries.
-   * The live snapshot projects inactive maps to MapSummary (bandwidth cap),
-   * so the DM converges to full data by requesting each missing map once;
-   * entries clear when the full `map` patch arrives (see requestMissingMaps).
-   */
-  private readonly pendingMapFetches = new Set<string>();
-  private displaySyncChannel?: BroadcastChannel;
+  private displayPopoutHost?: DisplayPopoutHost;
   // MapScene instance the canvas callbacks are wired to. Phaser boots
   // asynchronously, so attach() can run before fx.map() exists — wiring is
   // (re)attempted on every state change and frame until it sticks.
@@ -224,46 +214,43 @@ export class DndmApp extends GameElement {
     }
   };
 
-  private readonly onEscapeKey = (e: KeyboardEvent): void => {
-    if (e.key === "Escape" && this.projectorMode) {
-      this.toggleProjectorMode();
-    }
-  };
-
   override connectedCallback(): void {
     super.connectedCallback();
-    // Sheet popouts never touch the controller, map, or library — the
-    // <dndm-sheet-popout-view> owns its sync channel.
-    if (this.sheetPopoutParams.isSheetPopout) return;
+    // Popouts never touch the controller or library — the
+    // <dndm-sheet-popout-view> / <dndm-display-popout-view> own their sync.
+    if (this.sheetPopoutParams.isSheetPopout || this.isDisplayPopout) return;
     document.addEventListener("click", this.onGlobalPanelCollapseClick);
     window.addEventListener("dndm-open-sheet", this.onOpenSheet);
-    window.addEventListener("keydown", this.onEscapeKey);
     window.addEventListener("pagehide", this.onPageHide);
     diceOverlay.setDiceScale(this.diceScale);
     void this.libraryService.attach();
 
-    if (typeof BroadcastChannel !== "undefined") {
-      this.displaySyncChannel = new BroadcastChannel("dndm-display-sync");
-      this.displaySyncChannel.onmessage = (event: MessageEvent) => {
-        if (event.data?.type === "state-sync" && this.projectorMode) {
-          this.onStateChanged(event.data.state);
-        }
-      };
-    }
+    this.displayPopoutHost = new DisplayPopoutHost({
+      // The authority's own player projection: hidden tokens/images, fogged
+      // tokens and secret rolls never leave this window.
+      getSnapshot: () => ({
+        state: projectForPlayer(this.hostTruth, null),
+        roster: this.roster.map((p) => ({ id: p.id, displayName: p.displayName })),
+      }),
+      resolveAsset: async (imageId) => {
+        const url = await this.assetSource.resolve(imageId);
+        if (!url) return null;
+        const res = await fetch(url);
+        return res.ok ? await res.blob() : null;
+      },
+    });
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     document.removeEventListener("click", this.onGlobalPanelCollapseClick);
     window.removeEventListener("dndm-open-sheet", this.onOpenSheet);
-    window.removeEventListener("keydown", this.onEscapeKey);
     window.removeEventListener("pagehide", this.onPageHide);
     window.removeEventListener("pointermove", this.onWindowPointerMove);
     window.removeEventListener("pointerup", this.onWindowPointerUp);
     window.removeEventListener("pointercancel", this.onWindowPointerUp);
-    this.displaySyncChannel?.close();
+    this.displayPopoutHost?.dispose();
     cancelAnimationFrame(this.rafId);
-    this.pendingMapFetches.clear();
     this.controller?.destroy();
     this.hostInputTracker?.destroy();
     void this.libraryService.detach();
@@ -281,9 +268,8 @@ export class DndmApp extends GameElement {
   /** Attach the controller main.ts built. Safe to call once. */
   attach(controller: GameController): void {
     void this.libraryService.attach();
-    this.pendingMapFetches.clear();
     this.controller = controller;
-    this.match = controller.view.state;
+    this.match = controller.state;
     this.seenRollIds = new Set((this.match.rollLog ?? []).map((r) => r.id));
     this.isOwner = controller.isOwner;
     this.assetSource = createAssetSource(
@@ -332,9 +318,9 @@ export class DndmApp extends GameElement {
       } else {
         this.hostInputTracker?.detach();
       }
-      // Ownership just resolved after the lobby started: if live state already
-      // arrived, this is the moment the auto-restore check can run for the DM.
-      if (!this.autoRestoreChecked && this.match.phase === "Playing") {
+      // Ownership just resolved: this is a moment the boot auto-restore check
+      // can run for the DM (no lobby-phase coupling — see maybeOfferAutoRestore).
+      if (!this.autoRestoreChecked) {
         void this.maybeOfferAutoRestore();
       }
     });
@@ -342,6 +328,10 @@ export class DndmApp extends GameElement {
     this.wireMapScene();
     this.rafId = requestAnimationFrame(this.frame);
     log.info(`controller attached (launch=${this.launchMode})`);
+    // Boot-local auto-restore check: offer the `__auto__` slot if it holds a
+    // campaign. One-shot via autoRestoreChecked; safe to attempt here even if
+    // ownership hasn't resolved yet (the roster hook retries).
+    void this.maybeOfferAutoRestore();
   }
 
   private initRailWidths(): void {
@@ -356,6 +346,19 @@ export class DndmApp extends GameElement {
       return this.match.dmPlayerId === me;
     }
     return this.isOwner;
+  }
+
+  /**
+   * Full host truth for persistence. The rendered `match` may be a projection
+   * (bandwidth snapshot / per-player view); saves must capture complete
+   * campaigns, so the save/load path always uses the controller's host state
+   * when available. On the host this is the live truth; the summary-guard in
+   * `saveSlotInternal` remains as a backstop, not the routine path.
+   */
+  private get hostTruth(): Readonly<MatchState> {
+    // Only the host's store holds truth; a guest's MatchView is never fed and
+    // stays the empty default, so guests fall back to what they render.
+    return this.controller?.isHost ? this.controller.view.state : this.match;
   }
 
   private updateRailCssVars(): void {
@@ -638,6 +641,7 @@ export class DndmApp extends GameElement {
 
     map.setDm(this.isDm);
     map.setAssetSource(this.assetSource);
+    map.setViewerUserId(this.controller?.playerId ?? null);
     this.updateTokenMovePolicy();
 
     const activeMap = this.activeMap;
@@ -672,15 +676,7 @@ export class DndmApp extends GameElement {
     map.setTokenMovePolicy((token) => canMoveToken(state, me, token));
   }
 
-  private toggleProjectorMode(): void {
-    this.projectorMode = !this.projectorMode;
-    this.onStateChanged(this.match);
-  }
-
   private onStateChanged(state: Readonly<MatchState>): void {
-    if (this.controller && this.bootLiveWasEmpty === null && !this.projectorMode) {
-      this.bootLiveWasEmpty = !hasCampaignContent(state);
-    }
     const prevRollLog = this.match?.rollLog ?? [];
     const prevMapId = this.match.activeMapId;
     this.match = state;
@@ -689,80 +685,32 @@ export class DndmApp extends GameElement {
     // and pushing rail insets / policy before applying this state.
     this.wireMapScene();
 
-    if (this.displaySyncChannel && !this.projectorMode) {
-      try {
-        this.displaySyncChannel.postMessage({ type: "state-sync", state });
-      } catch {
-        // channel could be closed
-      }
-    }
+    this.displayPopoutHost?.push();
 
     const map = fx.map();
     if (map) {
       const activeMap = this.activeMap;
       if (activeMap) {
-        if (this.projectorMode) {
-          map.setProjectorMode(true);
-          const displayTokens = filterDisplayTokens(
-            activeMap.tokens,
-            activeMap.fogMask,
-            activeMap.grid,
-          );
-          const displayImages = filterDisplayImages(
-            activeMap.images,
-            activeMap.fogMask,
-            activeMap.grid,
-          );
-          if (prevMapId !== activeMap.id) {
-            map.setMap(
-              { ...activeMap, tokens: displayTokens, images: displayImages },
-              false,
-              this.assetSource,
-            );
-            map.updateSheets(state.sheets);
-          } else {
-            map.updateGrid(activeMap.grid);
-            map.updateTokens(displayTokens);
-            map.updateImages(displayImages);
-            map.updateSheets(state.sheets);
-            if (activeMap.fogMask) {
-              map.updateFog(activeMap.fogMask);
-            }
-            map.updateMarkup(activeMap.markupSvg ?? null);
-          }
-          if (state.focusRect) {
-            map.frameBox(state.focusRect);
-          } else {
-            map.frameBox({
-              x: 0,
-              y: 0,
-              width: activeMap.grid.widthCells,
-              height: activeMap.grid.heightCells,
-            });
-          }
+        if (prevMapId !== activeMap.id) {
+          map.setMap(activeMap, this.isDm, this.assetSource);
+          map.updateSheets(state.sheets);
         } else {
-          map.setProjectorMode(false);
-          if (prevMapId !== activeMap.id) {
-            map.setMap(activeMap, this.isDm, this.assetSource);
-            map.updateSheets(state.sheets);
-          } else {
-            map.updateGrid(activeMap.grid);
-            map.updateTokens(activeMap.tokens);
-            map.updateImages(activeMap.images);
-            map.updateSheets(state.sheets);
-            if (activeMap.fogMask) {
-              map.updateFog(activeMap.fogMask);
-            }
-            map.updateMarkup(activeMap.markupSvg ?? null);
-          }
+          map.updateGrid(activeMap.grid);
+          map.updateTokens(activeMap.tokens);
+          map.updateImages(activeMap.images);
+          map.updateSheets(state.sheets);
+          // Always apply — an empty mask is a real state (all revealed)
+          // that must clear the texture, not be skipped.
+          map.updateFog(activeMap.fogMask ?? "");
+          map.updateMarkup(activeMap.markupSvg ?? null);
         }
       }
       map.setActiveTurnTokenId(resolveActiveTurnTokenId(state.activeCombat));
       map.setFocusRect(state.focusRect);
+      map.setViewerUserId(this.controller?.playerId ?? null);
       this.updateTokenMovePolicy();
 
       if (
-        !this.projectorMode &&
         state.pendingCenterRequest &&
         state.pendingCenterRequest.nonce !== this.lastCenterNonce
       ) {
@@ -772,10 +720,10 @@ export class DndmApp extends GameElement {
     }
 
     if (this.isDm) {
-      this.libraryService.onStateChanged(state);
-      this.requestMissingMaps(state);
+      // Autosave persists the full host truth, not the rendered (possibly
+      // projected) match — save-after-load stays complete for unvisited maps.
+      this.libraryService.onStateChanged(this.hostTruth);
     }
-
     if (this.isDm && state.settings.loadedDiceEnabled) {
       this.hostInputTracker?.attach();
     } else {
@@ -792,30 +740,27 @@ export class DndmApp extends GameElement {
     for (const roll of newRolls) {
       this.seenRollIds.add(roll.id);
 
-      const isVisible =
-        this.isDm ||
-        state.settings.rollsVisibleToPlayers ||
-        roll.rollerUserId === this.controller?.playerId;
+      // Roll visibility is owned by host projection (`projectForPlayer`):
+      // guests only ever receive rolls they may see, so every new roll in
+      // the replicated log animates.
+      const diceColor = roll.tokenId
+        ? resolveDiceColorForToken(state, roll.tokenId)
+        : resolveDiceColor(state, roll.rollerUserId, this.roster);
+      const fontColor = getReadableTextColor(diceColor);
 
-      if (isVisible) {
-        const diceColor = roll.tokenId
-          ? resolveDiceColorForToken(state, roll.tokenId)
-          : resolveDiceColor(state, roll.rollerUserId, this.roster);
-        const fontColor = getReadableTextColor(diceColor);
-
-        diceOverlay.roll(roll, diceColor, fontColor).catch((err) => {
-          log.warn("Dice roll animation error:", err);
-        });
-      }
+      diceOverlay.roll(roll, diceColor, fontColor).catch((err) => {
+        log.warn("Dice roll animation error:", err);
+      });
     }
 
     if (this.seenRollIds.size > 200) {
       this.seenRollIds = new Set(currentRollLog.map((r) => r.id));
     }
 
-    // DM-only restore prompt, offered once the lobby has started: the live
-    // session began empty but a previous auto-save holds a campaign.
-    if (!this.autoRestoreChecked && this.controller && state.phase === "Playing") {
+    // Boot-local auto-restore: one shot per session for the DM. No
+    // lobby-phase coupling — the check stages whatever the `__auto__` slot
+    // holds at boot.
+    if (!this.autoRestoreChecked && this.controller) {
       void this.maybeOfferAutoRestore();
     }
 
@@ -862,54 +807,28 @@ export class DndmApp extends GameElement {
   }
 
   /**
-   * DM-only background hydration: request full data for any map currently
-   * held as a MapSummary. The authority (server memory) is the sole complete
-   * holder during a live session; each `requestMap` resolves to a `map`
-   * patch that MatchView merges, after which the next auto-save sees full
-   * maps. One flight per map id; entries clear on arrival (or removal).
-   */
-  private requestMissingMaps(state: Readonly<MatchState>): void {
-    if (this.projectorMode) return;
-    const liveById = new Map(state.maps.map((m) => [m.id, m] as const));
-    for (const id of [...this.pendingMapFetches]) {
-      const cur = liveById.get(id);
-      if (!cur || isFullMap(cur)) this.pendingMapFetches.delete(id);
-    }
-    let requested = 0;
-    for (const m of state.maps) {
-      if (isFullMap(m) || this.pendingMapFetches.has(m.id)) continue;
-      if (requested >= 10) break;
-      this.pendingMapFetches.add(m.id);
-      this.send({ kind: "requestMap", mapId: m.id });
-      requested++;
-    }
-  }
-
-  /**
-   * Map selection always pairs `setActiveMap` with a `requestMap` when the
-   * target is currently a summary — switching alone only broadcasts the id,
-   * leaving the newly active map without tokens/images until fetched.
-   * Requesting an already-full map is harmless (authority re-sends it).
+   * Map selection is a single `setActiveMap`: every player's next projection
+   * carries the new active map in full, so nobody has to fetch it.
    */
   private selectMap(id: string): void {
     this.send({ kind: "setActiveMap", mapId: id });
-    const target = this.match.maps.find((m) => m.id === id);
-    if (target && !isFullMap(target) && !this.pendingMapFetches.has(id)) {
-      this.pendingMapFetches.add(id);
-      this.send({ kind: "requestMap", mapId: id });
-    }
   }
 
   /**
    * Applies a loaded slot state to the live session: re-publishes its image
-   * blobs, then streams the full campaign (header + maps) through the chunked
-   * import protocol. Replaces the old beginImport-only flow, which staged an
-   * import but never sent chunks or committed — a silent no-op.
+   * blobs, then swaps the slot directly into the host store (pure-local
+   * write, zero network on the way in) and fans out fresh per-player
+   * snapshots. Host only — guests have no host store to swap.
    */
   private async applyLoadedCampaign(
     loaded: Readonly<MatchState>,
     displayName: string,
   ): Promise<void> {
+    if (!this.controller?.isHost) {
+      log.warn(`ignoring load of "${displayName}": this browser is not the host`);
+      toastService.error(`Could not load save "${displayName}" (not the host).`);
+      return;
+    }
     try {
       for (const map of loaded.maps) {
         if ("images" in map) {
@@ -924,10 +843,11 @@ export class DndmApp extends GameElement {
       // Slot shards should be full maps (the storage guard skips summaries);
       // the state type stays wider because live snapshots project inactive
       // maps, and pre-fix slots may still contain summary shards. Those are
-      // unrecoverable from the slot — drop them loudly instead of silently.
+      // unrecoverable from the slot — the host drops them loudly instead of
+      // silently.
       const fullMaps = loaded.maps.filter(isFullMap);
       const dropped = loaded.maps.length - fullMaps.length;
-      sendChunkedImport((intent) => this.send(intent), buildCampaignHeader(loaded), fullMaps);
+      this.controller.applyLoadedCampaign(loaded);
       if (dropped > 0) {
         const names = loaded.maps
           .filter((m) => !isFullMap(m))
@@ -947,18 +867,15 @@ export class DndmApp extends GameElement {
   }
 
   /**
-   * One-shot check (DM only, after the lobby started): if the live session
-   * began empty but the auto-save slot holds a campaign, stage it for the
-   * restore prompt. Reads the slot fresh at start time so lobby-phase tweaks
-   * are reflected in what gets offered.
+   * One-shot boot check (DM only): if the `__auto__` slot holds a campaign,
+   * stage it for the restore prompt. No lobby-phase coupling and no live-state
+   * comparison — the offer is declinable, and guests never prompt.
    */
   private async maybeOfferAutoRestore(): Promise<void> {
-    if (this.autoRestoreChecked || !this.isDm || this.bootLiveWasEmpty !== true) return;
+    if (this.autoRestoreChecked || !this.isDm) return;
     this.autoRestoreChecked = true;
     // One-shot decision log so a missing prompt is diagnosable from the console.
-    log.info(
-      `auto-restore check: isDm=${String(this.isDm)} bootWasEmpty=${String(this.bootLiveWasEmpty)}`,
-    );
+    log.info(`auto-restore check: isDm=${String(this.isDm)}`);
     try {
       const auto = await this.libraryService.loadSlot(AUTO_SLOT_ID);
       const hasContent = !!auto && hasCampaignContent(auto);
@@ -1019,8 +936,9 @@ export class DndmApp extends GameElement {
     // A refresh/close inside the 500 ms debounce window would otherwise lose
     // the last edits. Fire-and-forget: the page is going away, but IndexedDB
     // writes issued synchronously in the handler usually still commit.
+    // Flushes the full host truth so unvisited maps persist completely.
     try {
-      void this.libraryService.flushAutoSave(this.match).catch((err: unknown) => {
+      void this.libraryService.flushAutoSave(this.hostTruth).catch((err: unknown) => {
         log.warn(`pagehide auto-save flush failed: ${String(err)}`);
       });
     } catch (err) {
@@ -1041,6 +959,9 @@ export class DndmApp extends GameElement {
       return html`
         <dndm-sheet-popout-view .sheetId=${this.sheetPopoutParams.sheetId}></dndm-sheet-popout-view>
       `;
+    }
+    if (this.isDisplayPopout) {
+      return html`<dndm-display-popout-view></dndm-display-popout-view>`;
     }
     const { phase, maps, activeMapId, settings } = this.match;
     const me = this.controller?.playerId ?? "";
@@ -1070,29 +991,6 @@ export class DndmApp extends GameElement {
     const active = this.activeMap;
     const myToken: Token | null =
       active?.tokens.find((t) => t.ownerUserId === me || t.representsUserId === me) ?? null;
-
-    if (this.projectorMode) {
-      return html`
-        <div class="dndm-display-view">
-          <button
-            class="dndm-display-exit-btn"
-            type="button"
-            title="Exit Theater Mode (Esc)"
-            @click=${() => this.toggleProjectorMode()}
-          >
-            ${fullscreenExitIcon()} Exit Theater (Esc)
-          </button>
-          <div class="dndm-dice-canvas-overlay" id="dndm-dice-overlay"></div>
-          <dndm-display-roll-ticker
-            .rolls=${this.match.rollLog ?? []}
-            .tokens=${active?.tokens ?? []}
-            .isDm=${this.isDm}
-            .currentUserId=${me}
-            .rollsVisibleToPlayers=${settings.rollsVisibleToPlayers}
-          ></dndm-display-roll-ticker>
-        </div>
-      `;
-    }
 
     return html`
       <div
@@ -1147,6 +1045,8 @@ export class DndmApp extends GameElement {
                         this.send({ kind: "setImageHidden", imageId: id, hidden })}
                       .onToggleLocked=${(id: string, locked: boolean) =>
                         this.send({ kind: "setImageLocked", imageId: id, locked })}
+                      .onReorderImage=${(id: string, layerOrder: number) =>
+                        this.send({ kind: "reorderImage", imageId: id, layerOrder })}
                       .onRenameImage=${(id: string, _name: string) => {
                         const img = active?.images.find((i) => i.id === id);
                         if (img) {
@@ -1165,7 +1065,7 @@ export class DndmApp extends GameElement {
 
                     <dndm-saves-panel
                       .libraryService=${this.libraryService}
-                      .currentState=${this.match}
+                      .currentState=${this.hostTruth}
                       .onLoadSlotState=${(loaded: MatchState, slotName: string) => {
                         void this.applyLoadedCampaign(loaded, slotName);
                       }}
@@ -1222,19 +1122,10 @@ export class DndmApp extends GameElement {
                           ${this.lobbyOpen ? html`${lockIcon(true)} Close Lobby` : html`${lockIcon(false)} Open Lobby`}
                         </button>
                         <button
-                          class="dndm-btn dndm-btn--ghost dndm-btn--small dndm-btn--icon"
-                          type="button"
-                          title="Enter Projector Theater Mode"
-                          aria-label="Enter Projector Theater Mode"
-                          @click=${() => this.toggleProjectorMode()}
-                        >
-                          ${fullscreenIcon()}
-                        </button>
-                        <button
                           class="dndm-btn dndm-btn--ghost dndm-btn--small"
                           type="button"
-                          title="Open Projector in a new window"
-                          @click=${() => window.open("?view=display", "_blank")}
+                          title="Open the player-safe projector view in a new window (for a TV, projector, or screen share)"
+                          @click=${() => this.displayPopoutHost?.open()}
                         >
                           ↗ Popout
                         </button>
@@ -1359,69 +1250,6 @@ export class DndmApp extends GameElement {
                         : nothing
                     }
                   </div>
-
-                  ${
-                  this.isDm && this.selectedImage
-                    ? html`
-                        <div class="dndm-canvas-inspector">
-                          <dndm-image-inspector
-                            .image=${this.selectedImage}
-                            .maxLayerOrder=${Math.max(...active.images.map((i) => i.layerOrder), 0)}
-                            .onTransform=${(patch: {
-                            x: number;
-                            y: number;
-                            width: number;
-                            height: number;
-                            rotation: number;
-                          }) => {
-                            if (this.selectedImage) {
-                              this.send({
-                                kind: "transformImage",
-                                imageId: this.selectedImage.id,
-                                ...patch,
-                              });
-                            }
-                          }}
-                            .onReorder=${(layerOrder: number) => {
-                            if (this.selectedImage) {
-                              this.send({
-                                kind: "reorderImage",
-                                imageId: this.selectedImage.id,
-                                layerOrder,
-                              });
-                            }
-                          }}
-                            .onSetLocked=${(locked: boolean) => {
-                            if (this.selectedImage) {
-                              this.send({
-                                kind: "setImageLocked",
-                                imageId: this.selectedImage.id,
-                                locked,
-                              });
-                            }
-                          }}
-                            .onRemove=${async () => {
-                            if (this.selectedImage) {
-                              const imgId = this.selectedImage.id;
-                              await this.assetSource.release(imgId);
-                              await this.libraryService.deleteImage(imgId);
-                              this.send({
-                                kind: "removeImage",
-                                imageId: imgId,
-                              });
-                              this.selectedImageId = null;
-                              fx.map()?.selectImage(null);
-                            }
-                          }}
-                            .onClose=${() => {
-                            this.selectedImageId = null;
-                            fx.map()?.selectImage(null);
-                          }}
-                          ></dndm-image-inspector>
-                        </div>
-                      `
-                    : nothing
-                }
                 `
           }
           ${
@@ -1647,6 +1475,69 @@ export class DndmApp extends GameElement {
               .onSetSchemaPreset=${(preset: AttributePreset) =>
                 this.send({ kind: "setSchemaPreset", preset })}
             ></dndm-character-sheet>
+            ${
+              this.isDm && active && this.selectedImage
+                ? html`
+                    <dndm-image-inspector
+                      .image=${this.selectedImage}
+                      .layerRank=${sortImagesByLayer(active.images).findIndex(
+                        (i) => i.id === this.selectedImage?.id,
+                      )}
+                      .layerCount=${active.images.length}
+                      .onTransform=${(patch: {
+                      x: number;
+                      y: number;
+                      width: number;
+                      height: number;
+                      rotation: number;
+                    }) => {
+                      if (this.selectedImage) {
+                        this.send({
+                          kind: "transformImage",
+                          imageId: this.selectedImage.id,
+                          ...patch,
+                        });
+                      }
+                    }}
+                      .onReorder=${(layerOrder: number) => {
+                      if (this.selectedImage) {
+                        this.send({
+                          kind: "reorderImage",
+                          imageId: this.selectedImage.id,
+                          layerOrder,
+                        });
+                      }
+                    }}
+                      .onSetLocked=${(locked: boolean) => {
+                      if (this.selectedImage) {
+                        this.send({
+                          kind: "setImageLocked",
+                          imageId: this.selectedImage.id,
+                          locked,
+                        });
+                      }
+                    }}
+                      .onRemove=${async () => {
+                      if (this.selectedImage) {
+                        const imgId = this.selectedImage.id;
+                        await this.assetSource.release(imgId);
+                        await this.libraryService.deleteImage(imgId);
+                        this.send({
+                          kind: "removeImage",
+                          imageId: imgId,
+                        });
+                        this.selectedImageId = null;
+                        fx.map()?.selectImage(null);
+                      }
+                    }}
+                      .onClose=${() => {
+                      this.selectedImageId = null;
+                      fx.map()?.selectImage(null);
+                    }}
+                    ></dndm-image-inspector>
+                  `
+                : nothing
+            }
           </div>
         </aside>
 

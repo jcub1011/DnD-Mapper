@@ -99,8 +99,8 @@ When the DM clicks `"Start Session"` (`phase = "Playing"`):
   - Assign `token.ownerUserId = player.id`.
 
 ### 4.2 Disconnect & Abandonment Conversion
-In `src/game/rules.ts` when a player leaves (`onPlayerLeft`):
-- If the disconnecting player is the DM, succession promotes the oldest connected peer.
+When a player leaves, the host (the DM's browser) handles it: `AuthorityController`'s `player-left` handler calls `MatchView.handlePlayerLeft` (`src/game/view.ts`), which applies the pure `handlePlayerLeft` in `src/game/rules.ts` and then fans the result out as fresh per-player snapshots.
+- **The DM leaving: no succession.** Locked decision "freeze on DM leave" — the DM's browser *is* the host, so the host leaving ends the lobby on every transport (platform, local-tab, solo). There is nobody to promote.
 - If a non-DM player disconnects:
   - Find all tokens where `token.ownerUserId === leavingPlayerId`.
   - Convert `token.type = "NPCToken"`.
@@ -109,6 +109,7 @@ In `src/game/rules.ts` when a player leaves (`onPlayerLeft`):
   - On any linked `CharacterSheet`:
     - Set `sheet.ownerUserId = null`.
     - Set `sheet.representsUserId = leavingPlayerId`.
+  - Clear ownership on their combatants in `activeCombat` so the DM can roll and manage them.
 - **Visual Distinction**:
   - Tokens and character sheets show a subtitle: `"(originally played by <PlayerName>)"`.
   - Prevents the character from vanishing from the board or combat tracker mid-fight.
@@ -144,12 +145,12 @@ Verify that all 84 legacy verbs are handled in `src/game/rules.ts`:
 | **Markup Overlay (2)** | `updateMarkup`, `clearMarkup` | Phase 10 |
 | **Lifecycle & Sync (2)** | `endSession`, `syncClientState` | Phase 11 |
 
-### 5.2 Strict JSON & Sandbox Guard Verification
-Run automated sandbox linter and serialization checks:
-- No `undefined` across state or any patch.
-- No `Date`, `Map`, `Set`, or circular object graphs.
-- No DOM references in `src/game/` or `src/authority/`.
-- All timestamps use `kb.now()` clock injection.
+### 5.2 Strict JSON & Pure-Core Verification
+There is no sandbox (the host is a browser), but the wire and the game core keep their discipline:
+- No `undefined` across state, any patch, or any per-player snapshot.
+- No `Date`, `Map`, `Set`, or circular object graphs on the wire.
+- No DOM references in `src/game/` — it stays pure so it is testable without a browser.
+- Timestamps are injected as `now` (the host passes `Date.now()`); nothing in `src/game/` reads the clock itself.
 
 ---
 
@@ -161,11 +162,12 @@ Run automated sandbox linter and serialization checks:
    - ZIP structure matches spec v1.0.0 with manifest, global state, scenes, entities, and extensions.
    - Exported archive re-imports cleanly through `importVtf` with 100% round-trip fidelity (fog bitsets, grid dimensions, token positions, sheet attributes match byte-for-byte).
 2. **`src/game/playerLifecycle.test.ts`**:
-   - `onPlayerLeft` converts player tokens to NPC tokens and sets `representsUserId`.
+   - `handlePlayerLeft` converts player tokens to NPC tokens and sets `representsUserId`.
    - Character sheets clear `ownerUserId` and record `representsUserId`.
    - DM can reassign abandoned sheet and token to a new player ID.
-3. **`src/authority/snapshotBudget.test.ts`**:
-   - Campaign with 24 maps, 50 sheets, 100 tokens, and full roll log projects active map snapshot under **400 KiB**.
+   - **`src/net/authorityController.test.ts`** (host-mode relay sync): a non-DM leaving keeps the match running and converts their characters; the host (DM) leaving ends the session — no migration.
+3. **`src/game/snapshotBudget.test.ts`**:
+   - Campaign with 24 maps, 50 sheets, 100 tokens, and full roll log projects active map snapshot under **400 KiB** (this is the per-player snapshot the host sends on every accepted intent).
 
 ### Acceptance Checklist ("Done when")
 - [ ] DM can click "Export" on any save slot to download a valid `.vtf` ZIP file.

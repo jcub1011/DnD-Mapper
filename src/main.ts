@@ -13,6 +13,7 @@ import { fx } from "./ui/fx/fx";
 import "./ui/app/dndm-app";
 import type { DndmApp } from "./ui/app/dndm-app";
 import { isSheetPopoutLocation } from "./ui/panels/sheetPopout";
+import { isDisplayPopoutLocation } from "./ui/display/displayPopout";
 
 const log = createLogger("boot");
 
@@ -41,6 +42,16 @@ function boot(): void {
   // controller. The <dndm-sheet-popout-view> syncs with the main window.
   if (isSheetPopoutLocation(typeof location !== "undefined" ? location : undefined)) {
     log.info("booting sheet popout (no map, no network)");
+    dismissBoot();
+    return;
+  }
+
+  // The projector popout renders the map pushed by the DM's window: Phaser
+  // boots, but no KnockBox plugin, no controller, no library/autosave. The
+  // <dndm-display-popout-view> syncs with its opener.
+  if (isDisplayPopoutLocation(typeof location !== "undefined" ? location : undefined)) {
+    log.info("booting projector popout (map only, no network)");
+    fx.init("map", "solo", { network: false });
     dismissBoot();
     return;
   }

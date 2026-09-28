@@ -1,7 +1,7 @@
 # 03 — Domain Model
 
-The legacy C# records translated to TypeScript. Everything here crosses the authority boundary, so
-everything here must be **strict JSON**.
+The legacy C# records translated to TypeScript. Everything here crosses the relay from the DM's
+browser (the host) to every player, so everything here must be **strict JSON**.
 
 ## The two rules that govern this whole document
 
@@ -199,11 +199,11 @@ export interface MapSummary {
   heightCells: number;
 }
 
-/** A spawn request. The authority mints the id, so the client cannot choose one. */
+/** A spawn request. The host mints the id, so a player cannot choose one. */
 export type NewToken = Omit<Token, "id" | "mapId" | "ownerUserId" | "representsUserId">;
 
 /** An image the DM has already stored locally; only metadata crosses the wire.
- *  `shareToken` is filled in by the authority once the blob is registered. */
+ *  `shareToken` is filled in by the host once the blob is registered. */
 export type NewMapImage = Omit<MapImage, "id" | "shareToken" | "layerOrder">;
 ```
 
@@ -333,10 +333,11 @@ export interface DndMapperSettings {
 }
 ```
 
-> **"Host" in these enums means the DM**, which in the port is the lobby **owner** (`isOwner`), not
-> `isHost` — see [`02-target-platform.md`](02-target-platform.md). Consider renaming the variants to
-> `OwnerOrDm` / `DmOnly` during the port and mapping the old names on `.vtf` import, so no
-> downstream code is tempted to reach for `isHost`.
+> **"Host" in these enums means the DM.** In the port the DM's browser is also the transport's host
+> (`isHost: true`, `authority: 'host'`) in every launch mode, so the word happens to line up — but
+> permission checks must still go through `state.dmPlayerId`, never a transport flag (see
+> [`02-target-platform.md`](02-target-platform.md)). Renaming the variants to `OwnerOrDm` /
+> `DmOnly` during the port, and mapping the old names on `.vtf` import, remains an option.
 
 ## Top-level state
 
@@ -360,9 +361,10 @@ export interface DndMapperState {
   loadedDiceRules: readonly LoadedDiceRule[];
   hostHeldKeys: readonly string[];         // a Set in C#; an array on the wire
 
-  /** The DM. Seeded from `init(players)[0].id`, and changed ONLY when this module
-   *  calls `kb.setOwner` — nothing else can tell us. Explicit in state so every
-   *  permission check and DM succession is testable. See 06. */
+  /** The DM. Seeded by the host store's `setRoster` from `roster[0]`, which is the
+   *  host (the DM's browser) on every transport. There is no succession: if the DM
+   *  leaves, the lobby ends. Explicit in state so every permission check is
+   *  testable. See 06. */
   dmPlayerId: string | null;
 }
 ```
@@ -373,15 +375,17 @@ export interface DndMapperState {
 > [`06`](06-state-and-authority.md#strategy--three-rules)'s wire; it is listed here only because the
 > legacy record carries it.
 
-**This is not `MatchState`.** Sending all of it on every change would blow the 512 KiB ceiling.
-See [`06-state-and-authority.md`](06-state-and-authority.md) for how it is partitioned, and which
-parts stay client-local.
+**This is `MatchState` on the host, but no player receives all of it.** Sending every map in full
+on every change would blow the 512 KiB ceiling, so each player gets `projectForPlayer`'s view
+instead: the active map in full, the rest as `MapSummary`, and — for non-DM players — hidden
+information removed. See [`06-state-and-authority.md`](06-state-and-authority.md) for the
+projection, and which parts stay client-local.
 
 ## Pure helpers worth porting verbatim
 
 `Helpers/` is 1,432 lines across 19 static classes (21 files; two are records). Pure functions with no Blazor
 dependency — the cheapest, highest-confidence part of the whole port, and they belong in
-`src/game/` where the authority can share them.
+`src/game/` where the host store and the UI can share them.
 
 | Helper | Why it matters |
 | --- | --- |
@@ -390,7 +394,7 @@ dependency — the cheapest, highest-confidence part of the whole port, and they
 | Dice notation parse/format | Exact formula strings appear in the roll log |
 | Colour contrast | Picks readable token label colours |
 | Token stacking | Decides when tokens collapse into a stack and how chips fan out |
-| Visibility filters | Who may see which token/sheet — becomes authority-side logic |
+| Visibility filters | Who may see which token/sheet — becomes host-side logic (`projectForPlayer`) |
 
 ### Snapping, in TypeScript
 

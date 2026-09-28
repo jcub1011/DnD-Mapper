@@ -1,10 +1,11 @@
 /*
- * Pure authority processor for Loaded Dice.
+ * Pure host-side processor for Loaded Dice.
  *
  * Rules:
  *   1. Pure, deterministic condition evaluation and modification pipeline.
  *   2. Strict JSON only; no DOM or Node globals.
- *   3. Shared between client and server authority sandbox.
+ *   3. Runs on the host inside `applyIntent`; players never receive the rules
+ *      unless their visibility allows it (`projectForPlayer`).
  */
 
 import {

@@ -5,7 +5,7 @@
  *   1. An empty or zero-length mask means "ALL CELLS REVEALED" (false).
  *   2. Base64 is the only wire/storage representation; FogMaskBytes is the
  *      in-memory Uint8Array for bit operations.
- *   3. Pure TypeScript: runs in the Jint sandbox without DOM (atob/btoa) or Node (Buffer).
+ *   3. Pure TypeScript: no DOM (atob/btoa) or Node (Buffer), so it runs anywhere.
  *   4. Bit index = cy * widthCells + cx.
  */
 
@@ -23,7 +23,7 @@ for (let i = 0; i < B64_CHARS.length; i++) {
   B64_LOOKUP[B64_CHARS.charCodeAt(i)] = i;
 }
 
-/** Pure JS base64 decode (works in Jint sandbox, Node, and browser). */
+/** Pure JS base64 decode (works in Node and the browser). */
 export function decodeFog(b64: FogMaskB64): FogMaskBytes {
   if (!b64 || b64.length === 0) return new Uint8Array(0);
 
@@ -56,7 +56,7 @@ export function decodeFog(b64: FogMaskB64): FogMaskBytes {
   return out;
 }
 
-/** Pure JS base64 encode (works in Jint sandbox, Node, and browser). */
+/** Pure JS base64 encode (works in Node and the browser). */
 export function encodeFog(bytes: FogMaskBytes): FogMaskB64 {
   if (!bytes || bytes.length === 0) return "";
 

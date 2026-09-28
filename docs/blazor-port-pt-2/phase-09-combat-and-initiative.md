@@ -161,6 +161,13 @@ Pure sorting function matching legacy `TurnOrderSorter.cs:11-15`:
 3. **Tertiary (Tie-breaker)**: Alphabetical by Name (`name.localeCompare(other.name, undefined, { sensitivity: "accent" })`).
 *Note*: Character sheet DEX modifier is **not** evaluated as a separate tie-breaker because it was already incorporated into the roll total.
 
+### 4.4 Player Projection (host-side)
+The DM's browser is the host and sends each non-host player its own `projectForPlayer` snapshot (`src/game/rules.ts`). For `activeCombat`, a player's projection:
+- Drops combatants whose tokens are hidden, or stand on fogged cells the player doesn't own (the same set the map projection strips), and clamps `currentTurnIndex` to the shortened turn order.
+- Nulls every `pendingInitiative`, so DM-staged NPC scores never leave the host.
+
+The DM's view is unchanged. Any client-side gates in the tracker/banner are defence-in-depth only; the data is already absent from player snapshots.
+
 ---
 
 ## 5. Map Canvas Integration (Phaser 4)
@@ -292,6 +299,7 @@ Ported from `HostInitiativePanel.razor.css` and `InitiativeBanner.razor.css`:
 2. **`src/game/rules.test.ts` (Combat Authorization)**:
    - Non-DM cannot call `startCombat`, `endCombat`, `nextTurn`, `previousTurn`, or `rollAllUnsetNpcs`.
    - Player can only call `rollInitiative` on a combatant they own.
+   - Projection matrix (`src/game/projection.test.ts`): players' snapshots omit hidden/fog-stripped combatants and `pendingInitiative`; the DM's does not.
 3. **`src/ui/panels/initiative.test.ts`**:
    - Banner displays "YOUR TURN!" when the local user's token is active.
    - Clicking combatant row triggers viewport centering.

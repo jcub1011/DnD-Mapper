@@ -1,8 +1,11 @@
 /*
- * Wire guardrails and length calculation.
+ * Relay-frame guardrails and length calculation.
  *
- * Hand-computed UTF-8 byte counting without DOM globals (TextEncoder) or Node buffers.
- * Runs in the bare Jint sandbox and in tests.
+ * The relay enforces its frame cap (MAX_FRAME_BYTES) on every host→guest frame.
+ * Nothing on the live path calls these today — per-recipient mode sends full
+ * per-player snapshots, and `snapshotBudget.test.ts` bounds their size — but
+ * the per-recipient patch fan-out parked for KnockBox-Games#62 will guard each
+ * projected patch with `guardSize` before it goes on the wire.
  */
 
 import type { Patch } from "./types.js";
@@ -11,10 +14,9 @@ import { MAX_FRAME_BYTES } from "./types.js";
 /**
  * UTF-8 byte length, computed by hand.
  *
- * `TextEncoder` is a Web API, not ECMAScript: the Jint sandbox does not provide it, and
- * eslint.config.js bans DOM globals in `src/game/` and `src/authority/` anyway. `String.length`
- * is wrong in the other direction — it counts UTF-16 code units, so a map named "Ténèbres"
- * or any CJK label under-reports, and the server counts BYTES.
+ * Hand-counted so `src/game/` stays free of Web/Node APIs (`TextEncoder`, `Buffer`).
+ * `String.length` is wrong — it counts UTF-16 code units, so a map named "Ténèbres"
+ * or any CJK label under-reports, and the relay counts BYTES.
  */
 export function utf8Length(s: string): number {
   let n = 0;

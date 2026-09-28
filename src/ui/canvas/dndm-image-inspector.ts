@@ -3,6 +3,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import type { MapImage } from "../../game/domain";
 import { GameElement } from "../app/GameElement";
 import "../modals/dndm-confirm";
+import "../panels/dndm-collapsible-panel";
 
 function round1(v: number): number {
   return Math.round(v * 10) / 10;
@@ -13,8 +14,13 @@ export class DndmImageInspector extends GameElement {
   @property({ attribute: false })
   image: MapImage | null = null;
 
+  /** Stacking position of this image, 0 = bottom. */
   @property({ type: Number })
-  maxLayerOrder = 0;
+  layerRank = 0;
+
+  /** Number of images on the map. */
+  @property({ type: Number })
+  layerCount = 1;
 
   @property({ attribute: false })
   onTransform?: (patch: {
@@ -71,23 +77,32 @@ export class DndmImageInspector extends GameElement {
     this.commitTransform({ width: nextW, height: nextH });
   }
 
+  // onReorder takes a target stacking rank; the reducer renumbers the map.
+  private get isTop(): boolean {
+    return this.layerRank >= this.layerCount - 1;
+  }
+
+  private get isBottom(): boolean {
+    return this.layerRank <= 0;
+  }
+
   private handleLayerUp(): void {
-    if (!this.image) return;
-    const next = this.image.layerOrder + 1;
-    this.onReorder?.(next);
+    if (!this.image || this.isTop) return;
+    this.onReorder?.(this.layerRank + 1);
   }
 
   private handleLayerDown(): void {
-    if (!this.image) return;
-    const next = Math.max(0, this.image.layerOrder - 1);
-    this.onReorder?.(next);
+    if (!this.image || this.isBottom) return;
+    this.onReorder?.(this.layerRank - 1);
   }
 
   private handleLayerToFront(): void {
-    this.onReorder?.(this.maxLayerOrder + 1);
+    if (!this.image || this.isTop) return;
+    this.onReorder?.(this.layerCount - 1);
   }
 
   private handleLayerToBack(): void {
+    if (!this.image || this.isBottom) return;
     this.onReorder?.(0);
   }
 
@@ -97,9 +112,10 @@ export class DndmImageInspector extends GameElement {
     const img = this.image;
 
     return html`
-      <section class="dndm-panel dndm-imgi">
-        <header class="dndm-panel-header">
-          <span>Image</span>
+      <dndm-collapsible-panel
+        panelTitle="Image Properties"
+        panelClass="dndm-imgi"
+        .actions=${html`
           <button
             class="dndm-btn dndm-btn--icon dndm-btn--small"
             type="button"
@@ -108,11 +124,11 @@ export class DndmImageInspector extends GameElement {
           >
             ×
           </button>
-        </header>
-        <div class="dndm-panel-body">
+        `}
+        .content=${html`
           <div class="dndm-imgi-grid">
-            <label class="dndm-label">
-              X
+            <label class="dndm-imgi-field">
+              <span class="dndm-label">X</span>
               <input
                 type="number"
                 step="0.1"
@@ -124,8 +140,8 @@ export class DndmImageInspector extends GameElement {
                   })}
               />
             </label>
-            <label class="dndm-label">
-              Y
+            <label class="dndm-imgi-field">
+              <span class="dndm-label">Y</span>
               <input
                 type="number"
                 step="0.1"
@@ -137,8 +153,8 @@ export class DndmImageInspector extends GameElement {
                   })}
               />
             </label>
-            <label class="dndm-label">
-              W
+            <label class="dndm-imgi-field">
+              <span class="dndm-label">Width</span>
               <input
                 type="number"
                 step="0.1"
@@ -151,8 +167,8 @@ export class DndmImageInspector extends GameElement {
                   })}
               />
             </label>
-            <label class="dndm-label">
-              H
+            <label class="dndm-imgi-field">
+              <span class="dndm-label">Height</span>
               <input
                 type="number"
                 step="0.1"
@@ -165,8 +181,8 @@ export class DndmImageInspector extends GameElement {
                   })}
               />
             </label>
-            <label class="dndm-label">
-              Rotation
+            <label class="dndm-imgi-field">
+              <span class="dndm-label">Rotation</span>
               <input
                 type="number"
                 step="1"
@@ -178,72 +194,74 @@ export class DndmImageInspector extends GameElement {
                   })}
               />
             </label>
-          </div>
-
-          ${img.originalWidth > 0 && img.originalHeight > 0
-            ? html`
-                <div class="dndm-imgi-aspect">
+            ${img.originalWidth > 0 && img.originalHeight > 0
+              ? html`
                   <button
-                    class="dndm-btn dndm-btn--small"
+                    class="dndm-btn dndm-btn--small dndm-imgi-aspect"
                     type="button"
                     title="Restore original aspect ratio"
                     @click=${() => this.resetAspectRatio()}
                   >
                     Reset aspect
                   </button>
-                </div>
-              `
-            : nothing}
-
-          <div class="dndm-imgi-lock">
-            <label class="dndm-toggle">
-              <input
-                type="checkbox"
-                ?checked=${img.locked}
-                @change=${(e: Event) =>
-                  this.onSetLocked?.((e.target as HTMLInputElement).checked)}
-              />
-              <span class="dndm-toggle-track"></span>
-              <span>Locked</span>
-            </label>
+                `
+              : nothing}
           </div>
 
-          <div class="dndm-imgi-layer">
+          <div class="dndm-imgi-row dndm-imgi-layer">
             <span class="dndm-label">Layer</span>
-            <button
-              class="dndm-btn dndm-btn--small"
-              type="button"
-              title="Send to back"
-              @click=${() => this.handleLayerToBack()}
-            >
-              ⤓
-            </button>
-            <button
-              class="dndm-btn dndm-btn--small"
-              type="button"
-              title="Lower"
-              @click=${() => this.handleLayerDown()}
-            >
-              ↓
-            </button>
-            <span class="dndm-imgi-layer-readout">${img.layerOrder}</span>
-            <button
-              class="dndm-btn dndm-btn--small"
-              type="button"
-              title="Raise"
-              @click=${() => this.handleLayerUp()}
-            >
-              ↑
-            </button>
-            <button
-              class="dndm-btn dndm-btn--small"
-              type="button"
-              title="Bring to front"
-              @click=${() => this.handleLayerToFront()}
-            >
-              ⤒
-            </button>
+            <div class="dndm-imgi-layer-controls">
+              <button
+                class="dndm-btn dndm-btn--icon dndm-btn--small"
+                type="button"
+                title="Send to back"
+                ?disabled=${this.isBottom}
+                @click=${() => this.handleLayerToBack()}
+              >
+                ⤓
+              </button>
+              <button
+                class="dndm-btn dndm-btn--icon dndm-btn--small"
+                type="button"
+                title="Lower"
+                ?disabled=${this.isBottom}
+                @click=${() => this.handleLayerDown()}
+              >
+                ↓
+              </button>
+              <span class="dndm-imgi-layer-readout" title="Stacking position (1 = bottom)"
+                >${this.layerRank + 1} / ${this.layerCount}</span
+              >
+              <button
+                class="dndm-btn dndm-btn--icon dndm-btn--small"
+                type="button"
+                title="Raise"
+                ?disabled=${this.isTop}
+                @click=${() => this.handleLayerUp()}
+              >
+                ↑
+              </button>
+              <button
+                class="dndm-btn dndm-btn--icon dndm-btn--small"
+                type="button"
+                title="Bring to front"
+                ?disabled=${this.isTop}
+                @click=${() => this.handleLayerToFront()}
+              >
+                ⤒
+              </button>
+            </div>
           </div>
+
+          <label class="dndm-toggle dndm-imgi-row dndm-imgi-lock">
+            <span class="dndm-label">Locked</span>
+            <input
+              type="checkbox"
+              ?checked=${img.locked}
+              @change=${(e: Event) => this.onSetLocked?.((e.target as HTMLInputElement).checked)}
+            />
+            <span class="dndm-toggle-track"></span>
+          </label>
 
           <div class="dndm-imgi-actions">
             <button
@@ -256,8 +274,8 @@ export class DndmImageInspector extends GameElement {
               Delete image
             </button>
           </div>
-        </div>
-      </section>
+        `}
+      ></dndm-collapsible-panel>
 
       <dndm-confirm
         ?isOpen=${this.pendingDelete}

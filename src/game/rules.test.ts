@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   applyIntent,
-  clearPendingImports,
   createState,
   isDm,
   mayEditSheet,
@@ -12,7 +11,6 @@ import {
   projectSnapshot,
 } from "./rules";
 import type {
-  CampaignHeader,
   CharacterSheet,
   DndMapperState,
   GameMap,
@@ -20,7 +18,7 @@ import type {
   NewToken,
   Token,
 } from "./domain";
-import { isFullMap } from "./domain";
+import { isFullMap, sortImagesByLayer } from "./domain";
 
 const ROSTER = [
   { id: "dm-1", displayName: "Dungeon Master" },
@@ -29,7 +27,6 @@ const ROSTER = [
 ];
 
 function setupMatch(): DndMapperState {
-  clearPendingImports();
   const state = createState(ROSTER);
   // DM creates initial map
   const res = applyIntent(state, "dm-1", { kind: "createMap", name: "Dungeon Level 1" }, 1000);
@@ -347,6 +344,110 @@ describe("applyIntent — images & fog", () => {
     expect((state.maps.find((m) => m.id === mapId) as GameMap).images).toHaveLength(0);
   });
 
+  describe("reorderImage", () => {
+    const newImg = (name: string): NewMapImage => ({
+      name,
+      contentType: "image/png",
+      x: 0,
+      y: 0,
+      width: 2,
+      height: 2,
+      originalWidth: 2,
+      originalHeight: 2,
+      rotation: 0,
+      opacity: 1,
+      locked: false,
+      hidden: false,
+      byteSize: 1,
+      wasDownscaled: false,
+      originalLongEdgePx: 100,
+      displayLongEdgePx: 100,
+    });
+
+    function setupThree(): { state: DndMapperState; mapId: string } {
+      let state = setupMatch();
+      const mapId = state.activeMapId!;
+      for (const id of ["a", "b", "c"]) {
+        const intent = { kind: "addImage", mapId, image: newImg(id), imageId: id } as const;
+        state = applyIntent(state, "dm-1", intent, 4000)!.state;
+      }
+      return { state, mapId };
+    }
+
+    const images = (state: DndMapperState, mapId: string) =>
+      (state.maps.find((m) => m.id === mapId) as GameMap).images;
+
+    const stack = (state: DndMapperState, mapId: string): string[] =>
+      sortImagesByLayer(images(state, mapId)).map((i) => i.id);
+
+    const orders = (state: DndMapperState, mapId: string): number[] =>
+      images(state, mapId)
+        .map((i) => i.layerOrder)
+        .sort();
+
+    const reorder = (state: DndMapperState, imageId: string, layerOrder: number, from = "dm-1") =>
+      applyIntent(state, from, { kind: "reorderImage", imageId, layerOrder }, 4100);
+
+    it("sending two images to back in sequence stacks the latest one lowest", () => {
+      const setup = setupThree();
+      let state = setup.state;
+      const mapId = setup.mapId;
+      expect(stack(state, mapId)).toEqual(["a", "b", "c"]);
+
+      state = reorder(state, "c", 0)!.state;
+      expect(stack(state, mapId)).toEqual(["c", "a", "b"]);
+
+      const res = reorder(state, "b", 0);
+      expect(res).not.toBeNull();
+      if (res!.patch?.kind !== "map") throw new Error("expected map patch");
+      expect(sortImagesByLayer(res!.patch.map.images).map((i) => i.id)).toEqual(["b", "c", "a"]);
+      state = res!.state;
+      expect(stack(state, mapId)).toEqual(["b", "c", "a"]);
+      expect(orders(state, mapId)).toEqual([0, 1, 2]);
+    });
+
+    it("raise/lower move exactly one step and clamp out-of-range ranks", () => {
+      const setup = setupThree();
+      let state = setup.state;
+      const mapId = setup.mapId;
+      state = reorder(state, "a", 1)!.state;
+      expect(stack(state, mapId)).toEqual(["b", "a", "c"]);
+
+      state = reorder(state, "b", 999)!.state;
+      expect(stack(state, mapId)).toEqual(["a", "c", "b"]);
+
+      state = reorder(state, "b", -5)!.state;
+      expect(stack(state, mapId)).toEqual(["b", "a", "c"]);
+      expect(orders(state, mapId)).toEqual([0, 1, 2]);
+    });
+
+    it("normalizes legacy tied layerOrders using array order as the tiebreak", () => {
+      const setup = setupThree();
+      let state = setup.state;
+      const mapId = setup.mapId;
+      state = {
+        ...state,
+        maps: state.maps.map((m) =>
+          m.id === mapId && isFullMap(m)
+            ? { ...m, images: m.images.map((i) => ({ ...i, layerOrder: 0 })) }
+            : m,
+        ),
+      };
+      // All tied → array order a, b, c (c drawn on top)
+      expect(stack(state, mapId)).toEqual(["a", "b", "c"]);
+
+      state = reorder(state, "a", 2)!.state;
+      expect(stack(state, mapId)).toEqual(["b", "c", "a"]);
+      expect(orders(state, mapId)).toEqual([0, 1, 2]);
+    });
+
+    it("rejects non-DM and unknown images", () => {
+      const { state } = setupThree();
+      expect(reorder(state, "a", 0, "player-1")).toBeNull();
+      expect(reorder(state, "nope", 0)).toBeNull();
+    });
+  });
+
   it("paints, fills, and clears fog", () => {
     let state = setupMatch();
     const mapId = state.activeMapId!;
@@ -379,74 +480,21 @@ describe("applyIntent — images & fog", () => {
   });
 });
 
-describe("applyIntent — chunked campaign import protocol", () => {
-  it("stages and commits a multi-chunk campaign atomically", () => {
-    const state = createState(ROSTER);
-    const mapA = { ...setupMatch().maps[0], id: "map-a", name: "Map Alpha" };
-    const mapB = { ...mapA, id: "map-b", name: "Map Beta" };
-
-    const campaignHeader: CampaignHeader = {
-      title: "Epic Campaign",
-      activeMapId: "map-b",
-    };
-
-    const token = "test-token-123";
-
-    // 1. beginImport
-    const beginRes = applyIntent(
-      state,
-      "dm-1",
-      { kind: "beginImport", token, campaign: campaignHeader, chunkCount: 2 },
-      6000,
-    );
-    expect(beginRes).not.toBeNull();
-    expect(beginRes!.patch).toBeNull(); // No broadcast during staging
-
-    // 2. importChunk index 0
-    const chunk0Res = applyIntent(
-      state,
-      "dm-1",
-      { kind: "importChunk", token, index: 0, maps: [mapA] },
-      6010,
-    );
-    expect(chunk0Res).not.toBeNull();
-    expect(chunk0Res!.patch).toBeNull();
-
-    // Premature commit before all chunks arrive should be rejected
-    expect(applyIntent(state, "dm-1", { kind: "commitImport", token }, 6015)).toBeNull();
-
-    // Re-stage after rejected commit
-    applyIntent(
-      state,
-      "dm-1",
-      { kind: "beginImport", token, campaign: campaignHeader, chunkCount: 2 },
-      6020,
-    );
-    applyIntent(state, "dm-1", { kind: "importChunk", token, index: 0, maps: [mapA] }, 6025);
-
-    // 3. importChunk index 1
-    const chunk1Res = applyIntent(
-      state,
-      "dm-1",
-      { kind: "importChunk", token, index: 1, maps: [mapB] },
-      6030,
-    );
-    expect(chunk1Res).not.toBeNull();
-    expect(chunk1Res!.patch).toBeNull();
-
-    // 4. commitImport
-    const commitRes = applyIntent(state, "dm-1", { kind: "commitImport", token }, 6040);
-    expect(commitRes).not.toBeNull();
-    expect(commitRes!.patch?.kind).toBe("full");
-
-    const liveState = commitRes!.state;
-    expect(liveState.phase).toBe("Playing");
-    expect(liveState.activeMapId).toBe("map-b");
-    expect(liveState.maps).toHaveLength(2);
-    expect(liveState.maps.map((m) => m.id)).toEqual(["map-a", "map-b"]);
-
-    // Ephemeral save-loaded marker for client notifications (DM loads a save)
-    expect(liveState.announcement).toEqual({ id: token, loadedAt: 6040 });
+describe("applyIntent — removed chunked campaign import protocol", () => {
+  it("rejects beginImport/importChunk/commitImport: loading is a direct host swap", () => {
+    const state = setupMatch();
+    expect(
+      applyIntent(
+        state,
+        "dm-1",
+        { kind: "beginImport", token: "t", campaign: {}, chunkCount: 1 },
+        6000,
+      ),
+    ).toBeNull();
+    expect(
+      applyIntent(state, "dm-1", { kind: "importChunk", token: "t", index: 0, maps: [] }, 6010),
+    ).toBeNull();
+    expect(applyIntent(state, "dm-1", { kind: "commitImport", token: "t" }, 6020)).toBeNull();
   });
 });
 

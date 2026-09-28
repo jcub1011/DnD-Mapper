@@ -6,7 +6,7 @@
  *      centres (x.5, y.5); images anchor at corners (x, y).
  *   2. Strict JSON only. No `undefined` (use `null`), no `Date`, `Map`, `Set`,
  *      classes, functions, or circular references.
- *   3. Shared between client and server authority sandbox.
+ *   3. Pure: no DOM or Node globals, so the host store and rules test headless.
  */
 
 import type { FogMaskB64 } from "./fog.js";
@@ -70,6 +70,20 @@ export function getMapImageDisplayName(img: Pick<MapImage, "name" | "layerOrder"
     return img.name;
   }
   return `Layer #${img.layerOrder}`;
+}
+
+/**
+ * Visual stacking order, bottom → top. Ties on layerOrder fall back to array
+ * index (later = higher) so the renderer, layer list, and reorder reducer
+ * always agree even on legacy data with duplicate layerOrder values.
+ */
+export function sortImagesByLayer<T extends Pick<MapImage, "layerOrder">>(
+  images: readonly T[],
+): T[] {
+  return images
+    .map((img, index) => ({ img, index }))
+    .sort((a, b) => a.img.layerOrder - b.img.layerOrder || a.index - b.index)
+    .map((e) => e.img);
 }
 
 export type TokenType = "PlayerToken" | "NPCToken";
@@ -576,12 +590,11 @@ export type DndMapperPhase = "Lobby" | "Playing";
 
 /**
  * Ephemeral broadcast marker set when the DM loads a saved campaign into the
- * live session (chunked `commitImport`). It is intentionally NOT part of the
+ * live session (host direct-load via `MatchView.applyLoaded`). It is intentionally NOT part of the
  * persisted fingerprint or slot shards: clients toast it once (tracked by id)
  * and it never round-trips through IndexedDB.
  *
- * `loadedAt` uses the authority clock (`kb.now()`, ms epoch) — the authority
- * sandbox has no `Date`.
+ * `loadedAt` is the host's clock (`Date.now()`, ms epoch) at load time.
  */
 export interface SaveLoadedAnnouncement {
   readonly id: string;

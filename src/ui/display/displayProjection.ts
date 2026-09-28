@@ -1,5 +1,5 @@
 /*
- * Display Projection rules for Theater / Projector Mode.
+ * Display Projection rules for the projector popout (?view=display).
  *
  * Implements:
  *   - Complete exclusion of hidden tokens and hidden images

@@ -182,22 +182,31 @@ interactive descendants**. That last detail is easy to miss and annoying when wr
 
 ## DM vs player UI
 
-Legacy gates on "is host". **In the port, gate on `isOwner`** — `isHost` is `false` for everyone
-under server authority.
+Legacy gates on "is host". **In the port, gate on `state.dmPlayerId`.** The DM's browser is the
+transport's host (`isHost: true`) in every launch mode, and the host store seeds `dmPlayerId` from
+`roster[0]` — the host — so the DM check is a comparison against the local player id:
 
 ```ts
 // dndm-app
-@state() private isDm = false;
-
-// from the controller's roster event
-this.isDm = roster.isOwner;
+public get isDm(): boolean {
+  const me = this.controller?.playerId ?? "";
+  if (this.match.dmPlayerId) {
+    return this.match.dmPlayerId === me;
+  }
+  return this.isOwner;   // before the first snapshot lands
+}
 ```
 
-`owner-changed` is **already wired** in the template (`src/net/authorityController.ts:56`, feeding
-the `roster` event), so this costs nothing to honour — but legacy had no equivalent, because the
-Blazor host owned a circuit and the room died with it. If DM succession is implemented
-(see [`06-state-and-authority.md`](06-state-and-authority.md)), the left rail must appear for the
-new DM without a reload, and the map scene must re-enable the DM-only tools.
+`isOwner` only matters for lobby powers (open/close, kick) and as that pre-snapshot fallback.
+The architecture rewrite's
+[phase 04](../architecture-rewrite/phase-04-ui-lifecycle.md) plans to bind `isDm` to the host id
+directly.
+
+There is **no DM succession**. Like legacy, where the Blazor host owned a circuit and the room died
+with it, the session lives in the DM's browser: when the DM leaves, the lobby ends on every
+transport (locked decision "freeze on DM leave", see
+[`06-state-and-authority.md`](06-state-and-authority.md)). A "waiting for DM" freeze overlay for
+players is planned in that same phase 04 but not built yet.
 
 Player-visible differences to preserve:
 
@@ -205,16 +214,19 @@ Player-visible differences to preserve:
 | --- | --- | --- |
 | Left rail | visible | hidden |
 | Fog opacity | **0.45** | **1.0** |
-| Hidden tokens | visible, marked | not rendered |
-| **Tokens in fogged cells** | **visible** | **visible** — fog never conceals a token |
+| Hidden tokens | visible, marked | never sent to players |
+| **Tokens in fogged cells** | **visible** | **never sent**, unless the player owns the token |
 | Fog/markup/focus tools | yes | no |
 | "Centre everyone here" | yes | no |
 
-> **Fog hides terrain, not creatures.** Tokens draw above fog for everyone (legacy's
-> `<TokenLayer>` renders after the fog `<path>`; the port's depth bands put tokens at 4000 over fog
-> at 3000). A player looking at an opaque black region still sees any non-hidden token standing in
-> it. Concealment is `Token.Hidden` alone. This is legacy behaviour and the port keeps it — but it
-> is the kind of thing a DM discovers at the worst moment, so say it in the game's own help text.
+> **Fog hides creatures too — a deliberate deviation from legacy.** In legacy, tokens drew above
+> fog for everyone (`<TokenLayer>` renders after the fog `<path>`), so a player looking at an opaque
+> black region still saw any non-hidden token standing in it, and concealment was `Token.Hidden`
+> alone. The port filters per player on the host instead: `projectForPlayer` strips hidden tokens
+> and images, and fogged tokens the player does not own, before the snapshot leaves the DM's
+> browser. The depth bands still put tokens at 4000 over fog at 3000, but on a player's screen there
+> is nothing under the fog to draw. The fog mask itself is still broadcast. A DM used to legacy will
+> notice this, so say it in the game's own help text.
 
 ## Boot and layout
 

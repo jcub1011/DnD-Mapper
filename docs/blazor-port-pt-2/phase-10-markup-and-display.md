@@ -2,7 +2,7 @@
 
 ## 1. Executive Summary & Scope
 
-Phase 10 implements two critical visual systems for in-person and digital tabletop play: freehand vector markup drawing directly onto maps, and the dedicated Display / Projector Theater view.
+Phase 10 implements two critical visual systems for in-person and digital tabletop play: freehand vector markup drawing directly onto maps, and the dedicated Display / Projector popout view.
 
 Tabletop DMs frequently need to sketch temporary walls, tactical arrows, spell radii, or hazard notes directly onto the battlemap. Phase 10 provides an interactive drawing canvas with Bezier stroke smoothing, stroke erasure, and undo/redo stacks, storing clean SVG paths in cell-unit coordinates. Additionally, it implements the projector presentation mode designed for physical TV gaming tables and external secondary monitors, featuring pitch-black fog of war, automatic camera framing, fog entity culling, and animated roll tickers.
 
@@ -12,8 +12,8 @@ Tabletop DMs frequently need to sketch temporary walls, tactical arrows, spell r
 ├─────────────────────────┬────────────────────────┬─────────────────────┤
 │   Freehand SVG Markup   │  Display / Projector   │   Phaser / Viewport │
 ├─────────────────────────┼────────────────────────┼─────────────────────┤
-│ • Bezier stroke fitting │ • In-app theater mode  │ • Cell-unit SVG     │
-│ • Eraser & Undo / Redo  │ • Detached popup sync  │   scaling (1/50)    │
+│ • Bezier stroke fitting │ • Popout window (DM    │ • Cell-unit SVG     │
+│ • Eraser & Undo / Redo  │   keeps full control)  │   scaling (1/50)    │
 │ • Color / width palette │ • 100% pitch-black fog │ • Space-to-pan pass │
 │ • Commit on pointerup   │ • Auto-frame focusRect │ • 250ms token ease  │
 │   (no network flooding) │ • Fog entity culling   │ • Golden halo ring  │
@@ -71,15 +71,15 @@ Ported directly from `KnockBox.DndMapper`:
 
 ---
 
-## 4. Subsystem B: Display / Projector Theater Mode
+## 4. Subsystem B: Display / Projector Popout
 
 ### 4.1 Platform Hosting Model
-In KnockBox-Games, the application runs inside an authenticated, sandboxed iframe connected via a single session ticket. To support external projector displays:
-- **Mode 1: In-App Theater Mode (Primary Architecture)**:
-  - Fullscreen action toggles the viewport within the existing authenticated session to hide all rails, toolbars, and UI chrome, rendering pure map with 100% pitch-black fog and projector rules.
-  - Recommended for single-screen casting and physical TV tables.
-- **Mode 2: Detached Window (Experimental / Deferred)**:
-  - Detached popups (`window.open('?view=display')`) require local cross-window synchronization via `BroadcastChannel("dndm-display-sync")` because KnockBox single-ticket auth prevents opening parallel WebSocket client sessions without host platform support.
+In KnockBox-Games, the application runs inside an authenticated, sandboxed iframe connected via a single session ticket, so a second window cannot open its own session. The projector is a **popout window** driven by the DM's window (`src/ui/display/displayPopout.ts`):
+- The DM clicks **↗ Popout** (Session panel), which opens `?view=display`. The DM keeps full control of the board in their own window, and the popout is a separate, chrome-free window that can go on a TV/projector or be shared over Discord or another screen-sharing service.
+- The popout boots the same bundle with the Phaser map but **no network, controller, or library** (`main.ts`), so it can never start its own game or touch the auto-save.
+- Sync is `postMessage` on the window handles (not `BroadcastChannel`, which browsers partition by top-level site; the DM window is in the KnockBox iframe, the popout is top-level). The popout sends `display-join` on boot and on a 2s heartbeat; the DM window adopts it and pushes `display-state`, so the popout reconnects on its own after a DM-window reload.
+- The pushed state is `projectForPlayer(state, null)`: hidden entities, fogged tokens, and secret rolls never leave the DM window. Map images are fetched from the DM window as Blobs (`display-asset-request` / `display-asset`).
+- An in-app fullscreen "Theater Mode" was removed: it replaced the DM's own view, leaving the DM with no control of the board while it was up.
 
 ### 4.2 Display Projection Rules (`DisplayProjection`)
 1. **Fog of War**:
@@ -137,9 +137,9 @@ export type Patch =
 ### 6.1 Permission & Validation
 - Only the DM (`isDm(state, fromId)`) may call `updateMarkup` or `clearMarkup`.
 - Non-DM attempts are silently dropped.
-- **Sandbox-Safe SVG Sanitization**:
-  - The authority operates in a deterministic JS sandbox without `DOMParser`, `document`, or `window`.
-  - SVG validation must use pure string/regex allowlisting:
+- **Pure SVG Sanitization**:
+  - The host is the DM's browser, so `DOMParser` is technically available — but validation lives in `src/game/`, which stays pure (no DOM) so it runs under unit tests without a browser environment.
+  - SVG validation therefore keeps using pure string/regex allowlisting:
     - Enforces `<svg>`, `<g>`, `<path>`, `<circle>`, `<rect>` elements and harmless attributes (`stroke`, `stroke-width`, `fill`, `d`, `r`, `cx`, `cy`, `x`, `y`).
     - Strictly rejects any `<script>`, `href`, `xlink:href`, `onload`, or external resource references.
 - `markupSvg` string length is capped at **200,000 characters** to protect WebSocket frame budgets.
@@ -150,6 +150,8 @@ export type Patch =
 ## 7. Client Replica & Phaser Scene Integration
 
 ### 7.1 `MatchView.applyPatch`
+> **Superseded by host authority.** Guests no longer merge patches; they render `authority.currentView` (their per-player snapshot), and the host's state changes via `rules.applyIntent`. The snippet is kept as the reference shape for per-recipient deltas (KnockBox-Games#62).
+
 ```ts
 case "markup": {
   const nextMaps = this._state.maps.map((m) => {

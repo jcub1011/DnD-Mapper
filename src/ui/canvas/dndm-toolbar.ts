@@ -106,11 +106,27 @@ export class DndmToolbar extends GameElement {
     }
   }
 
+  /**
+   * Mouse-clicking a tool leaves keyboard focus on the button, so a later
+   * Space-to-pan would re-activate the focused button and toggle the tool
+   * back off. Drop focus so Space pans instead. (Keyboard users who Tab to
+   * a button and press Space still get normal button activation.)
+   */
+  private blurToolControl(e: Event): void {
+    const control = (e.target as Element | null)?.closest?.("button, input");
+    (control as HTMLElement | null)?.blur?.();
+  }
+
   override render(): TemplateResult {
     const pct = Math.round(this.zoom * 100);
 
     return html`
-      <div class="dndm-canvas-toolbar" role="toolbar" aria-label="Map tools">
+      <div
+        class="dndm-canvas-toolbar"
+        role="toolbar"
+        aria-label="Map tools"
+        @click=${this.blurToolControl}
+      >
         <label class="dndm-grid-toggle" title="Toggle grid lines">
           <input
             type="checkbox"
@@ -163,7 +179,7 @@ export class DndmToolbar extends GameElement {
               <button
                 class="dndm-zoom-btn ${this.toolMode === "focus" ? "active" : ""}"
                 type="button"
-                title="Focus box — drag on the map to define a focus region"
+                title="Focus box — drag to draw; drag the box or its corners to move/resize; Esc cancels"
                 @click=${() => this.toggleFocus()}
               >
                 ${focusRectIcon()}
@@ -197,7 +213,7 @@ export class DndmToolbar extends GameElement {
                   ? "active"
                   : ""}"
                 type="button"
-                title="Paint fog — drag on the map to hide cells"
+                title="Paint fog — drag on the map to hide cells (tokens on fogged cells are hidden from players except their owners)"
                 @click=${() => this.selectFogPaint()}
               >
                 ${fogPaintIcon()}
