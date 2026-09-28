@@ -451,6 +451,68 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
     expect(scene.effectiveMode).toBe("ruler");
   });
 
+  describe("releases off the canvas (POINTER_UP_OUTSIDE)", () => {
+    const grid: GridConfig = {
+      widthCells: 30,
+      heightCells: 20,
+      cellPixels: CELL,
+      showGridLines: true,
+      snapToGrid: true,
+      lineColor: "#222",
+    };
+
+    /** Left-button pointer at screen == world point (x, y). */
+    const leftPointer = (x: number, y: number) =>
+      ({
+        x,
+        y,
+        worldX: x,
+        worldY: y,
+        isDown: true,
+        event: null,
+        leftButtonDown: () => true,
+        middleButtonDown: () => false,
+        rightButtonDown: () => false,
+      }) as unknown as Phaser.Input.Pointer;
+
+    it("ends a background pan so returning to the canvas doesn't keep panning", () => {
+      const cam = scene.cameras.main;
+      scene.input.emit(Phaser.Input.Events.POINTER_DOWN, leftPointer(100, 100));
+      scene.input.emit(Phaser.Input.Events.POINTER_UP_OUTSIDE, leftPointer(100, 100));
+      const { scrollX, scrollY } = cam;
+
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, leftPointer(300, 300));
+
+      expect(cam.scrollX).toBe(scrollX);
+      expect(cam.scrollY).toBe(scrollY);
+    });
+
+    it("commits the fog stroke", () => {
+      scene.updateGrid(grid);
+      scene.setToolMode("fog");
+      const commits: number[][] = [];
+      scene.onFogStrokeCommit = (cells) => commits.push(cells);
+
+      scene.input.emit(Phaser.Input.Events.POINTER_DOWN, leftPointer(5.5 * CELL, 5.5 * CELL));
+      scene.input.emit(Phaser.Input.Events.POINTER_UP_OUTSIDE, leftPointer(5.5 * CELL, 5.5 * CELL));
+
+      expect(commits).toEqual([[5 * 30 + 5]]);
+    });
+
+    it("commits the focus rect", () => {
+      scene.updateGrid(grid);
+      scene.setToolMode("focus");
+      let committed: unknown = null;
+      scene.onFocusRectCommit = (rect) => (committed = rect);
+
+      scene.input.emit(Phaser.Input.Events.POINTER_DOWN, leftPointer(2 * CELL, 2 * CELL));
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, leftPointer(6 * CELL, 5 * CELL));
+      scene.input.emit(Phaser.Input.Events.POINTER_UP_OUTSIDE, leftPointer(6 * CELL, 5 * CELL));
+
+      expect(committed).not.toBeNull();
+    });
+  });
+
   it("centers and resets viewport properly", () => {
     const cam = scene.cameras.main;
 

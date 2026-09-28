@@ -85,6 +85,9 @@ export class MapScene extends Phaser.Scene {
   private camStartY = 0;
   private didMoveDuringPan = false;
 
+  // Canvas the release guards are attached to (null when headless)
+  private guardedCanvas: HTMLCanvasElement | null = null;
+
   // Last camera zoom the image selection handles were fitted to
   private lastZoom = 1;
 
@@ -145,6 +148,7 @@ export class MapScene extends Phaser.Scene {
     this.drawBackground();
     this.redrawGrid();
     this.setupInput();
+    this.installPointerReleaseGuards();
 
     // Redraw on window resize
     this.scale.on(Phaser.Scale.Events.RESIZE, () => {
@@ -700,34 +704,83 @@ export class MapScene extends Phaser.Scene {
       this.fogLayer.clearHover();
     });
 
-    // 5. Pointer Up
-    this.input.on(Phaser.Input.Events.POINTER_UP, (pointer: Phaser.Input.Pointer) => {
-      if (this.isPanning) {
-        this.isPanning = false;
-        if (!this.didMoveDuringPan && this.effectiveMode === "none") {
-          // Click dead zone (<= 3px): click on empty background deselects image
-          this.imageLayer.selectImage(null);
-        }
-        return;
-      }
-
-      const mode = this.effectiveMode;
-
-      if (mode === "fog") {
-        const stroke = this.fogLayer.endStroke();
-        if (stroke.length > 0) {
-          this.onFogStrokeCommit?.(stroke, this.fogBrushMode === "paint");
-        }
-      } else if (mode === "focus") {
-        const ctrl = pointer.event ? (pointer.event as MouseEvent).ctrlKey : false;
-        const mapId = this.activeMap?.id ?? "active";
-        const rect = this.focusOverlay.endDrag(mapId, !ctrl && this.snapToGrid);
-        if (rect) {
-          this.onFocusRectCommit?.(rect);
-        }
-      }
-    });
+    // 5. Pointer Up. Phaser reports a release off the canvas (over a rail, or
+    // outside the window) as POINTER_UP_OUTSIDE, which must end the gesture too.
+    this.input.on(Phaser.Input.Events.POINTER_UP, this.onPointerRelease, this);
+    this.input.on(Phaser.Input.Events.POINTER_UP_OUTSIDE, this.onPointerRelease, this);
   }
+
+  private onPointerRelease(pointer: Phaser.Input.Pointer): void {
+    if (this.isPanning) {
+      this.isPanning = false;
+      if (!this.didMoveDuringPan && this.effectiveMode === "none") {
+        // Click dead zone (<= 3px): click on empty background deselects image
+        this.imageLayer.selectImage(null);
+      }
+      return;
+    }
+
+    const mode = this.effectiveMode;
+
+    if (mode === "fog") {
+      const stroke = this.fogLayer.endStroke();
+      if (stroke.length > 0) {
+        this.onFogStrokeCommit?.(stroke, this.fogBrushMode === "paint");
+      }
+    } else if (mode === "focus") {
+      const ctrl = pointer.event ? (pointer.event as MouseEvent).ctrlKey : false;
+      const mapId = this.activeMap?.id ?? "active";
+      const rect = this.focusOverlay.endDrag(mapId, !ctrl && this.snapToGrid);
+      if (rect) {
+        this.onFocusRectCommit?.(rect);
+      }
+    }
+  }
+
+  /**
+   * Keep drags alive off the canvas but always honor the release.
+   *
+   * Capturing the pointer routes the compatibility mouse events to the canvas
+   * while the cursor is over the rails or outside the window, so Phaser keeps
+   * tracking the drag and sees the mouseup. Phaser's own off-canvas listener
+   * sits on window.top, which is the host page when we run in an iframe, so it
+   * can't be relied on.
+   */
+  private installPointerReleaseGuards(): void {
+    const canvas = this.game.canvas;
+    if (!canvas) return;
+    this.guardedCanvas = canvas;
+    canvas.addEventListener("pointerdown", this.onCanvasPointerDown);
+    canvas.addEventListener("mousemove", this.onCanvasMouseMove);
+  }
+
+  private removePointerReleaseGuards(): void {
+    this.guardedCanvas?.removeEventListener("pointerdown", this.onCanvasPointerDown);
+    this.guardedCanvas?.removeEventListener("mousemove", this.onCanvasMouseMove);
+    this.guardedCanvas = null;
+  }
+
+  private readonly onCanvasPointerDown = (e: PointerEvent): void => {
+    try {
+      this.guardedCanvas?.setPointerCapture(e.pointerId);
+    } catch {
+      // The pointer is already gone (released before this listener ran).
+    }
+  };
+
+  /**
+   * A release that never reached us (e.g. alt-tab mid-drag) leaves Phaser's
+   * pointer down. The first move with no buttons held ends the gesture there.
+   */
+  private readonly onCanvasMouseMove = (e: MouseEvent): void => {
+    // onMouseUp is the DOM entry point MouseManager uses; it's untyped.
+    const manager = this.input?.manager as
+      | (Phaser.Input.InputManager & { onMouseUp(event: MouseEvent): void })
+      | undefined;
+    if (manager?.mousePointer?.isDown && e.buttons === 0) {
+      manager.onMouseUp(e);
+    }
+  };
 
   // ── WebGL Context Restoration ──────────────────────────────────────────────
 
@@ -746,6 +799,7 @@ export class MapScene extends Phaser.Scene {
   }
 
   cleanUp(): void {
+    this.removePointerReleaseGuards();
     this.markupLayer?.destroy();
     this.imageLayer?.destroy();
     this.fogLayer?.destroy();

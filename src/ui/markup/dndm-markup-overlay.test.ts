@@ -83,6 +83,48 @@ describe("<dndm-markup-overlay> Component", () => {
     el.remove();
   });
 
+  describe("releases the overlay never saw", () => {
+    const setup = async () => {
+      const el = document.createElement("dndm-markup-overlay") as DndmMarkupOverlay;
+      el.activeMap = MAP;
+      const commits: (string | null)[] = [];
+      el.onCommitMarkup = (svg) => commits.push(svg);
+      document.body.appendChild(el);
+      await el.updateComplete;
+      const surface = el.querySelector(".dndm-markup-canvas")!;
+      const fire = (type: string, init: PointerEventInit) =>
+        surface.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, ...init }));
+      return { el, commits, fire };
+    };
+
+    it("commits the stroke on the first move with the button up", async () => {
+      const { el, commits, fire } = await setup();
+
+      fire("pointerdown", { button: 0, buttons: 1, clientX: 10, clientY: 10 });
+      fire("pointermove", { button: -1, buttons: 1, clientX: 20, clientY: 20 });
+      fire("pointermove", { button: -1, buttons: 0, clientX: 30, clientY: 30 });
+      // Further moves are plain hovers, not a new stroke.
+      fire("pointermove", { button: -1, buttons: 0, clientX: 40, clientY: 40 });
+
+      expect(commits).toHaveLength(1);
+      el.remove();
+    });
+
+    it("commits once when capture is lost mid-stroke, not again after pointerup", async () => {
+      const { el, commits, fire } = await setup();
+
+      fire("pointerdown", { button: 0, buttons: 1, clientX: 10, clientY: 10 });
+      fire("lostpointercapture", {});
+      expect(commits).toHaveLength(1);
+
+      fire("pointerdown", { button: 0, buttons: 1, clientX: 10, clientY: 10 });
+      fire("pointerup", { button: 0, buttons: 0, clientX: 20, clientY: 20 });
+      fire("lostpointercapture", {});
+      expect(commits).toHaveLength(2);
+      el.remove();
+    });
+  });
+
   it("toggles panning class on Space keydown and keyup", async () => {
     const el = document.createElement("dndm-markup-overlay") as DndmMarkupOverlay;
     el.activeMap = MAP;

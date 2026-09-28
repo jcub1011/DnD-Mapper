@@ -251,6 +251,15 @@ export class DndmMarkupOverlay extends GameElement {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    // A release we never saw (e.g. alt-tab mid-drag) ends the gesture on the
+    // first move with the button up.
+    if (
+      (this.isMmbPanning && (e.buttons & 4) === 0) ||
+      (this.isDrawing && !this.isMmbPanning && (e.buttons & 1) === 0)
+    ) {
+      this.onPointerUp(e);
+      return;
+    }
     if (this.isMmbPanning) {
       const dx = e.clientX - this.mmbLastX;
       const dy = e.clientY - this.mmbLastY;
@@ -522,6 +531,7 @@ export class DndmMarkupOverlay extends GameElement {
           @pointermove=${this.onPointerMove}
           @pointerup=${this.onPointerUp}
           @pointercancel=${this.onPointerUp}
+          @lostpointercapture=${this.onPointerUp}
           @mousedown=${this.onMouseDown}
           @wheel=${this.onWheel}
         >
