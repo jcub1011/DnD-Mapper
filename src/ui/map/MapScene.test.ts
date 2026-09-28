@@ -454,7 +454,7 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
   it("centers and resets viewport properly", () => {
     const cam = scene.cameras.main;
 
-    scene.centerOn(15, 10);
+    scene.centerOn(15, 10, 0);
     expect(cam.midPoint.x).toBeCloseTo(15 * CELL, 1);
     expect(cam.midPoint.y).toBeCloseTo(10 * CELL, 1);
 
@@ -470,7 +470,7 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
     scene.resetView();
     scene.setRailInsets(300, 100);
 
-    scene.centerOn(15, 10);
+    scene.centerOn(15, 10, 0);
 
     // The token must land under the visible-center anchor (1060, 540),
     // not under the physical canvas midpoint (960, 540).
@@ -479,6 +479,117 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
     const wp = cam.getWorldPoint(anchorX, anchorY);
     expect(wp.x).toBeCloseTo(15 * CELL, 1);
     expect(wp.y).toBeCloseTo(10 * CELL, 1);
+  });
+
+  it("centers on the camera midpoint at a non-1 zoom", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    scene.setRailInsets(0, 0);
+    cam.setZoom(2.5);
+
+    scene.centerOn(15, 10, 0);
+
+    expect(cam.midPoint.x).toBeCloseTo(15 * CELL, 1);
+    expect(cam.midPoint.y).toBeCloseTo(10 * CELL, 1);
+  });
+
+  it("centers on the visible center between rails at a non-1 zoom", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    scene.setRailInsets(300, 100);
+    cam.setZoom(2.5);
+
+    scene.centerOn(15, 10, 0);
+
+    cam.preRender();
+    const anchorX = (cam.width + scene.railLeft - scene.railRight) / 2;
+    const anchorY = cam.height / 2;
+    const wp = cam.getWorldPoint(anchorX, anchorY);
+    expect(wp.x).toBeCloseTo(15 * CELL, 1);
+    expect(wp.y).toBeCloseTo(10 * CELL, 1);
+  });
+
+  it("frames a box instantly on the visible center between rails", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    scene.setRailInsets(300, 100);
+
+    scene.frameBox({ x: 10, y: 5, width: 4, height: 2 }, 0);
+    expect(cam.zoom).not.toBe(1);
+
+    cam.preRender();
+    const anchorX = (cam.width + scene.railLeft - scene.railRight) / 2;
+    const anchorY = cam.height / 2;
+    const wp = cam.getWorldPoint(anchorX, anchorY);
+    expect(wp.x).toBeCloseTo(12 * CELL, 1);
+    expect(wp.y).toBeCloseTo(6 * CELL, 1);
+  });
+
+  it("re-centering on the visible center world point leaves the view unchanged", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    scene.setRailInsets(300, 100);
+    cam.setZoom(1.8);
+    cam.scrollX = 437;
+    cam.scrollY = -212;
+
+    const before = scene.getVisibleCenterWorld();
+    const scrollX = cam.scrollX;
+    const scrollY = cam.scrollY;
+
+    scene.centerOn(before.x / CELL, before.y / CELL, 0);
+
+    expect(cam.scrollX).toBeCloseTo(scrollX, 1);
+    expect(cam.scrollY).toBeCloseTo(scrollY, 1);
+  });
+
+  it("centerOn animates by default and lands on the visible center", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    scene.setRailInsets(300, 100);
+    cam.setZoom(2.5);
+    cam.preRender();
+    const startScrollX = cam.scrollX;
+
+    scene.centerOn(15, 10);
+
+    // Nothing moves until the pan effect ticks.
+    expect(cam.panEffect.isRunning).toBe(true);
+    expect(cam.scrollX).toBe(startScrollX);
+
+    cam.panEffect.update(0, 1000);
+    cam.preRender();
+
+    expect(cam.panEffect.isRunning).toBe(false);
+    const anchorX = (cam.width + scene.railLeft - scene.railRight) / 2;
+    const anchorY = cam.height / 2;
+    const wp = cam.getWorldPoint(anchorX, anchorY);
+    expect(wp.x).toBeCloseTo(15 * CELL, 1);
+    expect(wp.y).toBeCloseTo(10 * CELL, 1);
+  });
+
+  it("a newer centerOn retargets a pan already in flight", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+    scene.setRailInsets(0, 0);
+
+    scene.centerOn(15, 10);
+    cam.panEffect.update(0, 50);
+    scene.centerOn(40, 30);
+    cam.panEffect.update(0, 1000);
+
+    expect(cam.midPoint.x).toBeCloseTo(40 * CELL, 1);
+    expect(cam.midPoint.y).toBeCloseTo(30 * CELL, 1);
+  });
+
+  it("direct navigation cancels a running center pan", () => {
+    const cam = scene.cameras.main;
+    scene.resetView();
+
+    scene.centerOn(15, 10);
+    scene.panByScreenDelta(10, 0);
+
+    expect(cam.panEffect.isRunning).toBe(false);
   });
 
   it("zooms cursor-anchored for DOM overlay surfaces", () => {

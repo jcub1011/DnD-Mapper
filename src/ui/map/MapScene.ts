@@ -46,6 +46,9 @@ import { MarkupLayer } from "./markupLayer";
 
 export type ToolMode = "none" | "markup" | "focus" | "fog" | "ruler";
 
+/** Duration of the smooth pan used when centering on a token or a shared view. */
+const CENTER_PAN_MS = 300;
+
 export class MapScene extends Phaser.Scene {
   private bgGfx!: Phaser.GameObjects.Graphics;
   private gridGfx!: Phaser.GameObjects.Graphics;
@@ -158,6 +161,7 @@ export class MapScene extends Phaser.Scene {
   override update(): void {
     // Check multi-touch navigation first
     if (this.touchNav.update()) {
+      this.cancelCameraTweens();
       this.redrawGrid();
       this.rulerOverlay.redraw();
       this.focusOverlay.redraw();
@@ -243,13 +247,14 @@ export class MapScene extends Phaser.Scene {
     const panX = centerX + (this.railRight - this.railLeft) / (2 * targetZoom);
 
     if (duration > 0) {
-      cam.pan(panX, centerY, duration, "Power2");
-      cam.zoomTo(targetZoom, duration, "Power2");
+      cam.pan(panX, centerY, duration, "Power2", true);
+      // The zoom effect updates after the pan effect each frame, so its
+      // callback sees both applied.
+      cam.zoomTo(targetZoom, duration, "Power2", true, this.onCameraTweenStep);
     } else {
+      this.cancelCameraTweens();
       cam.setZoom(targetZoom);
-      const anchor = this.visibleCenterPx();
-      cam.scrollX = centerX - anchor.x / targetZoom;
-      cam.scrollY = centerY - anchor.y / targetZoom;
+      cam.centerOn(panX, centerY);
       cam.preRender();
     }
     this.redrawGrid();
@@ -411,31 +416,46 @@ export class MapScene extends Phaser.Scene {
     return { x: pt.x, y: pt.y };
   }
 
-  centerOn(cellX: number, cellY: number): void {
+  /** Smoothly pan so cell (cellX, cellY) lands on the visible center; duration 0 jumps. */
+  centerOn(cellX: number, cellY: number, duration = CENTER_PAN_MS): void {
+    this.panToWorld(cellX * CELL, cellY * CELL, duration);
+  }
+
+  /** Smoothly pan so world point (worldX, worldY) lands on the visible center; duration 0 jumps. */
+  panToWorld(worldX: number, worldY: number, duration = CENTER_PAN_MS): void {
     const cam = this.cameras.main;
-    // Rail-aware: place the world point under the visible center, not the
-    // physical canvas midpoint (which may sit under a side rail).
-    // getWorldPoint(sx) = scrollX + sx / zoom  =>  scrollX = wx - sx / zoom.
-    const anchor = this.visibleCenterPx();
-    cam.scrollX = cellX * CELL - anchor.x / cam.zoom;
-    cam.scrollY = cellY * CELL - anchor.y / cam.zoom;
-    cam.preRender();
+    // Phaser zooms about the camera midpoint, so cam.pan()/cam.centerOn() put
+    // a point at the physical center at any zoom; shift the target so it lands
+    // on the visible center between rails: panX = wx + (railRight - railLeft) / (2*zoom).
+    const panX = worldX + (this.railRight - this.railLeft) / (2 * cam.zoom);
+    if (duration > 0) {
+      // force: a newer center request retargets a pan already in flight.
+      cam.pan(panX, worldY, duration, "Power2", true, this.onCameraTweenStep);
+    } else {
+      this.cancelCameraTweens();
+      cam.centerOn(panX, worldY);
+      cam.preRender();
+    }
     this.redrawGrid();
     this.rulerOverlay.redraw();
     this.focusOverlay.redraw();
     this.onViewportChanged?.(readViewport(cam, CELL));
   }
 
-  panToWorld(worldX: number, worldY: number): void {
-    const cam = this.cameras.main;
-    // cam.pan() targets the physical center; shift the target so the point
-    // lands on the visible center: panX = wx + (railRight - railLeft) / (2*zoom).
-    const panX = worldX + (this.railRight - this.railLeft) / (2 * cam.zoom);
-    cam.pan(panX, worldY, 300, "Power2");
+  /** Per-frame refresh while a camera pan/zoom effect runs — the grid is culled to worldView. */
+  private readonly onCameraTweenStep = (cam: Phaser.Cameras.Scene2D.Camera): void => {
+    cam.preRender();
     this.redrawGrid();
     this.rulerOverlay.redraw();
     this.focusOverlay.redraw();
     this.onViewportChanged?.(readViewport(cam, CELL));
+  };
+
+  /** Stop any running pan/zoom effect so direct user navigation isn't overwritten next frame. */
+  private cancelCameraTweens(): void {
+    const cam = this.cameras.main;
+    cam.panEffect.reset();
+    cam.zoomEffect.reset();
   }
 
   zoomIn(factor = TOOLBAR_FACTOR): void {
@@ -465,6 +485,7 @@ export class MapScene extends Phaser.Scene {
    */
   zoomAtScreenPoint(factor: number, sx: number, sy: number): void {
     const cam = this.cameras.main;
+    this.cancelCameraTweens();
     zoomAtAnchor(cam, factor, sx, sy);
     this.redrawGrid();
     this.rulerOverlay.redraw();
@@ -479,6 +500,7 @@ export class MapScene extends Phaser.Scene {
    */
   panByScreenDelta(dxPx: number, dyPx: number): void {
     const cam = this.cameras.main;
+    this.cancelCameraTweens();
     cam.scrollX -= dxPx / cam.zoom;
     cam.scrollY -= dyPx / cam.zoom;
     cam.preRender();
@@ -490,6 +512,7 @@ export class MapScene extends Phaser.Scene {
 
   resetView(): void {
     const cam = this.cameras.main;
+    this.cancelCameraTweens();
     applyViewport(cam, 0, 0, 1.0, CELL);
     this.redrawGrid();
     this.rulerOverlay.redraw();
@@ -562,6 +585,7 @@ export class MapScene extends Phaser.Scene {
       Phaser.Input.Events.POINTER_WHEEL,
       (pointer: Phaser.Input.Pointer, _over: unknown[], _dx: number, dy: number) => {
         const factor = dy < 0 ? WHEEL_FACTOR : 1 / WHEEL_FACTOR;
+        this.cancelCameraTweens();
         zoomAtAnchor(cam, factor, pointer.x, pointer.y);
         this.redrawGrid();
         this.rulerOverlay.redraw();
@@ -594,6 +618,7 @@ export class MapScene extends Phaser.Scene {
         // token- or image-layer content, those handlers own it.
         if (isLeft && !isMiddle && this.isPointerOverToken(pointer)) return;
         if (isLeft && !isMiddle && this.isPointerOverImage(pointer)) return;
+        this.cancelCameraTweens();
         this.isPanning = true;
         this.didMoveDuringPan = false;
         this.panStartX = pointer.x;
