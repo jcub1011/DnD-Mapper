@@ -1,45 +1,42 @@
 /*
- * MatchView — the replicated state plus (on the host) the truth.
+ * MatchView — the host store. The DM's browser holds the truth here.
  *
- * This implements BOTH halves of the KBAuthority model contract:
+ * This implements the per-recipient KBAuthority model contract:
  *
- *   host  `applyIntent(fromId, action)` → Patch | null  (DM browser only)
- *   host  `snapshot(forPlayerId?)` → shared projected snapshot
- *   guest `applyPatch` / `applySnapshot` — adopt what the host publishes
+ *   `applyIntent(fromId, action)` → Patch | null  (non-null = accepted)
+ *   `snapshot(forPlayerId?)` → the state projected for one player
  *
- * KBAuthority enforces the roles: only the host's `applyIntent` is ever called,
- * and the host never adopts `delta`/`state` echoes. Patches stay absolute.
+ * KBAuthority only ever calls these on the host. Guests keep no model: they
+ * render the per-player snapshot the host sends them (`currentView`), so the
+ * returned patch is an accept signal and is never put on the wire.
  */
 
-import type { CharacterSheet, DndMapperState, GameMap, MapSummary, Token } from "./domain.js";
+import type { DndMapperState } from "./domain.js";
+import { createDefaultDndMapperState, isFullMap } from "./domain.js";
 import {
-  createDefaultDndMapperState,
-  isFullMap,
-  MAX_ROLL_LOG,
-  reconcileSheetValues,
-} from "./domain.js";
-import { applyIntent as applyIntentRules, ensureBoundPairs, projectForPlayer, projectSnapshot } from "./rules.js";
+  applyIntent as applyIntentRules,
+  ensureBoundPairs,
+  handlePlayerLeft as handlePlayerLeftRules,
+  projectForPlayer,
+  projectSnapshot,
+} from "./rules.js";
 import { generateGuid } from "./maps.js";
 import type { Patch, PlayerInfo } from "./types.js";
-import { guardSize } from "./wire.js";
-import { createLogger } from "../log.js";
-
-const log = createLogger("view");
 
 export class MatchView {
   private _state: DndMapperState = createDefaultDndMapperState();
   private _roster: readonly PlayerInfo[] = [];
 
-  /** The latest state the authority published. Treat it as read-only. */
+  /** The host's live truth. Treat it as read-only. */
   get state(): Readonly<DndMapperState> {
     return this._state;
   }
 
   /**
-   * Host only. The controller feeds the lobby roster here (see
-   * `AuthorityController.emitRoster`) so DM-gated intents validate against the
-   * same membership the server module used to see. Mirrors the authority
-   * module's init: an empty DM slot seeds to the first roster member.
+   * The controller feeds the lobby roster here (see
+   * `AuthorityController.emitRoster`) so DM-gated intents validate against
+   * the current membership. An empty DM slot seeds to the first roster
+   * member, which is the host on every transport.
    */
   setRoster(roster: readonly PlayerInfo[]): void {
     this._roster = roster;
@@ -49,30 +46,46 @@ export class MatchView {
   }
 
   /**
-   * Host only — validate an untrusted intent, mutate, and return the narrowed
-   * absolute patch to broadcast. Null means REJECTED (broadcast nothing).
-   * The browser host owns its clock, so `Date.now()` replaces `kb.now()`.
+   * Validate an untrusted intent and mutate. Null means REJECTED (broadcast
+   * nothing). The browser host owns its clock, so `Date.now()` is `now`.
+   *
+   * A rule may accept with `patch: null`. When it also changed state (e.g.
+   * `reorderCustomTemplates`), that change must still reach every player, so
+   * a full-state accept signal is returned; per-recipient KBAuthority ignores
+   * the body and re-projects each player's snapshot on any non-null return.
    */
   applyIntent(fromId: string, action: unknown): Patch | null {
     const result = applyIntentRules(this._state, fromId, action, Date.now(), this._roster);
-    if (result === null || result.patch === null) return null;
+    if (result === null) return null;
+    const changed = result.state !== this._state;
     this._state = result.state;
-    return guardSize(result.patch, (msg) => log.error(msg));
+    if (result.patch !== null) return result.patch;
+    return changed ? { kind: "full", state: projectSnapshot(this._state) } : null;
   }
 
   /**
-   * Host only — directly swaps a loaded save slot into the live session.
-   * This is a pure-local write with zero network: the caller (the host
-   * controller) fans out fresh per-player snapshots afterwards. It replaces
-   * the old chunked `beginImport`/`importChunk`/`commitImport` round-trip —
-   * the host holds full maps, so no chunk budget applies.
+   * A player left the lobby: convert their tokens to NPCs, release their
+   * sheets and combatants. The controller calls this before KBAuthority's own
+   * roster-change re-projection, so that fan-out already carries the result.
+   * The DM is the host and never sees its own leave — the lobby ends instead.
+   */
+  handlePlayerLeft(playerId: string): void {
+    this._roster = this._roster.filter((p) => p.id !== playerId);
+    this._state = handlePlayerLeftRules(this._state, playerId).state;
+  }
+
+  /**
+   * Directly swaps a loaded save slot into the live session. This is a
+   * pure-local write with zero network: the caller (the controller) fans out
+   * fresh per-player snapshots afterwards. The host holds full maps, so no
+   * chunk budget applies.
    *
-   * Normalization mirrors what the old `commitImport` ran: summary maps
-   * (pre-fix slots) are unrecoverable from the slot and dropped, orphan
-   * tokens are repaired via `ensureBoundPairs`, ephemeral session state
-   * (`rollLog`, `hostHeldKeys`, viewport) resets, and roster ownership
-   * (`dmPlayerId`) wins over whatever the slot persisted. Sets an
-   * `announcement` marker so clients toast the load once.
+   * Summary maps (pre-fix slots) are unrecoverable from the slot and dropped,
+   * orphan tokens are repaired via `ensureBoundPairs`, ephemeral session
+   * state (`rollLog`, `hostHeldKeys`, viewport) resets, and live-session
+   * fields a slot never persists win over the slot: roster ownership
+   * (`dmPlayerId`) and `statusEffectTemplates` (slots load it as `{}`). Sets
+   * an `announcement` marker so clients toast the load once.
    */
   applyLoaded(loaded: DndMapperState): void {
     const fullMaps = loaded.maps.filter(isFullMap);
@@ -96,315 +109,20 @@ export class MatchView {
       pendingCenterRequest: null,
       focusRect: null,
       dmPlayerId: this._state.dmPlayerId,
+      statusEffectTemplates: this._state.statusEffectTemplates,
       announcement: { id: generateGuid(), loadedAt: Date.now() },
     };
   }
 
   /**
-   * Host only — the state projected for one player (sync / join / reconnect,
-   * roster-change re-push). The DM gets the shared snapshot unchanged; every
-   * other player gets `projectForPlayer` filtering (hidden tokens/images
-   * dropped, sheets gated + redacted, rolls/combat/dice gated). Fog stays
-   * broadcast (documented legacy leak).
+   * The state projected for one player (sync / join / reconnect, roster-change
+   * re-push, every accepted intent). The DM gets the shared snapshot
+   * unchanged; every other player gets `projectForPlayer` filtering (hidden
+   * tokens/images dropped, sheets gated + redacted, rolls/combat/dice gated).
+   * Fog stays broadcast (documented legacy leak).
    */
   snapshot(forPlayerId?: string): DndMapperState {
     if (forPlayerId === undefined) return projectSnapshot(this._state);
     return projectForPlayer(this._state, forPlayerId);
-  }
-
-  /** Full state snapshot, on join / reconnect. */
-  applySnapshot(state: DndMapperState): void {
-    this._state = state;
-  }
-
-  /**
-   * Applies a broadcast delta. Patches carry absolute values, merged by kind.
-   */
-  applyPatch(patch: Patch): void {
-    switch (patch.kind) {
-      case "full": {
-        this._state = patch.state;
-        break;
-      }
-
-      case "token": {
-        const token = patch.token;
-        const nextMaps = this._state.maps.map((m) => {
-          if (m.id !== token.mapId) return m;
-          if (isFullMap(m)) {
-            const exists = m.tokens.some((t) => t.id === token.id);
-            const nextTokens: readonly Token[] = exists
-              ? m.tokens.map((t) => (t.id === token.id ? token : t))
-              : [...m.tokens, token];
-            return { ...m, tokens: nextTokens };
-          } else {
-            return {
-              id: m.id,
-              name: m.name,
-              listOrder: m.listOrder,
-              grid: {
-                widthCells: m.widthCells,
-                heightCells: m.heightCells,
-                cellPixels: 50,
-                showGridLines: true,
-                snapToGrid: true,
-                lineColor: "#222",
-              },
-              images: [],
-              tokens: [token],
-              createdUtc: "",
-              defaultSpawnPosition: null,
-              markupSvg: null,
-              fogMask: "",
-            };
-          }
-        });
-        this._state = { ...this._state, maps: nextMaps };
-        break;
-      }
-
-      case "tokenRemoved": {
-        const tokenId = patch.tokenId;
-        const nextMaps = this._state.maps.map((m) => {
-          if (!isFullMap(m)) return m;
-          const filtered = m.tokens.filter((t) => t.id !== tokenId);
-          return filtered.length === m.tokens.length ? m : { ...m, tokens: filtered };
-        });
-        this._state = { ...this._state, maps: nextMaps };
-        break;
-      }
-
-      case "fog": {
-        const nextMaps = this._state.maps.map((m) => {
-          if (!isFullMap(m) || m.id !== patch.mapId) return m;
-          return { ...m, fogMask: patch.mask };
-        });
-        this._state = { ...this._state, maps: nextMaps };
-        break;
-      }
-
-      case "markup": {
-        const nextMaps = this._state.maps.map((m) => {
-          if (!isFullMap(m) || m.id !== patch.mapId) return m;
-          return { ...m, markupSvg: patch.markupSvg };
-        });
-        this._state = { ...this._state, maps: nextMaps };
-        break;
-      }
-
-      case "image": {
-        const image = patch.image;
-        let found = false;
-        let nextMaps = this._state.maps.map((m) => {
-          if (!isFullMap(m)) return m;
-          const idx = m.images.findIndex((img) => img.id === image.id);
-          if (idx !== -1) {
-            found = true;
-            const updated = [...m.images];
-            updated[idx] = image;
-            return { ...m, images: updated };
-          }
-          return m;
-        });
-
-        // If not already in an existing map, add to the active map
-        if (!found && this._state.activeMapId) {
-          nextMaps = nextMaps.map((m) => {
-            if (isFullMap(m) && m.id === this._state.activeMapId) {
-              return { ...m, images: [...m.images, image] };
-            }
-            return m;
-          });
-        }
-        this._state = { ...this._state, maps: nextMaps };
-        break;
-      }
-
-      case "imageRemoved": {
-        const imageId = patch.imageId;
-        const nextMaps = this._state.maps.map((m) => {
-          if (!isFullMap(m)) return m;
-          const filtered = m.images.filter((img) => img.id !== imageId);
-          return filtered.length === m.images.length ? m : { ...m, images: filtered };
-        });
-        this._state = { ...this._state, maps: nextMaps };
-        break;
-      }
-
-      case "grid": {
-        const nextMaps = this._state.maps.map((m) => {
-          if (!isFullMap(m) || m.id !== patch.mapId) return m;
-          return { ...m, grid: patch.grid };
-        });
-        this._state = { ...this._state, maps: nextMaps };
-        break;
-      }
-
-      case "activeMap": {
-        this._state = { ...this._state, activeMapId: patch.mapId };
-        break;
-      }
-
-      case "focusRect": {
-        this._state = { ...this._state, focusRect: patch.rect };
-        break;
-      }
-
-      case "centerViewport": {
-        this._state = { ...this._state, pendingCenterRequest: patch.request };
-        break;
-      }
-
-      case "settings": {
-        this._state = { ...this._state, settings: patch.settings };
-        break;
-      }
-
-      case "mapList": {
-        const summariesById = new Map<string, MapSummary>();
-        for (const s of patch.maps) {
-          summariesById.set(s.id, s);
-        }
-
-        const existingById = new Map<string, GameMap | MapSummary>();
-        for (const m of this._state.maps) {
-          existingById.set(m.id, m);
-        }
-
-        const merged: Array<GameMap | MapSummary> = [];
-        for (const summary of patch.maps) {
-          const existing = existingById.get(summary.id);
-          if (existing && isFullMap(existing)) {
-            // Keep full map data, updating metadata
-            merged.push({
-              ...existing,
-              name: summary.name,
-              listOrder: summary.listOrder,
-              grid: {
-                ...existing.grid,
-                widthCells: summary.widthCells,
-                heightCells: summary.heightCells,
-              },
-            });
-          } else {
-            merged.push(summary);
-          }
-        }
-
-        this._state = { ...this._state, maps: merged };
-        break;
-      }
-
-      case "map": {
-        const fullMap = patch.map;
-        const exists = this._state.maps.some((m) => m.id === fullMap.id);
-        const nextMaps = exists
-          ? this._state.maps.map((m) => (m.id === fullMap.id ? fullMap : m))
-          : [...this._state.maps, fullMap];
-        const nextActive = this._state.activeMapId ?? fullMap.id;
-        this._state = { ...this._state, maps: nextMaps, activeMapId: nextActive };
-        break;
-      }
-
-      case "dm": {
-        this._state = { ...this._state, dmPlayerId: patch.dmPlayerId };
-        break;
-      }
-
-      case "phase": {
-        this._state = { ...this._state, phase: patch.phase };
-        break;
-      }
-
-      case "sheet": {
-        const nextSheets = { ...this._state.sheets, [patch.sheet.id]: patch.sheet };
-        this._state = { ...this._state, sheets: nextSheets };
-        break;
-      }
-
-      case "sheetRemoved": {
-        const nextSheets = { ...this._state.sheets };
-        delete nextSheets[patch.sheetId];
-        this._state = { ...this._state, sheets: nextSheets };
-        break;
-      }
-
-      case "schema": {
-        const nextSheets: Record<string, CharacterSheet> = {};
-        for (const [id, s] of Object.entries(this._state.sheets)) {
-          nextSheets[id] = reconcileSheetValues(s, patch.schema);
-        }
-        this._state = {
-          ...this._state,
-          attributeSchema: patch.schema,
-          initiativeAttributeName: patch.initiativeAttributeName,
-          sheets: nextSheets,
-        };
-        break;
-      }
-
-      case "effectTemplate": {
-        const nextTemplates = {
-          ...this._state.statusEffectTemplates,
-          [patch.template.id]: patch.template,
-        };
-        this._state = { ...this._state, statusEffectTemplates: nextTemplates };
-        break;
-      }
-
-      case "effectTemplateRemoved": {
-        const nextTemplates = { ...this._state.statusEffectTemplates };
-        delete nextTemplates[patch.templateId];
-        this._state = { ...this._state, statusEffectTemplates: nextTemplates };
-        break;
-      }
-
-      case "customTemplate": {
-        const nextTemplates = {
-          ...this._state.customTemplates,
-          [patch.template.id]: patch.template,
-        };
-        this._state = { ...this._state, customTemplates: nextTemplates };
-        break;
-      }
-
-      case "customTemplateRemoved": {
-        const nextTemplates = { ...this._state.customTemplates };
-        delete nextTemplates[patch.templateId];
-        this._state = { ...this._state, customTemplates: nextTemplates };
-        break;
-      }
-
-      case "roll": {
-        const nextRollLog = [...this._state.rollLog, patch.roll].slice(-MAX_ROLL_LOG);
-        this._state = { ...this._state, rollLog: nextRollLog };
-        break;
-      }
-
-      case "rollLogCleared": {
-        this._state = { ...this._state, rollLog: [] };
-        break;
-      }
-
-      case "globalRollTemplates": {
-        this._state = { ...this._state, globalRollTemplates: patch.templates };
-        break;
-      }
-
-      case "loadedDiceRules": {
-        this._state = { ...this._state, loadedDiceRules: patch.rules };
-        break;
-      }
-
-      case "hostKeys": {
-        this._state = { ...this._state, hostHeldKeys: patch.keys };
-        break;
-      }
-
-      case "combat": {
-        this._state = { ...this._state, activeCombat: patch.combat };
-        break;
-      }
-    }
   }
 }

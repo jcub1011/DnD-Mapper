@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { applyIntent, createState, validateMarkupSvg } from "./rules";
-import { MatchView } from "./view";
 
 const ROSTER = [
   { id: "dm-1", displayName: "Dungeon Master" },
@@ -164,20 +163,5 @@ describe("Markup Authority Rules & SVG Sanitization (Phase 10)", () => {
     it("rejects unbalanced or malformed tags", () => {
       expect(validateMarkupSvg("<svg><path d=\"M 0 0\"")).toBe(false);
     });
-  });
-
-  it("MatchView applies markup patch properly to active map", () => {
-    const { state, mapId } = setupStateWithMap();
-    const view = new MatchView();
-    view.applySnapshot(state);
-
-    view.applyPatch({
-      kind: "markup",
-      mapId,
-      markupSvg: VALID_SVG,
-    });
-
-    const active = view.state.maps.find((m) => m.id === mapId);
-    expect((active as { markupSvg: string | null }).markupSvg).toBe(VALID_SVG);
   });
 });

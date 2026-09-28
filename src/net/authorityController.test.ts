@@ -4,7 +4,7 @@
  * KnockBoxLocalPeer in `mode: 'process'` runs several peers in one JS realm with
  * NO virtual server actor — the first peer is the host (`isHost: true` /
  * `authority: 'host'`), exactly as the relay reports live. The host peer's
- * MatchView (host half) is the truth; guests adopt what it publishes. So these
+ * MatchView is the truth; guests render the per-player snapshot it publishes. So these
  * tests exercise the production code path, not a stand-in.
  *
  * IMPORT DISCIPLINE: only kb-authority.js and knockbox-local.js may be imported
@@ -40,7 +40,7 @@ afterEach(() => {
 function makePeer(playerId: string): Peer {
   // TRUE host mode: no `authority:` option, so no virtual server actor. The
   // first peer is elected host (isHost:true, authority:'host') and its
-  // MatchView host half is the truth — exactly as the relay reports live.
+  // MatchView host store is the truth — exactly as the relay reports live.
   const peer = new KnockBoxLocalPeer({
     mode: "process",
     channel: "test-lobby",
@@ -55,10 +55,13 @@ function asTransport(peer: Peer): KnockBoxTransport {
   return peer as unknown as KnockBoxTransport;
 }
 
-function attachView(peer: Peer): MatchView {
+/**
+ * A bare per-recipient KBAuthority over MatchView, as production wires it.
+ * `state` is what the peer renders: the host's truth, or a guest's projection.
+ */
+function attachView(peer: Peer): { readonly state: Readonly<MatchState> } {
   const view = new MatchView();
-  new KBAuthority<MatchState, Patch>(peer as unknown as KnockBoxPlugin, view);
-  // Mirror what AuthorityController.emitRoster does: feed the host half its
+  // Mirror what AuthorityController.emitRoster does: feed the host store its
   // membership so DM-gated intents validate (and DM seeds to roster[0]).
   const feedRoster = (): void => {
     view.setRoster(
@@ -72,7 +75,14 @@ function attachView(peer: Peer): MatchView {
   peer.events.on("player-joined", feedRoster);
   peer.events.on("player-left", feedRoster);
   feedRoster();
-  return view;
+  const authority = new KBAuthority<MatchState, Patch>(peer as unknown as KnockBoxPlugin, view, {
+    perRecipient: true,
+  });
+  return {
+    get state(): Readonly<MatchState> {
+      return peer.isHost ? view.state : (authority.currentView ?? view.state);
+    },
+  };
 }
 
 /** Start a peer and wait until its replica has settled to `expected` members. */
@@ -324,6 +334,64 @@ describe("AuthorityController", () => {
 
     host.destroy();
     guest.destroy();
+  });
+
+  it("turns a leaving guest's tokens into NPCs for the host and the remaining guests", async () => {
+    const hostPeer = makePeer("dm-1");
+    const host = new AuthorityController(asTransport(hostPeer));
+    hostPeer.start();
+    await vi.waitFor(() => expect(hostPeer.players).toHaveLength(1));
+
+    const leaverPeer = makePeer("guest-1");
+    const leaver = new AuthorityController(asTransport(leaverPeer));
+    leaverPeer.start();
+    const stayerPeer = makePeer("guest-2");
+    const stayer = new AuthorityController(asTransport(stayerPeer));
+    stayerPeer.start();
+    await vi.waitFor(() => expect(hostPeer.players).toHaveLength(3));
+
+    host.sendIntent({ kind: "createMap", name: "Dungeon" });
+    await vi.waitFor(() => expect(leaver.state.maps).toHaveLength(1));
+    const mapId = host.view.state.maps[0].id;
+
+    // DM spawns a character and hands it to guest-1 (sheet + its tokens).
+    host.sendIntent({
+      kind: "spawnToken",
+      mapId,
+      token: {
+        type: "PlayerToken",
+        name: "Ranger",
+        color: "#0f0",
+        iconKind: "Initial",
+        x: 4.5,
+        y: 4.5,
+        sheetId: null,
+        hidden: false,
+      },
+    });
+    await vi.waitFor(() => expect(Object.keys(host.view.state.sheets)).toHaveLength(1));
+    const sheetId = Object.keys(host.view.state.sheets)[0];
+    host.sendIntent({ kind: "assignCharacterToPlayer", sheetId, playerId: "guest-1" });
+    await vi.waitFor(() => {
+      const map = stayer.state.maps[0];
+      expect(isFullMap(map) && map.tokens[0]?.ownerUserId).toBe("guest-1");
+    });
+
+    leaver.destroy();
+    leaverPeer.destroy();
+    await vi.waitFor(() => expect(hostPeer.players).toHaveLength(2));
+
+    const npc = { type: "NPCToken", ownerUserId: null, representsUserId: "guest-1" };
+    const hostMap = host.view.state.maps[0];
+    expect(isFullMap(hostMap) && hostMap.tokens[0]).toMatchObject(npc);
+    // KBAuthority's own roster-change fan-out already carries the conversion.
+    await vi.waitFor(() => {
+      const map = stayer.state.maps[0];
+      expect(isFullMap(map) && map.tokens[0]).toMatchObject(npc);
+    });
+
+    host.destroy();
+    stayer.destroy();
   });
 
   it("applies a loaded save on the host and converges guests (no chunked import)", async () => {

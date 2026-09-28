@@ -1,12 +1,12 @@
 /*
  * The RULES — the single source of truth for what a player may do and what the
- * state becomes. These run inside the KnockBox server's sandbox (via
- * `src/authority/authority.ts`), so they are pure functions with no
- * ambient I/O: no DOM, no console, no timers, and NO `Date` (the sandbox deletes
- * it — the authority passes `kb.now()` in as a clock).
+ * state becomes. The host (the DM's browser) runs these via `MatchView`
+ * (`src/game/view.ts`). They stay pure functions with no ambient I/O — no DOM,
+ * no console, no timers — and take the clock as a `now` argument, so the whole
+ * rules layer is testable without a browser.
  *
- * Clients never call these directly. A client sends an Intent and renders whatever
- * Patch or Snapshot the authority publishes.
+ * Guests never call these. A guest sends an Intent and renders the per-player
+ * snapshot the host publishes.
  */
 
 import type {
@@ -428,30 +428,20 @@ export function createState(players: readonly PlayerInfo[]): DndMapperState {
 // ── Player Lifecycle & Abandonment (Phase 11) ────────────────────────────────
 
 /**
- * Handles a player disconnecting from the session:
- *   1. If the DM drops, promotes the oldest remaining peer in the roster.
- *   2. If a non-DM drops:
- *      - Converts their tokens to NPCToken on the board, ownerUserId = null,
- *        recording representsUserId = leavingPlayerId so characters stay on the board.
- *      - Updates any owned character sheets: ownerUserId = null, representsUserId = leavingPlayerId.
- *      - Clears ownership on active combatants so DM can roll and manage them.
+ * Handles a non-DM player leaving the session:
+ *   - Converts their tokens to NPCToken on the board, ownerUserId = null,
+ *     recording representsUserId = leavingPlayerId so characters stay on the board.
+ *   - Updates any owned character sheets: ownerUserId = null, representsUserId = leavingPlayerId.
+ *   - Clears ownership on active combatants so DM can roll and manage them.
+ *
+ * There is no DM succession: the DM is the host, and the host leaving ends the
+ * lobby (locked decision "freeze on DM leave").
  */
 export function handlePlayerLeft(
   state: DndMapperState,
   leavingPlayerId: string,
-  roster: readonly PlayerInfo[],
 ): { state: DndMapperState; patch: Patch | null } {
-  let changed = false;
-
-  // 1. Owner succession: if leaving player was DM, promote oldest remaining peer
-  let newDmPlayerId = state.dmPlayerId;
-  if (leavingPlayerId === state.dmPlayerId) {
-    const successor = roster.find((p) => p.id !== leavingPlayerId)?.id ?? null;
-    newDmPlayerId = successor;
-    changed = true;
-  }
-
-  // 2. Maps & tokens: convert leaving player's tokens to NPCToken
+  // 1. Maps & tokens: convert leaving player's tokens to NPCToken
   const nextMaps: GameMap[] = [];
   let tokenChanged = false;
 
@@ -483,7 +473,7 @@ export function handlePlayerLeft(
     }
   }
 
-  // 3. Sheets: clear ownerUserId and set representsUserId on leaving player's sheets
+  // 2. Sheets: clear ownerUserId and set representsUserId on leaving player's sheets
   let sheetChanged = false;
   const nextSheets: Record<string, CharacterSheet> = {};
   for (const [id, sheet] of Object.entries(state.sheets)) {
@@ -499,10 +489,10 @@ export function handlePlayerLeft(
     }
   }
 
-  // 4. Combat: clear ownerUserId on leaving player's combatants
+  // 3. Combat: clear ownerUserId on leaving player's combatants
   let nextCombat = state.activeCombat;
+  let combatChanged = false;
   if (nextCombat) {
-    let combatChanged = false;
     const nextTurnOrder = nextCombat.turnOrder.map((c) => {
       if (c.ownerUserId === leavingPlayerId) {
         combatChanged = true;
@@ -515,40 +505,26 @@ export function handlePlayerLeft(
     });
     if (combatChanged) {
       nextCombat = { ...nextCombat, turnOrder: nextTurnOrder };
-      changed = true;
     }
   }
 
-  if (tokenChanged || sheetChanged || newDmPlayerId !== state.dmPlayerId) {
-    changed = true;
-  }
-
-  if (!changed) {
+  if (!tokenChanged && !sheetChanged && !combatChanged) {
     return { state, patch: null };
   }
 
   const nextState: DndMapperState = {
     ...state,
-    dmPlayerId: newDmPlayerId,
     maps: nextMaps,
     sheets: nextSheets,
     activeCombat: nextCombat,
   };
 
-  if (tokenChanged || sheetChanged) {
-    return {
-      state: nextState,
-      patch: {
-        kind: "full",
-        state: projectSnapshot(nextState),
-      },
-    };
-  }
-
-  // Only DM changed
   return {
     state: nextState,
-    patch: newDmPlayerId ? { kind: "dm", dmPlayerId: newDmPlayerId } : null,
+    patch: {
+      kind: "full",
+      state: projectSnapshot(nextState),
+    },
   };
 }
 
@@ -879,7 +855,7 @@ function isFocusRect(obj: unknown): obj is FocusRect {
 }
 
 /**
- * Deterministic, sandbox-safe SVG validator for freehand markup.
+ * Deterministic, DOM-free SVG validator for freehand markup.
  * Strictly enforces an allowlist of harmless vector tags and attributes.
  * Rejects any scripts, event handlers, hrefs, or external references.
  */

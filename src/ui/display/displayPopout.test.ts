@@ -167,19 +167,23 @@ describe("ProxyAssetSource", () => {
     const createUrl = vi
       .spyOn(URL, "createObjectURL")
       .mockReturnValueOnce("blob:local/1")
-      .mockReturnValueOnce("blob:local/2");
+      .mockReturnValueOnce("blob:local/2")
+      .mockReturnValueOnce("blob:local/3");
 
+    // Two overlapping resolves (e.g. setMap then updateImages) share one
+    // request but each gets its own URL: the consumer revokes the URL it is
+    // handed, so a shared one would be dead for the second caller.
     const a = source.resolve("img-1");
     const b = source.resolve("img-1");
     expect(request).toHaveBeenCalledTimes(1);
 
     source.receive("img-1", new Blob(["img"]));
     await expect(a).resolves.toBe("blob:local/1");
-    await expect(b).resolves.toBe("blob:local/1");
-    // Cached bytes, fresh URL — the consumer revokes each URL it is given.
-    await expect(source.resolve("img-1")).resolves.toBe("blob:local/2");
+    await expect(b).resolves.toBe("blob:local/2");
+    // Cached bytes, fresh URL.
+    await expect(source.resolve("img-1")).resolves.toBe("blob:local/3");
     expect(request).toHaveBeenCalledTimes(1);
-    expect(createUrl).toHaveBeenCalledTimes(2);
+    expect(createUrl).toHaveBeenCalledTimes(3);
     createUrl.mockRestore();
   });
 

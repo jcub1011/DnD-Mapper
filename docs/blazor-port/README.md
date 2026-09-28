@@ -11,7 +11,7 @@ different servers**, not one. That is the single most confusing thing about thes
 | --- | --- |
 | `…\KnockBox` | **The old world.** An ASP.NET **Blazor Server** host that loads game plugins into its own process. `host\KnockBox.DndMapper` is the legacy plugin being ported (read-only reference); `sdk\KnockBox.Platform` is where its `/blob-share/{token}` endpoint actually lives. |
 | `…\Games\DnD-Mapper` (here) | **Target.** Currently an unmodified KnockBox game template. |
-| `…\KnockBox-Games` | **The new world, and a different server.** The game *platform*: a relay plus a sandboxed JS authority runtime, serving games as static bundles in an iframe. Needs a new blob-share feature before multiplayer map art can work. |
+| `…\KnockBox-Games` | **The new world, and a different server.** The game *platform*: a relay (plus a sandboxed JS authority runtime this game does not use — the DM's browser is the host), serving games as static bundles in an iframe. Needs a new blob-share feature before multiplayer map art can work. |
 
 Nothing is shared between the two servers — not the transport, not the storage, not the hosting
 model. "Port" here means *rewrite against a different platform*, and the only genuine carry-overs
@@ -40,12 +40,14 @@ are the domain model, the `.vtf` format, and the CSS token block.
    not pixels — tokens at cell centres (`x.5`), images corner-anchored at whole cells, fog as a
    row-major bitset. `.vtf` fidelity depends on preserving this exactly. See
    [`03-domain-model.md`](03-domain-model.md).
-2. **The 512 KiB frame ceiling, in both directions.** It is a non-configurable `const`. An
-   oversized *authority broadcast* is **silently dropped** — clients simply never converge, with no
-   error anywhere. An oversized *client message* closes the socket with **1009**, which no SDK
-   treats as terminal, so the client reconnects and retries forever. Both failure modes are
-   invisible, which is why patches are narrowed and campaign import is chunked. See
-   [`06-state-and-authority.md`](06-state-and-authority.md).
+2. **The relay's limits bind the DM's outbound frames.** The DM's browser is the host, so every
+   per-player snapshot it sends goes through the relay and is subject to the 512 KiB frame
+   ceiling (a non-configurable `const`) and the 30 msg/s rate limit (terminal **1008** on
+   violation — and it is the DM's socket that pays, which ends the session for everyone). An
+   oversized frame fails without any error a player can see. Each accepted intent costs one frame
+   per non-host player, so at a full table fan-out, not state size, is the first ceiling hit.
+   Snapshots stay small because non-active maps are summarised; save/load is local and never
+   touches the relay. See [`06-state-and-authority.md`](06-state-and-authority.md).
 3. **Map images cannot cross the relay.** This is why
    [`09-blob-share-server-spec.md`](09-blob-share-server-spec.md) is phase 0 — started early for
    its release lead time, though phases 1–4 do not wait on it.
@@ -63,17 +65,18 @@ are the domain model, the `.vtf` format, and the CSS token block.
 | Phase 1 — foundation & rename | **Complete** — template renamed to `dnd-mapper`, layer stack inverted (`#map` below `<dndm-app>`), `panels.css` & tokens installed, `MapScene` camera midpoint correction and clamped grid renderer verified with tests |
 | Phase 2 — domain + `.vtf` import | Not started |
 | Phase 3 — Phaser map renderer | Not started |
-| Phase 4 — authority & multiplayer sync | Not started |
+| Phase 4 — authority & multiplayer sync | **Re-platformed onto host authority** — the DM's browser is the host in every launch mode; host store (`MatchView`) + `projectForPlayer` per-player snapshots over `perRecipient` are built and tested. The server-authority module is removed. Outstanding: the "waiting for DM" freeze overlay and binding `isDm` to the host id ([`../architecture-rewrite/`](../architecture-rewrite/README.md) phase 04), and the 16-player fan-out check (phase 06). |
 | Phase 5 — UI shell | Not started |
 | Phase 6+ — sheets, dice, combat, markup, display | Deferred past v1 |
 
 Keep this table current as phases land — it is the fastest way for a future session to orient.
 
-One open question still gates work rather than merely informing it: **`Q1`** (hidden-token
-visibility), before phase 4. **`Q2`** (blob disk quota) is settled — see `D10` in
+**`Q1`** (hidden-token visibility) is settled: true per-player filtering, via `projectForPlayer`
+and `perRecipient` snapshots. **`Q2`** (blob disk quota) is settled — see `D10` in
 [`00-decisions.md`](00-decisions.md#d10--blob-quotas-are-three-tiered-with-a-per-game-override).
-`Q6` (target browsers) and `Q7` (`players[0]` is the creator) both want a one-line answer from
-outside this document set.
+**`Q4`** (save slots) is settled: pure-local IndexedDB. `Q6` (target browsers) still wants a
+one-line answer from outside this document set, and `Q7` (`roster[0]` is the host) has an open
+follow-up to seed `dmPlayerId` from the host's own `playerId` instead.
 
 **Phase 0 is complete**: both the server service in `KnockBox-Games` and the client addon/transports in `DnD-Mapper` are implemented and tested, with `export/GAME.json` requiring server version `1.1.0`.
 

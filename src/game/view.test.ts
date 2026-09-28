@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { MatchView } from "./view";
-import type { DndMapperState, GameMap, MapImage, MapSummary, Token } from "./domain";
+import type { CustomTemplate, DndMapperState, GameMap, Token } from "./domain";
 import { createDefaultDndMapperState, createDefaultGridConfig, isFullMap } from "./domain";
 import { toMapSummary } from "./domain";
-import type { Patch } from "./types";
 
 function makeMap(id: string, name: string): GameMap {
   return {
@@ -27,182 +26,36 @@ describe("MatchView", () => {
     expect(view.state.maps).toHaveLength(0);
     expect(view.state.activeMapId).toBeNull();
   });
-
-  it("adopts a snapshot via applySnapshot", () => {
-    const view = new MatchView();
-    const map = makeMap("map-1", "Dungeon");
-    const snapshot: DndMapperState = {
-      ...createDefaultDndMapperState("dm-1"),
-      phase: "Playing",
-      maps: [map],
-      activeMapId: "map-1",
-    };
-    view.applySnapshot(snapshot);
-    expect(view.state.phase).toBe("Playing");
-    expect(view.state.dmPlayerId).toBe("dm-1");
-    expect(view.state.activeMapId).toBe("map-1");
-    expect(view.state.maps).toHaveLength(1);
-  });
-
-  it("merges patch kinds: token and tokenRemoved", () => {
-    const view = new MatchView();
-    const map = makeMap("map-1", "Dungeon");
-    view.applySnapshot({ ...createDefaultDndMapperState(), maps: [map], activeMapId: "map-1" });
-
-    const token: Token = {
-      id: "tok-1",
-      type: "PlayerToken",
-      ownerUserId: "p-1",
-      representsUserId: null,
-      name: "Rogue",
-      color: "#f0f",
-      iconKind: "Initial",
-      mapId: "map-1",
-      x: 3.5,
-      y: 4.5,
-      sheetId: null,
-      hidden: false,
-    };
-
-    // Add token via patch
-    view.applyPatch({ kind: "token", token });
-    let currentMap = view.state.maps[0] as GameMap;
-    expect(currentMap.tokens).toHaveLength(1);
-    expect(currentMap.tokens[0]).toEqual(token);
-
-    // Update token
-    const moved = { ...token, x: 7.5, y: 8.5 };
-    view.applyPatch({ kind: "token", token: moved });
-    currentMap = view.state.maps[0] as GameMap;
-    expect(currentMap.tokens[0].x).toBe(7.5);
-
-    // Remove token
-    view.applyPatch({ kind: "tokenRemoved", tokenId: "tok-1" });
-    currentMap = view.state.maps[0] as GameMap;
-    expect(currentMap.tokens).toHaveLength(0);
-  });
-
-  it("merges patch kinds: fog and grid", () => {
-    const view = new MatchView();
-    const map = makeMap("map-1", "Dungeon");
-    view.applySnapshot({ ...createDefaultDndMapperState(), maps: [map], activeMapId: "map-1" });
-
-    // Fog patch
-    view.applyPatch({ kind: "fog", mapId: "map-1", mask: "////" });
-    let currentMap = view.state.maps[0] as GameMap;
-    expect(currentMap.fogMask).toBe("////");
-
-    // Grid patch
-    const newGrid = { ...currentMap.grid, widthCells: 50, heightCells: 40 };
-    view.applyPatch({ kind: "grid", mapId: "map-1", grid: newGrid });
-    currentMap = view.state.maps[0] as GameMap;
-    expect(currentMap.grid.widthCells).toBe(50);
-  });
-
-  it("merges patch kinds: image and imageRemoved", () => {
-    const view = new MatchView();
-    const map = makeMap("map-1", "Dungeon");
-    view.applySnapshot({ ...createDefaultDndMapperState(), maps: [map], activeMapId: "map-1" });
-
-    const image: MapImage = {
-      id: "img-1",
-      name: "Altar",
-      contentType: "image/png",
-      shareToken: null,
-      x: 10,
-      y: 10,
-      width: 4,
-      height: 4,
-      originalWidth: 4,
-      originalHeight: 4,
-      rotation: 0,
-      opacity: 1,
-      layerOrder: 1,
-      locked: true,
-      hidden: false,
-      byteSize: 2048,
-      wasDownscaled: false,
-      originalLongEdgePx: 200,
-      displayLongEdgePx: 200,
-    };
-
-    view.applyPatch({ kind: "image", image });
-    let currentMap = view.state.maps[0] as GameMap;
-    expect(currentMap.images).toHaveLength(1);
-    expect(currentMap.images[0].name).toBe("Altar");
-
-    view.applyPatch({ kind: "imageRemoved", imageId: "img-1" });
-    currentMap = view.state.maps[0] as GameMap;
-    expect(currentMap.images).toHaveLength(0);
-  });
-
-  it("merges mapList and full map updates", () => {
-    const view = new MatchView();
-    const map1 = makeMap("map-1", "Map One");
-    view.applySnapshot({ ...createDefaultDndMapperState(), maps: [map1], activeMapId: "map-1" });
-
-    // DM adds map2, client receives mapList summary
-    const summaries: MapSummary[] = [
-      { id: "map-1", name: "Map One", listOrder: 0, widthCells: 30, heightCells: 20 },
-      { id: "map-2", name: "Map Two", listOrder: 1, widthCells: 40, heightCells: 40 },
-    ];
-    view.applyPatch({ kind: "mapList", maps: summaries });
-
-    expect(view.state.maps).toHaveLength(2);
-    // map-1 preserves full map data
-    expect(isFullMap(view.state.maps[0])).toBe(true);
-    // map-2 is initially just summary
-    expect(isFullMap(view.state.maps[1])).toBe(false);
-
-    // Client requests map-2 and receives full map patch
-    const fullMap2 = makeMap("map-2", "Map Two");
-    view.applyPatch({ kind: "map", map: fullMap2 });
-    expect(isFullMap(view.state.maps[1])).toBe(true);
-  });
-
-  it("merges activeMap, focusRect, centerViewport, settings, and dm", () => {
-    const view = new MatchView();
-    view.applySnapshot(createDefaultDndMapperState("dm-1"));
-
-    view.applyPatch({ kind: "activeMap", mapId: "map-9" });
-    expect(view.state.activeMapId).toBe("map-9");
-
-    const rect = { mapId: "map-9", x: 0, y: 0, width: 10, height: 10 };
-    view.applyPatch({ kind: "focusRect", rect });
-    expect(view.state.focusRect).toEqual(rect);
-
-    const center = { mapId: "map-9", x: 5, y: 5, nonce: "n1" };
-    view.applyPatch({ kind: "centerViewport", request: center });
-    expect(view.state.pendingCenterRequest).toEqual(center);
-
-    const nextSettings = { ...view.state.settings, tokenMovement: "Anyone" as const };
-    view.applyPatch({ kind: "settings", settings: nextSettings });
-    expect(view.state.settings.tokenMovement).toBe("Anyone");
-
-    view.applyPatch({ kind: "dm", dmPlayerId: "dm-2" });
-    expect(view.state.dmPlayerId).toBe("dm-2");
-  });
-
-  it("is idempotent: re-applying the same patch changes nothing", () => {
-    const view = new MatchView();
-    const map = makeMap("map-1", "Dungeon");
-    view.applySnapshot({ ...createDefaultDndMapperState(), maps: [map], activeMapId: "map-1" });
-
-    const patch: Patch = { kind: "activeMap", mapId: "map-1" };
-    view.applyPatch(patch);
-    const state1 = view.state;
-    view.applyPatch(patch);
-    const state2 = view.state;
-    expect(state1).toEqual(state2);
-  });
 });
 
-describe("MatchView host half", () => {
+/** A host store seeded like a live session: roster fed, DM seeded, state loaded. */
+function seedHost(state: Partial<DndMapperState> = {}): MatchView {
+  const view = new MatchView();
+  view.setRoster([{ id: "dm-1", displayName: "DM" }]);
+  if (Object.keys(state).length > 0) {
+    view.applyLoaded({ ...createDefaultDndMapperState(), ...state });
+  }
+  return view;
+}
+
+function makeCustomTemplate(id: string, name: string): CustomTemplate {
+  return {
+    id,
+    name,
+    description: "",
+    values: {},
+    maxHp: null,
+    armorClass: null,
+    color: "#888888",
+    notes: "",
+    statusEffectTemplates: [],
+    rollTemplates: [],
+  };
+}
+
+describe("MatchView host store", () => {
   it("applyIntent accepts a DM intent and mutates host state", () => {
-    const view = new MatchView();
-    view.setRoster([{ id: "dm-1", displayName: "DM" }]);
-    // Seed DM ownership the same way the authority module does on init.
-    view.applySnapshot({ ...createDefaultDndMapperState("dm-1"), phase: "Playing" });
+    const view = seedHost();
 
     const patch = view.applyIntent("dm-1", { kind: "createMap", name: "The Crypt" });
     expect(patch).not.toBeNull();
@@ -217,7 +70,6 @@ describe("MatchView host half", () => {
       { id: "dm-1", displayName: "DM" },
       { id: "guest-1", displayName: "Guest" },
     ]);
-    view.applySnapshot({ ...createDefaultDndMapperState("dm-1"), phase: "Playing" });
 
     const patch = view.applyIntent("guest-1", { kind: "createMap", name: "Illegal Map" });
     expect(patch).toBeNull();
@@ -225,9 +77,7 @@ describe("MatchView host half", () => {
   });
 
   it("snapshot projects per player: guests lose hidden content, DM keeps all", () => {
-    const view = new MatchView();
-    view.setRoster([{ id: "dm-1", displayName: "DM" }]);
-    view.applySnapshot({ ...createDefaultDndMapperState("dm-1"), phase: "Playing" });
+    const view = seedHost();
     view.applyIntent("dm-1", { kind: "createMap", name: "The Crypt" });
 
     const forDm = view.snapshot("dm-1");
@@ -237,8 +87,6 @@ describe("MatchView host half", () => {
   });
 
   it("snapshot strips hidden tokens for guests but not the DM", () => {
-    const view = new MatchView();
-    view.setRoster([{ id: "dm-1", displayName: "DM" }]);
     const map = makeMap("map-1", "Dungeon");
     const hidden: Token = {
       id: "tok-hidden",
@@ -254,12 +102,7 @@ describe("MatchView host half", () => {
       sheetId: null,
       hidden: true,
     };
-    view.applySnapshot({
-      ...createDefaultDndMapperState("dm-1"),
-      phase: "Playing",
-      maps: [{ ...map, tokens: [hidden] }],
-      activeMapId: "map-1",
-    });
+    const view = seedHost({ maps: [{ ...map, tokens: [hidden] }], activeMapId: "map-1" });
 
     const dmMap = view.snapshot("dm-1").maps[0] as GameMap;
     expect(isFullMap(dmMap) && dmMap.tokens).toHaveLength(1);
@@ -267,18 +110,66 @@ describe("MatchView host half", () => {
     expect(isFullMap(guestMap) && guestMap.tokens).toHaveLength(0);
   });
 
-  it("host patch converges on a guest via applyPatch", () => {
-    const host = new MatchView();
-    host.setRoster([{ id: "dm-1", displayName: "DM" }]);
-    host.applySnapshot({ ...createDefaultDndMapperState("dm-1"), phase: "Playing" });
-    const patch = host.applyIntent("dm-1", { kind: "createMap", name: "The Crypt" });
-    expect(patch).not.toBeNull();
+  it("keeps a state change accepted without a patch and still signals accept", () => {
+    const view = seedHost({
+      customTemplates: {
+        "ct-a": makeCustomTemplate("ct-a", "Goblin"),
+        "ct-b": makeCustomTemplate("ct-b", "Orc"),
+      },
+    });
 
-    const guest = new MatchView();
-    guest.applySnapshot({ ...createDefaultDndMapperState("dm-1"), phase: "Playing" });
-    guest.applyPatch(patch!);
-    expect(guest.state.maps).toHaveLength(1);
-    expect(guest.state.maps[0].name).toBe("The Crypt");
+    const accepted = view.applyIntent("dm-1", {
+      kind: "reorderCustomTemplates",
+      templateIds: ["ct-b", "ct-a"],
+    });
+
+    // Non-null: per-recipient KBAuthority re-projects every player on accept.
+    expect(accepted).not.toBeNull();
+    expect(Object.keys(view.state.customTemplates)).toEqual(["ct-b", "ct-a"]);
+  });
+
+  it("stays silent for an accepted intent that changes nothing", () => {
+    const view = seedHost({ maps: [makeMap("map-1", "Dungeon")], activeMapId: "map-1" });
+    const before = view.state;
+
+    expect(view.applyIntent("dm-1", { kind: "exportMapImage", mapId: "map-1" })).toBeNull();
+    expect(view.state).toBe(before);
+  });
+
+  it("handlePlayerLeft turns the leaver's tokens into NPCs", () => {
+    const owned: Token = {
+      id: "tok-alice",
+      type: "PlayerToken",
+      ownerUserId: "guest-1",
+      representsUserId: null,
+      name: "Alice",
+      color: "#f00",
+      iconKind: "Initial",
+      mapId: "map-1",
+      x: 1.5,
+      y: 1.5,
+      sheetId: null,
+      hidden: false,
+    };
+    const view = seedHost({
+      maps: [{ ...makeMap("map-1", "Dungeon"), tokens: [owned] }],
+      activeMapId: "map-1",
+    });
+    view.setRoster([
+      { id: "dm-1", displayName: "DM" },
+      { id: "guest-1", displayName: "Guest" },
+    ]);
+
+    view.handlePlayerLeft("guest-1");
+
+    const map = view.state.maps[0];
+    const token = isFullMap(map) ? map.tokens.find((t) => t.id === "tok-alice") : undefined;
+    expect(token).toMatchObject({
+      type: "NPCToken",
+      ownerUserId: null,
+      representsUserId: "guest-1",
+    });
+    expect(view.state.dmPlayerId).toBe("dm-1");
   });
 });
 
@@ -297,10 +188,7 @@ describe("MatchView.applyLoaded (Phase 03 direct save/load swap)", () => {
   }
 
   function seededHost(): MatchView {
-    const view = new MatchView();
-    view.setRoster([{ id: "dm-1", displayName: "DM" }]);
-    view.applySnapshot({ ...createDefaultDndMapperState("dm-1"), phase: "Playing" });
-    return view;
+    return seedHost();
   }
 
   it("swaps the slot into live state and marks it Playing with an announcement", () => {
@@ -314,6 +202,16 @@ describe("MatchView.applyLoaded (Phase 03 direct save/load swap)", () => {
     expect(view.state.dmPlayerId).toBe("dm-1");
     expect(view.state.announcement).toBeDefined();
     expect(typeof view.state.announcement?.id).toBe("string");
+  });
+
+  it("keeps the live status effect templates (slots never persist them)", () => {
+    const view = seededHost();
+    const live = view.state.statusEffectTemplates;
+    expect(Object.keys(live).length).toBeGreaterThan(0);
+
+    view.applyLoaded({ ...loadedState(), statusEffectTemplates: {} });
+
+    expect(view.state.statusEffectTemplates).toEqual(live);
   });
 
   it("resets ephemeral session state (roll log, host keys, viewport)", () => {

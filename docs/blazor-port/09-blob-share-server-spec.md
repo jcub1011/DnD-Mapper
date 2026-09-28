@@ -487,6 +487,9 @@ interface KnockBoxPlugin {
 `registerBlob` hides hashing, the `HEAD` probe, upload and registration — satisfying R6 at the API
 surface, not just internally. The game never sees a hash.
 
+In this game only the DM's browser (the host) ever registers blobs; players only read the returned
+URLs.
+
 ## As built
 
 The server half is implemented on `KnockBox-Games` branch `feat/blob-share-service`. This section is

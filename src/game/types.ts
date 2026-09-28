@@ -1,15 +1,15 @@
 /*
- * The WIRE CONTRACT. Every value here crosses the boundary between the authority
- * module (which the KnockBox server runs, sandboxed) and the clients that render
- * it, so every value must be STRICT JSON:
+ * The WIRE CONTRACT. Every value here crosses the relay between the host (the
+ * DM's browser) and the guests that render it, so every value must be STRICT
+ * JSON:
  *
  *   - no `undefined` — use `null` (an optional property that is sometimes absent
  *     serializes to nothing and reads back as `undefined`, which the local
  *     emulator's fidelity check rejects outright)
  *   - no Date / Map / Set / class instances / functions / cycles
  *
- * Nothing here imports Phaser, Lit, or the DOM: `src/game/` is shared by the
- * authority module and the client, and the authority runs in a bare sandbox.
+ * Nothing here imports Phaser, Lit, or the DOM: `src/game/` stays pure so the
+ * rules and the host store are testable without a browser.
  */
 
 import type {

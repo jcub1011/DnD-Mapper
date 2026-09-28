@@ -5,13 +5,13 @@ import type {
   GameMap,
   RollResult,
   Token,
-} from "../game/domain.js";
+} from "./domain.js";
 import {
   createDefaultDndMapperState,
   createDefaultGridConfig,
-} from "../game/domain.js";
-import { encodeFog } from "../game/fog.js";
-import { projectSnapshot } from "../game/rules.js";
+} from "./domain.js";
+import { encodeFog } from "./fog.js";
+import { projectSnapshot } from "./rules.js";
 
 function makeStressCampaign(): DndMapperState {
   const base = createDefaultDndMapperState();

@@ -137,9 +137,9 @@ export type Patch =
 ### 6.1 Permission & Validation
 - Only the DM (`isDm(state, fromId)`) may call `updateMarkup` or `clearMarkup`.
 - Non-DM attempts are silently dropped.
-- **Sandbox-Safe SVG Sanitization**:
-  - The authority operates in a deterministic JS sandbox without `DOMParser`, `document`, or `window`.
-  - SVG validation must use pure string/regex allowlisting:
+- **Pure SVG Sanitization**:
+  - The host is the DM's browser, so `DOMParser` is technically available — but validation lives in `src/game/`, which stays pure (no DOM) so it runs under unit tests without a browser environment.
+  - SVG validation therefore keeps using pure string/regex allowlisting:
     - Enforces `<svg>`, `<g>`, `<path>`, `<circle>`, `<rect>` elements and harmless attributes (`stroke`, `stroke-width`, `fill`, `d`, `r`, `cx`, `cy`, `x`, `y`).
     - Strictly rejects any `<script>`, `href`, `xlink:href`, `onload`, or external resource references.
 - `markupSvg` string length is capped at **200,000 characters** to protect WebSocket frame budgets.
@@ -150,6 +150,8 @@ export type Patch =
 ## 7. Client Replica & Phaser Scene Integration
 
 ### 7.1 `MatchView.applyPatch`
+> **Superseded by host authority.** Guests no longer merge patches; they render `authority.currentView` (their per-player snapshot), and the host's state changes via `rules.applyIntent`. The snippet is kept as the reference shape for per-recipient deltas (KnockBox-Games#62).
+
 ```ts
 case "markup": {
   const nextMaps = this._state.maps.map((m) => {

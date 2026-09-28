@@ -39,11 +39,12 @@ only platform players would see placeholders where art should be.
 
 ### D3 — v1 syncs all non-image state
 
-Maps, grid config, tokens, fog and viewport-centering all flow through the authority module and
-replicate to players in v1. Only map *art* is DM-local until blob-share lands.
+Maps, grid config, tokens, fog and viewport-centering all flow through the host store in the DM's
+browser and replicate to players, as per-player snapshots, in v1. Only map *art* is DM-local until
+blob-share lands.
 
-*Why:* state partitioning, patch granularity and the 512 KiB ceiling are the riskiest parts of the
-design. They are far easier to get right while the state is still small.
+*Why:* state partitioning, per-player projection and the 512 KiB ceiling are the riskiest parts of
+the design. They are far easier to get right while the state is still small.
 
 > **"DM-local" means on the platform only, and that asymmetry is a hazard worth naming.** With
 > `IdbBlobTransport`, same-origin tabs share IndexedDB, so map art works fully in `solo` and
@@ -108,6 +109,11 @@ through the existing lobby-eviction system. Games *may* unregister manually but 
 *Why:* games should not have to run cleanup logic that a crashed or abandoned session would skip.
 Anchoring to a lifecycle the server already manages makes leaks structurally impossible.
 
+> **In this game the lobby's life is the DM's.** Under the locked "freeze on DM leave" decision the
+> host leaving ends the lobby, so blob handles live exactly as long as the DM's session. Nothing
+> survives into the next one: when the DM loads a save, the host re-`publish()`es its image blobs
+> into the new lobby.
+
 ### D9 — Dedup is invisible to the game
 
 Two registrations are two independent handles the game can release independently — whether they are
@@ -160,6 +166,22 @@ blob — so this costs nothing that was not already gone.
 that bit is the whole oracle. An SDK `fetch` can carry a header; `<img src>` cannot, which is why only
 `GET` is anonymous.
 
+### D12 — Host authority, with three locked consequences
+
+The DM's browser is the host and holds the truth in every launch mode; the relay only routes frames.
+There is no server-authority module. Three decisions follow and are locked:
+
+- **Freeze on DM leave.** No DM succession and no host migration: the host leaving ends the lobby
+  on every transport.
+- **The DM is trusted.** The host validates every player intent against its own rules; nothing
+  validates the host. In host mode any peer can forge a `_kb` state frame to another guest, and
+  that is accepted — the answer to a malicious guest is the lobby kick, not per-frame
+  authentication.
+- **True per-player filtering.** Each player receives only what `projectForPlayer` allows (see
+  `Q1`).
+
+*Why:* see [`06-state-and-authority.md`](06-state-and-authority.md).
+
 ## Decisions made without consultation
 
 Low-risk and conventional, but recorded so they can be challenged.
@@ -168,7 +190,7 @@ Low-risk and conventional, but recorded so they can be challenged.
 | --- | --- | --- |
 | E1 | **Phaser becomes the primary interactive renderer**, with Lit UI in DOM above it | Inverts the template, where `#fx` is a click-through overlay at `z-index:10`. A map surface must receive input. |
 | E2 | **The map scene joins the existing `Phaser.Game`** rather than a second instance | The KnockBox global plugin is registered on that one game config (`src/ui/fx/fx.ts:41-51`); a second game would not have networking. |
-| E3 | **The DM is the lobby owner (`isOwner`)**, never `isHost` | `isHost` is `false` on *every* client under server authority. The platform says so explicitly. |
+| E3 | **The DM is the host** — the DM's browser holds the truth (`isHost: true`, `authority: 'host'`) in every launch mode | The game runs host authority, not a server-authority module. Permission checks read `state.dmPlayerId`, which the host store seeds from `roster[0]` (the host); `isOwner` only gates lobby powers. |
 | E4 | **Fog renders as a 1-texel-per-cell texture**, not traced polygons | Phaser has no `evenodd` fill, and `FogPolygonBuilder.cs` is 171 lines of ring tracing with saddle-vertex handling. A `NEAREST`-filtered texture reads the same and makes per-cell updates cheap. One accepted deviation: at fractional zoom, texel snapping makes fog cell edges differ by up to 1 px — recorded in [`05`](05-rendering.md#fog--do-not-port-the-polygon-tracer). |
 | E5 | **Keep legacy's WebGL2 texture-size probe and Web Worker downscaler** | Phaser has the same `MAX_TEXTURE_SIZE` ceiling; the problem and solution are unchanged. |
 
@@ -178,10 +200,10 @@ Resolve these before or during the phase that depends on them.
 
 | # | Question | Blocks | Notes |
 | --- | --- | --- | --- |
-| Q1 | Do hidden tokens need real server-side visibility filtering, or is client-side hiding acceptable? | Phase 4 | `perRecipient` mode is the faithful answer but **disables deltas entirely**, which collides with the 512 KiB cap. See [`06-state-and-authority.md`](06-state-and-authority.md#the-perrecipient-tension). Legacy already leaks fog to clients, so full fidelity here would *exceed* legacy. |
+| ~~Q1~~ | ~~Do hidden tokens need real server-side visibility filtering, or is client-side hiding acceptable?~~ | — | **Answered — true per-player filtering** (a locked decision). The host runs `projectForPlayer` for each player and sends it with `perRecipient: true`, so hidden tokens/images, fogged tokens a player does not own, and redacted sheet fields never leave the DM's browser. The fog mask itself is still broadcast. The cost: no deltas — every accepted intent sends a full snapshot per player. See [`06-state-and-authority.md`](06-state-and-authority.md). |
 | ~~Q2~~ | ~~What is the aggregate disk quota for blobs, per lobby and server-wide?~~ | — | **Answered — see `D10`.** 20 GB server-wide, 1 GB per lobby, plus a per-game override of the per-lobby figure. |
 | Q3 | Does the display/projector view survive the port at all? | Phase 6+ | It was a second Blazor route. A KnockBox game has one entry point, so it would become an in-game fullscreen mode. |
-| Q4 | Should save slots stay DM-local, or move to server storage once blob-share exists? | Phase 2 | Legacy is entirely browser-local (IndexedDB). Keeping that is simplest and matches D1 — but note it makes the DM's browser the only copy of the campaign, and makes post-restart recovery a re-import ([`06`](06-state-and-authority.md#recovery-after-a-restart)). |
+| ~~Q4~~ | ~~Should save slots stay DM-local, or move to server storage once blob-share exists?~~ | — | **Answered — pure-local IndexedDB**, as in legacy. The DM's browser is the only copy of the campaign. Loading is a direct apply: the host re-`publish()`es the image blobs, swaps the slot into the host store, and sends every player a fresh snapshot — no import protocol ([`06`](06-state-and-authority.md)). |
 | Q6 | Which browsers must the port support? | Phase 2 | Nothing in this doc set states a floor, yet [`04`](04-vtf-format.md) depends on `DecompressionStream('deflate-raw')` (Safari 16.4+, Firefox 113+) and [`08`](08-assets-pipeline.md) on `OffscreenCanvas` in a worker. Needs a one-line answer. |
-| Q7 | Is `players[0]` at `init` guaranteed to be the lobby creator on the real server? | Phase 4 | It is documented for the local peer (*"index 0 is the elected host on every transport"*) and is what the template assumes, but `PlayerInfo` carries no owner flag and `Kb` has no getter — so the authority's whole DM-permission model rests on the convention. Confirm it directly. |
+| Q7 | Is `roster[0]` guaranteed to be the host? | Phase 4 | There is no `init` any more. The host store's `setRoster` seeds `dmPlayerId` from `roster[0]`, which is the host on every transport (*"index 0 is the elected host on every transport"*), so the DM-permission model rests on that convention. **Open follow-up:** seed from the host's own `playerId` instead, and drop the dependency on roster order. |
 | Q5 | Is Phaser 4's API materially different for cameras, drag input and dynamic textures? | Phase 3 | Must be checked early — the target pins 4.2.1 and most Phaser material online is 3.x. |

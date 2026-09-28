@@ -2,9 +2,9 @@
  * Builds the Phaser global-plugin config for the launch mode.
  *
  * All three modes run the same host-authoritative path: the DM's browser holds
- * the truth behind the controller seam (MatchView's host half), and the
- * transport just routes frames. `solo` and `local-tab` use the no-server peer
- * with NO virtual server actor, so every peer gets `ready` with
+ * the truth behind the controller seam (MatchView), and the transport just
+ * routes frames. `solo` and `local-tab` use the no-server peer with no
+ * `authority:` option, so every peer gets `ready` with
  * `isHost:true/false` / `authority:'host'` exactly as the relay reports live.
  * There is no "single-player code path" that can rot.
  *
@@ -45,17 +45,15 @@ const LocalPlugin: unknown = KnockBoxLocalImport?.KnockBoxLocalPlugin ?? g.Knock
 /** Phaser global-plugin config for the launch mode, or null if the class is missing. */
 export function knockboxPluginConfig(mode: LaunchMode): Record<string, unknown> | null {
   if (mode === "platform") {
-    // The KnockBox server loads and runs authority.js itself, one instance per
-    // lobby. The client passes nothing extra — `sendToHost` already routes to it.
+    // The relay elects the lobby creator (the DM) as host and routes
+    // `sendToHost` to it. The manifest declares no `serverAuthority`.
     return RealPlugin
       ? { key: "KnockBox", plugin: RealPlugin, start: true, mapping: "knockbox" }
       : null;
   }
 
   // solo and local-tab: no-server peer in TRUE host mode. No `authority:`
-  // option — the DM browser behind the controller is the host. (The old
-  // virtual server actor is intentionally gone; `src/authority/` deletion
-  // itself is deferred to Phase 05.)
+  // option — the DM browser behind the controller is the host.
   const data: KnockBoxLocalOptions = {
     mode: mode === "local-tab" ? "tab" : "solo",
   };

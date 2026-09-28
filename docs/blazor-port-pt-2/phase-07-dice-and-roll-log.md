@@ -180,8 +180,8 @@ export type Patch =
 
 ## 5. Authority Roll Execution Engine (`src/game/dice.ts` & `src/game/rules.ts`)
 
-### 5.1 Deterministic Resolution & Sandboxing
-The authority evaluates rolls using a seeded or pseudo-random algorithm compatible with the sandbox:
+### 5.1 Deterministic Resolution & Testability
+The host (the DM's browser) evaluates rolls inside `applyIntent`. There is no sandbox, but `src/game/` stays pure so rolls are testable: `executeRoll` takes an injectable `rng` (defaulting to `Math.random`) and the timestamp arrives as `now` (the host passes `Date.now()`):
 - `executeRoll(formula, mode, rollerUserId, options)`:
   1. Parse formula via `parseDiceNotation(formula)`.
   2. Resolve attribute modifier if `attributeName` is supplied from linked sheet.
@@ -195,12 +195,9 @@ The authority evaluates rolls using a seeded or pseudo-random algorithm compatib
   7. Construct immutable `RollResult`.
 
 ### 5.2 Visibility Filtering
-In KnockBox server authority (`ServerAuthority.cs`), delta patches (`perRecipient: false`) are broadcast to all connected clients (`"all"`). To enforce `settings.rollsVisibleToPlayers`:
-- In `MatchView` and `<dndm-roll-log>`:
-  - If `!isDm(state, localUserId)` and `!state.settings.rollsVisibleToPlayers`:
-    - The client UI strictly filters the roll log list to entries where `roll.rollerUserId === localUserId`.
-    - Rolls by the DM or other players are hidden from player view.
-- In initial snapshot projection (if `perRecipient` snapshot is configured), omit rolls by other users when `rollsVisibleToPlayers` is false.
+The DM's browser is the host and runs `kb-authority.js` with `perRecipient: true`: on every accepted intent it sends each non-host player its own `projectForPlayer` snapshot (`src/game/rules.ts`). To enforce `settings.rollsVisibleToPlayers`:
+- **On the host**: `projectForPlayer` runs `filterVisibleRolls` (`src/game/dice.ts`) over the roll log. When the setting is false, a non-DM player's snapshot carries only rolls where `roll.rollerUserId === playerId`; rolls by the DM or other players never leave the host. The DM always receives the full log.
+- **In `<dndm-roll-log>`**: no client-side filter is required — the roll log renders whatever the player's view contains. (The projector popout renders `projectForPlayer(state, null)`, which default-denies the same way.)
 
 ---
 
@@ -211,10 +208,10 @@ In multiplayer games, broadcasting a roll immediately displays the numerical tot
 
 ### 6.2 Solution: Client-Side Gating
 ```
-Authority broadcasts RollResult
+Host accepts roll → sends each player its projected snapshot
          │
          ▼
-MatchView registers roll
+Client sees the new roll in its view
          │
          ├──> Shared DiceCanvas spawns 3D tumbling dice
          │
@@ -330,7 +327,7 @@ Ported from `QuickRollFooter.razor.css`, `RollLogPanel.razor.css`, and `DiceCanv
    - `rollDice` produces a valid `RollResult` and appends to `rollLog`.
    - `rollLog` caps at 50 entries, evicting the oldest entry on roll 51.
    - `clearRollLog` only permitted by DM; non-DM attempt is rejected.
-   - Client-side visibility filtering conceals non-player rolls when `rollsVisibleToPlayers` is false.
+   - Projection matrix (`src/game/projection.test.ts`): `projectForPlayer` drops other users' rolls from a player's snapshot when `rollsVisibleToPlayers` is false; the DM always sees all.
 3. **`src/ui/dice/diceAnimationTracker.test.ts`**:
    - Gating delays entry reveal until `markSettled(rollId)` is invoked.
    - Timeout fallback safely settles after 3.5s if no complete event fires.

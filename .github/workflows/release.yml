@@ -101,7 +101,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
 
-      # Builds the app, builds the authority module, then packs dist/ into dist-game/<id>.kbg.
+      # Builds the app, then packs dist/ into dist-game/<id>.kbg.
       - name: Build and package
         run: npm run export:game
 

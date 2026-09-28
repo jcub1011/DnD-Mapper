@@ -263,30 +263,33 @@ export class DisplayPopoutHost {
  */
 export class ProxyAssetSource implements AssetSource {
   private readonly blobs = new Map<string, Blob>();
-  private readonly pending = new Map<string, (url: string | null) => void>();
-  private readonly inFlight = new Map<string, Promise<string | null>>();
+  private readonly pending = new Map<string, (blob: Blob | null) => void>();
+  private readonly inFlight = new Map<string, Promise<Blob | null>>();
 
   constructor(private readonly request: (imageId: string) => void) {}
 
   resolve(imageId: string): Promise<string | null> {
     const cached = this.blobs.get(imageId);
     if (cached) return Promise.resolve(URL.createObjectURL(cached));
-    const existing = this.inFlight.get(imageId);
-    if (existing) return existing;
 
-    const promise = new Promise<string | null>((resolve) => {
-      const timer = window.setTimeout(() => settle(null), ASSET_TIMEOUT_MS);
-      const settle = (url: string | null): void => {
-        window.clearTimeout(timer);
-        this.pending.delete(imageId);
-        this.inFlight.delete(imageId);
-        resolve(url);
-      };
-      this.pending.set(imageId, settle);
-    });
-    this.inFlight.set(imageId, promise);
-    this.request(imageId);
-    return promise;
+    // Concurrent callers share one request but never one URL: each consumer
+    // revokes the URL it was handed, so a shared one would be dead for the rest.
+    let blob = this.inFlight.get(imageId);
+    if (!blob) {
+      blob = new Promise<Blob | null>((resolve) => {
+        const timer = window.setTimeout(() => settle(null), ASSET_TIMEOUT_MS);
+        const settle = (value: Blob | null): void => {
+          window.clearTimeout(timer);
+          this.pending.delete(imageId);
+          this.inFlight.delete(imageId);
+          resolve(value);
+        };
+        this.pending.set(imageId, settle);
+      });
+      this.inFlight.set(imageId, blob);
+      this.request(imageId);
+    }
+    return blob.then((b) => (b ? URL.createObjectURL(b) : null));
   }
 
   /** Deliver the opener's answer to a pending `resolve()`. */
@@ -298,7 +301,7 @@ export class ProxyAssetSource implements AssetSource {
       return;
     }
     this.blobs.set(imageId, blob);
-    settle(URL.createObjectURL(blob));
+    settle(blob);
   }
 
   getUrl(imageId: string): Promise<string | null> {

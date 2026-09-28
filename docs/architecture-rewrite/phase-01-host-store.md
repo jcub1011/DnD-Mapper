@@ -41,4 +41,5 @@ Goal: the DM's browser holds truth; the server relays blindly.
   `guardSize`. True per-player filtering (`projectForPlayer` +
   per-recipient `guardSize` fan-out + `perRecipient:true` flip) → Phase 02.
 - `src/authority/`, `build:authority`, `serverAuthority` manifest key, and the
-  server-mode test scaffolding are intentionally left intact → Phase 05.
+  server-mode test scaffolding are intentionally left intact → Phase 05
+  (done; see `phase-05-cleanup.md` "As executed").

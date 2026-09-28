@@ -757,7 +757,7 @@ describe("<dndm-app> Application Shell", () => {
     });
   });
 
-  describe("Summary-map hydration", () => {
+  describe("Map data on guests", () => {
     afterEach(async () => {
       // Same scrub as the restore-prompt suite: a DM state change arms the
       // auto-save debounce, and app.remove() clears the timer — but flushes
@@ -785,12 +785,12 @@ describe("<dndm-app> Application Shell", () => {
       await scrubber.detach();
     });
 
-    it("remote viewer requests full data for summary maps once, then stops after the full map arrives", async () => {
+    it("a guest never requests summary maps (its projection carries the active map)", async () => {
       const mapA = makeMap("map-a", "Hall");
       const fullB = { ...makeMap("map-b", "Crypt"), listOrder: 1 };
       const controller = createMockController({
-        playerId: "dm-user",
-        isOwner: true,
+        playerId: "player-1",
+        isOwner: false,
         isHost: false,
         state: {
           phase: "Playing",
@@ -802,55 +802,35 @@ describe("<dndm-app> Application Shell", () => {
       app.attach(controller);
       await app.updateComplete;
 
-      // Projected snapshot arrives: B is a summary — DM must fetch it.
-      controller.events.emit("changed", { state: controller.view.state });
+      controller.events.emit("changed", { state: controller.state });
       await app.updateComplete;
 
-      expect(controller.mockSendIntent).toHaveBeenCalledWith({
-        kind: "requestMap",
-        mapId: "map-b",
-      });
-
-      // Authority answers with the full map (as a merged view state): no
-      // second fetch for B.
-      controller.mockSendIntent.mockClear();
-      const hydrated: MatchState = {
-        ...controller.view.state,
-        maps: [mapA, fullB],
-      };
-      controller.events.emit("changed", { state: hydrated });
-      await app.updateComplete;
-
-      expect(controller.mockSendIntent).not.toHaveBeenCalledWith({
-        kind: "requestMap",
-        mapId: "map-b",
-      });
+      expect(controller.mockSendIntent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "requestMap" }),
+      );
     });
 
-    it("host never self-fetches summary maps (it holds full maps)", async () => {
-      const mapA = makeMap("map-a", "Hall");
-      const fullB = { ...makeMap("map-b", "Crypt"), listOrder: 1 };
-      const controller = createMockController({
-        playerId: "dm-user",
-        isOwner: true,
-        isHost: true,
-        state: {
-          phase: "Playing",
-          maps: [mapA, toMapSummary(fullB)],
-          activeMapId: "map-a",
-          dmPlayerId: "dm-user",
-        },
-      });
-      app.attach(controller);
-      await app.updateComplete;
+    it("host truth is the host store on the host and the rendered state on a guest", async () => {
+      const rendered: Partial<MatchState> = {
+        phase: "Playing",
+        maps: [makeMap("map-a", "Hall")],
+        activeMapId: "map-a",
+        dmPlayerId: "dm-user",
+      };
+      const truthOf = (c: GameController): Readonly<MatchState> => {
+        app.attach(c);
+        return (app as unknown as { hostTruth: Readonly<MatchState> }).hostTruth;
+      };
 
-      controller.events.emit("changed", { state: controller.view.state });
-      await app.updateComplete;
+      // A guest's MatchView is never fed — it stays the empty default.
+      const guest = createMockController({ playerId: "player-1", isHost: false, state: rendered });
+      (guest as unknown as { view: { state: MatchState } }).view = {
+        state: createDefaultDndMapperState(),
+      };
+      expect(truthOf(guest)).toBe(guest.state);
 
-      expect(controller.mockSendIntent).not.toHaveBeenCalledWith({
-        kind: "requestMap",
-        mapId: "map-b",
-      });
+      const host = createMockController({ playerId: "dm-user", isHost: true, state: rendered });
+      expect(truthOf(host)).toBe(host.view.state);
     });
   });
 

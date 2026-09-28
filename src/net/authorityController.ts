@@ -1,19 +1,18 @@
 /*
  * AuthorityController — the ONE controller. It works identically in all three
  * launch modes because all three run the same host-authoritative path: the DM's
- * browser holds the truth (MatchView's host half), the server/relay just routes
- * frames, and guests render what the host publishes.
+ * browser holds the truth (MatchView), the relay just routes frames, and guests
+ * render the per-player snapshot the host publishes.
  *
  * The loop it participates in:
  *
  *   UI ──sendIntent──► KBAuthority ──{_kb:'intent'}──► host (DM browser)
  *                                                          │ applyIntent
- *   UI ◄──changed──── MatchView ◄──{_kb:'delta'|'state'}────┘ (host broadcast)
+ *   UI ◄──changed──── currentView ◄──{_kb:'state'}─────────┘ (per-player sendTo)
  *
- * KBAuthority (the addon helper) owns the envelope, the sync-on-ready handshake,
- * and (in server mode) the forgery check on state frames. We supply the model
- * (MatchView: host half on the DM, guest half everywhere) and re-expose its
- * events to the UI.
+ * KBAuthority (the addon helper) owns the envelope and the sync-on-ready
+ * handshake. We supply the host model (MatchView) and re-expose its events to
+ * the UI.
  */
 
 import KBAuthority from "../../addons/knockbox/kb-authority.js";
@@ -38,14 +37,23 @@ export class AuthorityController implements GameController {
   constructor(net: KnockBoxTransport) {
     this.net = net;
 
-    // MatchView implements BOTH halves of the model contract. On the host
-    // (DM browser) KBAuthority calls applyIntent/snapshot(forPlayerId); on
-    // guests in per-recipient mode there is no shared model — each guest
-    // renders its own projected view (`currentView`). Deltas are gone in this
-    // mode: every accepted intent re-projects a full per-player snapshot.
-    // Per-recipient patch fan-out (`projectPatchForPlayer` in
-    // `src/game/rules.ts`) activates with the upstream delta hook
-    // (KnockBox-Games#62); until then snapshot fan-out carries it.
+    // LISTENER ORDER. These subscribe BEFORE KBAuthority does, because the
+    // transport runs listeners in registration order and KBAuthority re-projects
+    // every player's snapshot from its own `player-joined`/`player-left`
+    // handlers. Mutating the host store first means that fan-out already
+    // carries the change (a leaver's tokens turned NPC), and `ready` seeds the
+    // DM slot before KBAuthority projects the host's first view.
+    this.on("ready", this.onReady);
+    this.on("owner-changed", this.onRosterChanged);
+    this.on("player-joined", this.onRosterChanged);
+    this.on("player-left", this.onPlayerLeft);
+
+    // MatchView implements the per-recipient model contract: on the host
+    // KBAuthority calls applyIntent/snapshot(forPlayerId); guests keep no model
+    // and render their own projected view (`currentView`). Every accepted
+    // intent re-projects a full per-player snapshot. Per-recipient patch
+    // fan-out (`projectPatchForPlayer` in `src/game/rules.ts`) activates with
+    // the upstream delta hook (KnockBox-Games#62).
     const model: KBModel<MatchState, Patch> = this.view;
 
     // The addon types this parameter as the concrete KnockBoxPlugin. The local
@@ -60,11 +68,6 @@ export class AuthorityController implements GameController {
 
     this.authority.events.on("state-changed", this.onStateChanged);
     this.unsubscribe.push(() => this.authority.events.off("state-changed", this.onStateChanged));
-
-    this.on("ready", this.onReady);
-    this.on("owner-changed", this.onRosterChanged);
-    this.on("player-joined", this.onRosterChanged);
-    this.on("player-left", this.onRosterChanged);
 
     // ORDERING GUARD. KBAuthority asks for a snapshot from the transport's `ready`
     // event — but Phaser starts the global plugin inside fx.init(), before this
@@ -113,16 +116,12 @@ export class AuthorityController implements GameController {
 
   applyLoadedCampaign(loaded: MatchState): void {
     // Save/load is a pure-local IndexedDB write with zero network on the way
-    // in: swap the slot directly into the host store (no chunked import
-    // round-trip — the host holds full maps, so no chunk budget applies),
-    // then fan out fresh per-player snapshots to everyone.
+    // in: swap the slot directly into the host store (the host holds full
+    // maps, so no chunk budget applies), then fan out fresh per-player
+    // snapshots to everyone.
     if (!this.isHost) return;
     this.view.applyLoaded(loaded);
-    // `broadcastState` is new in the local kb-authority.js and not yet in the
-    // CLI-managed knockbox-phaser.d.ts (do NOT shadow that file — it is
-    // overwritten by `knockbox addon update`). One cast, here, like the
-    // constructor's transport cast above.
-    (this.authority as unknown as { broadcastState(): void }).broadcastState();
+    this.broadcastState();
   }
 
   setLobbyOpen(open: boolean): void {
@@ -146,6 +145,27 @@ export class AuthorityController implements GameController {
     this.unsubscribe.push(() => this.net.events.off(event, fn));
   }
 
+  /**
+   * Host only — re-publish the host store to every guest after a direct
+   * mutation that bypassed the intent path (a save-load swap), then re-render
+   * locally. Uses KBAuthority's `_kb:'state'` envelope, the same way the
+   * ordering guard reuses `_kb:'sync'`; `kb-authority.js` itself is
+   * CLI-managed and must not be edited.
+   *
+   * Stopgap until KnockBox-Games#62 (per-recipient delta hook) lands: this
+   * fans out full per-player snapshots. With #62, host-local mutations should
+   * project a patch per recipient instead.
+   * https://github.com/jcub1011/KnockBox-Games/issues/62
+   */
+  private broadcastState(): void {
+    if (!this.isHost) return;
+    for (const player of this.net.players) {
+      if (player.id === this.net.playerId) continue;
+      this.net.sendTo(player.id, { _kb: "state", state: this.view.snapshot(player.id) });
+    }
+    this.onStateChanged();
+  }
+
   private readonly onStateChanged = (): void => {
     this.events.emit("changed", { state: this.state });
   };
@@ -167,8 +187,13 @@ export class AuthorityController implements GameController {
     this.emitRoster();
   };
 
+  private readonly onPlayerLeft = (playerId: string): void => {
+    if (this.isHost) this.view.handlePlayerLeft(playerId);
+    this.emitRoster();
+  };
+
   private emitRoster(): void {
-    // Feed the host half its membership so DM-gated intents validate.
+    // Feed the host store its membership so DM-gated intents validate.
     this.view.setRoster(this.net.players.map((p) => ({ id: p.id, displayName: p.displayName })));
     this.events.emit("roster", {
       players: this.net.players,

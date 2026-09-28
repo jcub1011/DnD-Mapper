@@ -7,8 +7,8 @@
  * Note what host-authoritative mode means for two familiar properties:
  *
  *   isHost   TRUE on the DM's browser (the authority), false on guests.
- *            The host holds the truth via MatchView's host half; guests adopt
- *            what it publishes. Branch host-only work (applyIntent/snapshot)
+ *            The host holds the truth in MatchView; guests render the
+ *            per-player snapshot it publishes. Branch host-only work (applyIntent/snapshot)
  *            on this — KBAuthority already does.
  *   isOwner  The member holding the LOBBY powers (kick, open/close). Starts as the
  *            creator (the host) and moves when the host calls setOwner.
@@ -24,7 +24,8 @@ export interface KnockBoxTransport {
   readonly players: KBPlayer[];
   /** True on the DM browser holding the truth; false on guests. */
   readonly isHost: boolean;
-  /** Who runs the game's rules: 'host' for this game, 'server' for opt-out legacy. */
+  /** Who runs the game's rules: always 'host' for this game ('server' is the addon's
+   *  server-authority mode, which this game does not use — the controller warns on it). */
   readonly authority: "host" | "server";
   /** The lobby owner's id, or null when the lobby is running owner-less. */
   readonly ownerId: string | null;
@@ -42,8 +43,8 @@ export interface KnockBoxTransport {
 
   /** Send to the host (DM browser). Guests send intents here; the host answers syncs. */
   sendToHost(payload: unknown): void;
-  /** Send to every player including yourself. The host broadcasts deltas/snapshots here;
-   *  the relay drops client-sent `_kb` state frames — only the host may publish state. */
+  /** Send to every player including yourself. Per-recipient mode publishes state with
+   *  `sendTo` instead; any peer could forge a `_kb` frame here (accepted: DM trusted). */
   sendToAll(payload: unknown): void;
   sendTo(playerId: string, payload: unknown): void;
 

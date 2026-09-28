@@ -1,7 +1,8 @@
 /*
- * Root application shell for D&D Mapper. A pure VIEW over the replicated match
- * state: it renders what the authority published and turns clicks into intents.
- * It never computes game state — that lives in src/authority/, which the server runs.
+ * Root application shell for D&D Mapper. A pure VIEW over the match state: it
+ * renders what the controller exposes (the host's truth on the DM's browser, the
+ * per-player projection on guests) and turns clicks into intents. It never
+ * computes game state — the host store (src/game/view.ts) and rules do.
  *
  * Replaces the template's <game-app> and implements Phase 5 UI Shell (07-ui-shell.md).
  */
@@ -190,13 +191,6 @@ export class DndmApp extends GameElement {
   // guests never prompt (not DM), and the offer is declinable.
   private autoRestoreChecked = false;
   @state() private autoRestoreCandidate: MatchState | null = null;
-  /**
-   * In-flight `requestMap` fetches for maps currently held as summaries.
-   * The live snapshot projects inactive maps to MapSummary (bandwidth cap),
-   * so the DM converges to full data by requesting each missing map once;
-   * entries clear when the full `map` patch arrives (see requestMissingMaps).
-   */
-  private readonly pendingMapFetches = new Set<string>();
   private displayPopoutHost?: DisplayPopoutHost;
   // MapScene instance the canvas callbacks are wired to. Phaser boots
   // asynchronously, so attach() can run before fx.map() exists — wiring is
@@ -257,7 +251,6 @@ export class DndmApp extends GameElement {
     window.removeEventListener("pointercancel", this.onWindowPointerUp);
     this.displayPopoutHost?.dispose();
     cancelAnimationFrame(this.rafId);
-    this.pendingMapFetches.clear();
     this.controller?.destroy();
     this.hostInputTracker?.destroy();
     void this.libraryService.detach();
@@ -275,7 +268,6 @@ export class DndmApp extends GameElement {
   /** Attach the controller main.ts built. Safe to call once. */
   attach(controller: GameController): void {
     void this.libraryService.attach();
-    this.pendingMapFetches.clear();
     this.controller = controller;
     this.match = controller.state;
     this.seenRollIds = new Set((this.match.rollLog ?? []).map((r) => r.id));
@@ -364,7 +356,9 @@ export class DndmApp extends GameElement {
    * `saveSlotInternal` remains as a backstop, not the routine path.
    */
   private get hostTruth(): Readonly<MatchState> {
-    return this.controller?.view.state ?? this.match;
+    // Only the host's store holds truth; a guest's MatchView is never fed and
+    // stays the empty default, so guests fall back to what they render.
+    return this.controller?.isHost ? this.controller.view.state : this.match;
   }
 
   private updateRailCssVars(): void {
@@ -730,13 +724,6 @@ export class DndmApp extends GameElement {
       // projected) match — save-after-load stays complete for unvisited maps.
       this.libraryService.onStateChanged(this.hostTruth);
     }
-    if (!this.controller?.isHost) {
-      // Remote-only hydration: the host holds full maps and never fetches
-      // from itself. Guests converge to full data by requesting each missing
-      // map once; entries clear when the full `map` patch arrives.
-      this.requestMissingMaps(state);
-    }
-
     if (this.isDm && state.settings.loadedDiceEnabled) {
       this.hostInputTracker?.attach();
     } else {
@@ -820,45 +807,11 @@ export class DndmApp extends GameElement {
   }
 
   /**
-   * Remote-only background hydration: request full data for any map currently
-   * held as a MapSummary. The host never calls this (it holds full maps — a
-   * self-`requestMap` would be a pointless round-trip); each `requestMap`
-   * resolves to a `map` patch that MatchView merges, after which the next
-   * auto-save sees full maps. One flight per map id; entries clear on arrival
-   * (or removal).
-   */
-  private requestMissingMaps(state: Readonly<MatchState>): void {
-    const liveById = new Map(state.maps.map((m) => [m.id, m] as const));
-    for (const id of [...this.pendingMapFetches]) {
-      const cur = liveById.get(id);
-      if (!cur || isFullMap(cur)) this.pendingMapFetches.delete(id);
-    }
-    let requested = 0;
-    for (const m of state.maps) {
-      if (isFullMap(m) || this.pendingMapFetches.has(m.id)) continue;
-      if (requested >= 10) break;
-      this.pendingMapFetches.add(m.id);
-      this.send({ kind: "requestMap", mapId: m.id });
-      requested++;
-    }
-  }
-
-  /**
-   * Map selection always pairs `setActiveMap` with a `requestMap` when the
-   * target is currently a summary AND this browser is not the host — switching
-   * alone only broadcasts the id, leaving the newly active map without
-   * tokens/images until fetched. The host holds full maps, so it never
-   * double-sends to itself; requesting an already-full map is harmless
-   * (authority re-sends it).
+   * Map selection is a single `setActiveMap`: every player's next projection
+   * carries the new active map in full, so nobody has to fetch it.
    */
   private selectMap(id: string): void {
     this.send({ kind: "setActiveMap", mapId: id });
-    if (this.controller?.isHost) return;
-    const target = this.match.maps.find((m) => m.id === id);
-    if (target && !isFullMap(target) && !this.pendingMapFetches.has(id)) {
-      this.pendingMapFetches.add(id);
-      this.send({ kind: "requestMap", mapId: id });
-    }
   }
 
   /**

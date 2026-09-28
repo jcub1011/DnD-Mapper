@@ -6,7 +6,7 @@
  *      centres (x.5, y.5); images anchor at corners (x, y).
  *   2. Strict JSON only. No `undefined` (use `null`), no `Date`, `Map`, `Set`,
  *      classes, functions, or circular references.
- *   3. Shared between client and server authority sandbox.
+ *   3. Pure: no DOM or Node globals, so the host store and rules test headless.
  */
 
 import type { FogMaskB64 } from "./fog.js";
@@ -594,8 +594,7 @@ export type DndMapperPhase = "Lobby" | "Playing";
  * persisted fingerprint or slot shards: clients toast it once (tracked by id)
  * and it never round-trips through IndexedDB.
  *
- * `loadedAt` uses the authority clock (`kb.now()`, ms epoch) — the authority
- * sandbox has no `Date`.
+ * `loadedAt` is the host's clock (`Date.now()`, ms epoch) at load time.
  */
 export interface SaveLoadedAnnouncement {
   readonly id: string;

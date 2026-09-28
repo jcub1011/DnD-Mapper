@@ -1,7 +1,7 @@
 /*
  * Pure map & image domain helpers.
  *
- * Runs in the sandbox (no DOM, no Date, no Node).
+ * Pure (no DOM, no Date, no Node).
  */
 
 import type { GameMap, GridConfig, MapImage, NewMapImage } from "./domain.js";
@@ -9,7 +9,7 @@ import { createDefaultGridConfig, sortImagesByLayer } from "./domain.js";
 
 /**
  * Standard RFC 4122 v4 UUID generator using Math.random().
- * Completely independent of Web Crypto / DOM / Node APIs for sandbox compatibility.
+ * Completely independent of Web Crypto / DOM / Node APIs, like the rest of src/game/.
  */
 export function generateGuid(): string {
   let d = "";
@@ -25,7 +25,7 @@ export function generateGuid(): string {
 
 /**
  * Pure arithmetic conversion from milliseconds timestamp to ISO 8601 UTC string.
- * Sandbox safe (the sandbox actively deletes the `Date` global).
+ * Pure arithmetic keeps src/game/ free of `Date`; the caller supplies the clock.
  */
 export function timestampToIsoUtc(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);

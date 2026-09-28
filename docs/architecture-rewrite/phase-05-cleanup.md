@@ -36,10 +36,42 @@ Step 1–3 below.
 
 ## Completion checklist
 
-- [ ] Server-authority files, configs, and build passes deleted
-- [ ] `npm run build`, `typecheck`, `lint`, `test`, `export:game` all green
+- [x] Server-authority files, configs, and build passes deleted
+- [x] `npm run build`, `typecheck`, `lint`, `test`, `export:game` all green
       with no authority references
-- [ ] Obsolete tests deleted; kept tests pass unmodified; rewritten tests
+- [x] Obsolete tests deleted; kept tests pass unmodified; rewritten tests
       cover host-store + host-mode sync
-- [ ] Manifest packs with no `serverAuthority`; no packer scan failures
-- [ ] Stale docs (`02`, `06`, `00`, `07-11`, `pt-2`) rewritten for host-auth
+- [x] Manifest packs with no `serverAuthority`; no packer scan failures
+- [x] Stale docs (`02`, `06`, `00`, `07-11`, `pt-2`) rewritten for host-auth
+
+## As executed (deviations from the steps above)
+
+Done together with the PR #3 review fixes, because the platform launch was
+still running the server module while the client assumed host authority.
+
+- **Tests kept rather than deleted.** `authorityController.test.ts` was
+  already the host-mode suite: kept, harness switched to `perRecipient:true`.
+  `view.test.ts` lost its guest-half cases but keeps the host-store and
+  `applyLoaded` coverage. `snapshotBudget.test.ts` is pure domain and moved to
+  `src/game/` (per-player snapshots are what goes on the wire now).
+  `addons.smoke.test.ts` lost only its `scanAuthorityImports` case and gained a
+  check that `addons/knockbox/` matches `knockbox.json`. `wire.test.ts` and
+  `verbsAccounting.test.ts` are pure and still pass unmodified, so they stay.
+- **`wire.ts` retargeted, not deleted.** `guardSize`/`utf8Length` are the
+  relay-frame measure for the parked per-recipient patch fan-out
+  (KnockBox-Games#62). `MatchView.applyIntent` no longer calls `guardSize`: the
+  patch is only an accept signal and is never sent.
+- **`Patch` union kept.** It is the accept signal (about 100 rule return sites)
+  and the #62 hook (`projectPatchForPlayer`). Only its guest-side consumer
+  (`MatchView.applyPatch`/`applySnapshot`) was deleted.
+- **Guest map hydration removed** (`requestMissingMaps`, `selectMap`'s
+  `requestMap`): a per-player projection always carries the active map in
+  full, and an accepted `requestMap` only re-sent everyone's snapshot.
+- **`check-manifest.mjs` unchanged.** It never had an authority scan.
+- **Rewrite tests** (`rules`, `dndm-app`, `hostInput`, `campaignImport`)
+  already had no server harness or chunk round-trip; only `dndm-app.test.ts`
+  changed (hydration cases replaced).
+- **DM succession removed** from `handlePlayerLeft` (locked "freeze on DM
+  leave"); the host now runs the leave lifecycle via `MatchView.handlePlayerLeft`.
+- The "survey table" step 4 cites was never committed; the docs were swept
+  file by file instead.

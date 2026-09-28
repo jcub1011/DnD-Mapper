@@ -8,8 +8,8 @@ server becomes a dumb relay/router (`sendToHost` → DM player, `sendToAll` →
 host broadcast). Saves are pure-local IndexedDB writes with zero network.
 Players receive only projected deltas via directed `sendTo()`.
 
-Key sources: `export/GAME.json:18` (`serverAuthority` opt-in),
-`src/authority/authority.ts`, `src/net/authorityController.ts`,
+Key sources: `export/GAME.json` (no `serverAuthority` key since Phase 05),
+`src/game/view.ts` (host store), `src/net/authorityController.ts`,
 `src/net/transport.ts`, `src/net/knockboxPlugin.ts`,
 `src/game/rules.ts` + `visibility.ts`, `src/game/campaignImport.ts`,
 `src/storage/libraryService.ts`, `src/ui/app/dndm-app.ts`,

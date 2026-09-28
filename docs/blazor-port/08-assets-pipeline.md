@@ -95,9 +95,10 @@ simply resolve `null` and see grid, tokens and fog over a placeholder.
 > [`11`](11-verification.md#the-asset-check-that-must-not-be-skipped)'s
 > "comment out `publish()`" check is for. Treat that check as load-bearing, not optional.
 
-Note also that the **metadata** still has to reach the authority, and for an imported campaign
-that is its own protocol — see
-[`06`](06-state-and-authority.md#getting-a-campaign-into-the-authority).
+The **metadata** needs no protocol of its own: the DM's browser is the host and already holds it.
+Loading a save or an imported campaign re-`publish()`es its image blobs, applies the state directly
+to the host store, and fans out a per-player snapshot — see
+[`06`](06-state-and-authority.md).
 
 ## Content addressing on the client
 

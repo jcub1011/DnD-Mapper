@@ -4,18 +4,18 @@
 
 Phase 8 implements the Loaded Dice engine, allowing the Dungeon Master to author secret, conditional rules that manipulate dice roll outcomes in real time.
 
-In the legacy Blazor application, the Loaded Dice system was a signature feature: DMs could set subtle cinematic interventions (e.g. "if the dragon rolls a natural 20 against level 1 PCs, reroll it", "floor player rolls at 5 during boss fight", or "when the DM holds the Spacebar, force roll to 18"). The engine operates entirely within the sandboxed authority, evaluating complex compound conditions and applying dice modifications before committing results.
+In the legacy Blazor application, the Loaded Dice system was a signature feature: DMs could set subtle cinematic interventions (e.g. "if the dragon rolls a natural 20 against level 1 PCs, reroll it", "floor player rolls at 5 during boss fight", or "when the DM holds the Spacebar, force roll to 18"). The engine runs on the host — the DM's browser — inside `applyIntent`, evaluating complex compound conditions and applying dice modifications before committing results. There is no sandbox; the processor lives in pure `src/game/loadedDice.ts` so it stays unit-testable.
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        Loaded Dice Architecture                        │
 ├─────────────────────────┬────────────────────────┬─────────────────────┤
-│   Domain & Authority    │   DM Host Streaming    │       Lit UI        │
+│  Domain & Host Rules    │   DM Host Streaming    │       Lit UI        │
 ├─────────────────────────┼────────────────────────┼─────────────────────┤
 │ • Pure condition eval   │ • keydown / keyup /    │ • <dndm-loaded-     │
 │ • Pure modifications    │   blur listeners       │   dice-panel>       │
 │ • Rule stamping audit   │ • Key normalization    │ • Rule builder modal│
-│ • Visibility policies   │ • 30 msg/s debounced   │ • Player indicators │
+│ • Visibility policies   │ • 50 ms throttled      │ • Player indicators │
 │   (Hidden / Host / All) │   key state streaming  │   (Subtle/Obvious)  │
 └─────────────────────────┴────────────────────────┴─────────────────────┘
 ```
@@ -39,7 +39,7 @@ Ported directly from `KnockBox.DndMapper`:
   - `Pages/Components/LoadedDice/LoadedDiceRulesPanel.razor` (and `.cs`, `.css`)
   - `Pages/Components/LoadedDice/LoadedDiceRuleModal.razor`
 - **Host Input Streaming**:
-  - `wwwroot/js/dndMapperHostInput.js` (138 lines) — Tracks keys held by the DM and synchronizes them with the server.
+  - `wwwroot/js/dndMapperHostInput.js` (138 lines) — Tracks keys held by the DM and synchronizes them with the engine (in the port, the DM's own browser is the host).
 
 ---
 
@@ -166,8 +166,9 @@ Modifications are applied sequentially to die values:
 ### 4.3 Auditing & Stamping
 - When one or more rules modify a roll:
   - Rule stamps (`LoadedDiceRuleStamp`: ruleId, ruleName, modificationType) are recorded on `RollResult.appliedRules`.
-  - In KnockBox server authority (`ServerAuthority.cs`), delta patches are broadcast to `"all"`. Therefore, secret visibility filtering is enforced **client-side in `MatchView` and the `<dndm-roll-log>` component**:
-    - `Hidden`: Player clients strip and never render `appliedRules`.
+  - The DM's browser is the host and sends each non-host player its own `projectForPlayer` snapshot (`perRecipient: true`). **The host withholds the rules themselves**: a player's snapshot carries `loadedDiceRules: []` unless `loadedDiceRuleVisibility` is `VisibleToAll` (or legacy `AllPlayers`), so `Hidden` and host-only rules never leave the DM's browser.
+  - `projectForPlayer` does **not** currently strip `RollResult.appliedRules`, so the stamps still reach players and are gated client-side in the roll log (open gap — move this into the projection if stamps must stay secret):
+    - `Hidden`: Player clients never render `appliedRules`.
     - `VisibleToHostOnly`: Only the DM client renders `appliedRules`; player clients suppress it.
     - `VisibleToAll`: `appliedRules` is displayed in the roll breakdown for all clients.
 
@@ -177,7 +178,7 @@ Modifications are applied sequentially to die values:
 
 Porting `dndMapperHostInput.js`:
 1. **Window Event Listeners**:
-   - Only attached when the local client is the DM (`isOwner === true` and `settings.loadedDiceEnabled === true`).
+   - Only attached when the local client is the DM (`isDm` — not the lobby `isOwner` — and `settings.loadedDiceEnabled === true`).
    - Listen for `keydown`, `keyup`, and `blur`.
    - **Input Focus Guard**: Explicitly ignore keystrokes when the active focus is inside an editable text element (`HTMLInputElement`, `HTMLTextAreaElement`, or `isContentEditable`) to prevent typing in chat or notes from streaming held keys or triggering loaded dice rules.
 2. **Key Normalization**:
@@ -186,7 +187,8 @@ Porting `dndMapperHostInput.js`:
    - Ignore repeated auto-fire `keydown` events (`event.repeat === true`).
    - On window `blur`, clear all held keys to prevent sticky keys.
 3. **Rate-Limited Intent Dispatch**:
-   - Debounce intent dispatches using a trailing-edge throttle (max 1 intent per 50ms = 20 msg/s, safely below the 30 msg/s ceiling).
+   - Debounce intent dispatches using a trailing-edge throttle (max 1 intent per 50ms = 20 msg/s).
+   - The DM is the host, so `updateHostKeys` loops back to the DM's own `applyIntent` instead of crossing the relay. **But this is no longer "safely below" the limit:** every accepted update triggers a full per-player snapshot fan-out (N−1 `sendTo` frames). At up to 20 updates/s with several players, the host's outbound traffic can exceed the relay's 30 msg/s (60 burst, 1008 close). Open risk — verify in architecture-rewrite Phase 06 ([`phase-06-verification.md`](../architecture-rewrite/phase-06-verification.md)) (options: skip the fan-out when only `hostHeldKeys` changed — players have no use for it, and `projectForPlayer` currently ships it to them — or throttle harder).
    - Only emit `updateHostKeys` if the active set of held keys has genuinely changed.
 
 ---

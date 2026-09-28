@@ -4,10 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.authority.json",
+    "typecheck": "tsc --noEmit",
     "build:app": "vite build",
-    "build:authority": "vite build --config vite.authority.config.ts",
-    "build": "npm run typecheck && npm run build:app && npm run build:authority",
+    "build": "npm run typecheck && npm run build:app",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
