@@ -60,7 +60,7 @@ export class DndmLayerPanel extends GameElement {
     const urls = new Map<string, string>();
     for (const img of this.activeMap.images) {
       try {
-        const url = await this.assetSource.resolve(img.id);
+        const url = await this.assetSource.resolve(img.id, img.shareToken);
         if (url) urls.set(img.id, url);
       } catch {
         // ignore resolution failure

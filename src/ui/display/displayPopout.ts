@@ -308,7 +308,9 @@ export class ProxyAssetSource implements AssetSource {
     return this.resolve(imageId);
   }
 
-  async publish(_imageId: string, _blob: Blob): Promise<void> {}
+  async publish(_imageId: string, _blob: Blob): Promise<string | null> {
+    return null;
+  }
 
   async release(imageId: string): Promise<void> {
     this.blobs.delete(imageId);

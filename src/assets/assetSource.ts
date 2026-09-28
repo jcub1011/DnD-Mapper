@@ -19,17 +19,25 @@ import {
 } from "./blobTransport.js";
 
 export interface AssetSource {
-  /** A URL Phaser can hand to `load.image()`, or null if unavailable here. */
-  resolve(imageId: string): Promise<string | null>;
+  /**
+   * A URL Phaser can hand to `load.image()`, or null if unavailable here.
+   * `shareToken` is the image's published read URL: the fallback for clients
+   * that hold no local handle for it (every guest on the platform).
+   */
+  resolve(imageId: string, shareToken?: string | null): Promise<string | null>;
 
-  /** Called by the DM after an image is added. No-op where there is nothing to publish. */
-  publish(imageId: string, blob: Blob): Promise<void>;
+  /**
+   * Called by the DM after an image is added. Resolves to the share token
+   * guests resolve the image through, or null where there is nothing to
+   * share across clients.
+   */
+  publish(imageId: string, blob: Blob): Promise<string | null>;
 
   /** Called when an image is removed from the campaign. */
   release(imageId: string): Promise<void>;
 
   /** Backward-compatible alias for resolve(). */
-  getUrl?(imageId: string): Promise<string | null>;
+  getUrl?(imageId: string, shareToken?: string | null): Promise<string | null>;
   revokeUrl?(imageId: string): void;
   has?(imageId: string): Promise<boolean>;
   dispose?(): void;
@@ -69,8 +77,9 @@ export class LocalAssetSource implements AssetSource {
     return loadPromise;
   }
 
-  public async publish(_imageId: string, _blob: Blob): Promise<void> {
+  public async publish(_imageId: string, _blob: Blob): Promise<string | null> {
     // No-op for LocalAssetSource; the DM already has bytes in LibraryService
+    return null;
   }
 
   public async release(imageId: string): Promise<void> {
@@ -113,17 +122,19 @@ export class LocalAssetSource implements AssetSource {
 export class BlobShareAssetSource implements AssetSource {
   constructor(public readonly transport: BlobTransport) {}
 
-  public async publish(imageId: string, blob: Blob): Promise<void> {
+  public async publish(imageId: string, blob: Blob): Promise<string | null> {
     const hash = await sha256Hex(blob);
     if (!(await this.transport.has(hash))) {
       await this.transport.put(hash, blob);
     }
-    await this.transport.register(imageId, hash);
+    return await this.transport.register(imageId, hash);
   }
 
-  public async resolve(imageId: string): Promise<string | null> {
+  public async resolve(imageId: string, shareToken: string | null = null): Promise<string | null> {
+    // A local handle wins (the publishing client); everyone else loads the
+    // read URL the publisher put into the image's shareToken.
     const hash = await this.transport.hashFor(imageId);
-    if (hash === null) return null;
+    if (hash === null) return shareToken;
     return await this.transport.urlFor(hash);
   }
 
@@ -131,8 +142,8 @@ export class BlobShareAssetSource implements AssetSource {
     await this.transport.unregister(imageId);
   }
 
-  public getUrl(imageId: string): Promise<string | null> {
-    return this.resolve(imageId);
+  public getUrl(imageId: string, shareToken?: string | null): Promise<string | null> {
+    return this.resolve(imageId, shareToken);
   }
 
   public async has(imageId: string): Promise<boolean> {
@@ -150,7 +161,9 @@ export class NullAssetSource implements AssetSource {
     return null;
   }
 
-  public async publish(_imageId: string, _blob: Blob): Promise<void> {}
+  public async publish(_imageId: string, _blob: Blob): Promise<string | null> {
+    return null;
+  }
 
   public async release(_imageId: string): Promise<void> {}
 

@@ -21,11 +21,13 @@ import {
   type AttributeValue,
   type GameMap,
   type GridConfig,
+  type ImageCopy,
   type MapImage,
   type NewMapImage,
   type StatusEffect,
   type Token,
 } from "../../game/domain";
+import { generateGuid } from "../../game/maps";
 import type { Intent, MatchState } from "../../game/types";
 import { hasCampaignContent } from "../../game/campaignImport";
 import { AUTO_SLOT_ID, AUTO_SLOT_NAME } from "../../storage/schema";
@@ -233,7 +235,14 @@ export class DndmApp extends GameElement {
         roster: this.roster.map((p) => ({ id: p.id, displayName: p.displayName })),
       }),
       resolveAsset: async (imageId) => {
-        const url = await this.assetSource.resolve(imageId);
+        // The host may not be the uploader (DM succession), so fall back to
+        // the image's published read URL like any guest would.
+        const shareToken =
+          this.hostTruth.maps
+            .filter(isFullMap)
+            .flatMap((m) => m.images)
+            .find((img) => img.id === imageId)?.shareToken ?? null;
+        const url = await this.assetSource.resolve(imageId, shareToken);
         if (!url) return null;
         const res = await fetch(url);
         return res.ok ? await res.blob() : null;
@@ -708,6 +717,9 @@ export class DndmApp extends GameElement {
       map.setActiveTurnTokenId(resolveActiveTurnTokenId(state.activeCombat));
       map.setFocusRect(state.focusRect);
       map.setViewerUserId(this.controller?.playerId ?? null);
+      // DM succession can happen without a map change; image interactivity
+      // follows the role.
+      if (map.isDm !== this.isDm) map.setDm(this.isDm);
       this.updateTokenMovePolicy();
 
       if (
@@ -815,6 +827,31 @@ export class DndmApp extends GameElement {
   }
 
   /**
+   * Duplicates a map. Like an upload, every image's bytes are copied to a new
+   * id and published *before* the intent goes out, so the copy renders (and
+   * saves, and exports) the moment it exists. Images whose bytes this browser
+   * doesn't hold get a host-minted id and keep the source's share token.
+   */
+  private async duplicateMap(mapId: string): Promise<void> {
+    const images: Record<string, ImageCopy> = {};
+    const source = this.hostTruth.maps.find((m) => m.id === mapId);
+    if (source && isFullMap(source)) {
+      for (const img of source.images) {
+        try {
+          const blob = await this.libraryService.getImage(img.id);
+          if (!blob) continue;
+          const id = generateGuid();
+          await this.libraryService.putImage(id, blob);
+          images[img.id] = { id, shareToken: await this.assetSource.publish(id, blob) };
+        } catch (err) {
+          log.warn(`could not copy image "${img.name}" for map duplicate: ${String(err)}`, err);
+        }
+      }
+    }
+    this.send({ kind: "duplicateMap", mapId, images });
+  }
+
+  /**
    * Applies a loaded slot state to the live session: re-publishes its image
    * blobs, then swaps the slot directly into the host store (pure-local
    * write, zero network on the way in) and fans out fresh per-player
@@ -830,24 +867,32 @@ export class DndmApp extends GameElement {
       return;
     }
     try {
+      // Re-publish every image and stamp the fresh read URL into the state
+      // guests receive. A saved shareToken is lobby-scoped and dead by now,
+      // so an image whose bytes are missing gets null rather than a stale URL.
+      const maps: MatchState["maps"][number][] = [];
       for (const map of loaded.maps) {
-        if ("images" in map) {
-          for (const img of map.images) {
-            const blob = await this.libraryService.getImage(img.id);
-            if (blob) {
-              await this.assetSource.publish(img.id, blob);
-            }
-          }
+        if (!isFullMap(map)) {
+          maps.push(map);
+          continue;
         }
+        const images: MapImage[] = [];
+        for (const img of map.images) {
+          const blob = await this.libraryService.getImage(img.id);
+          const shareToken = blob ? await this.assetSource.publish(img.id, blob) : null;
+          images.push({ ...img, shareToken });
+        }
+        maps.push({ ...map, images });
       }
+      const published: MatchState = { ...loaded, maps };
       // Slot shards should be full maps (the storage guard skips summaries);
       // the state type stays wider because live snapshots project inactive
       // maps, and pre-fix slots may still contain summary shards. Those are
       // unrecoverable from the slot — the host drops them loudly instead of
       // silently.
-      const fullMaps = loaded.maps.filter(isFullMap);
-      const dropped = loaded.maps.length - fullMaps.length;
-      this.controller.applyLoadedCampaign(loaded);
+      const fullMaps = published.maps.filter(isFullMap);
+      const dropped = published.maps.length - fullMaps.length;
+      this.controller.applyLoadedCampaign(published);
       if (dropped > 0) {
         const names = loaded.maps
           .filter((m) => !isFullMap(m))
@@ -1012,8 +1057,7 @@ export class DndmApp extends GameElement {
                       .onSelectMap=${(id: string) => this.selectMap(id)}
                       .onRenameMap=${(id: string, name: string) =>
                       this.send({ kind: "renameMap", mapId: id, name })}
-                      .onDuplicateMap=${(id: string) =>
-                      this.send({ kind: "duplicateMap", mapId: id })}
+                      .onDuplicateMap=${(id: string) => void this.duplicateMap(id)}
                       .onDeleteMap=${(id: string) => this.send({ kind: "deleteMap", mapId: id })}
                       .onReorderMaps=${(order: readonly string[]) =>
                       this.send({ kind: "reorderMaps", order })}
@@ -1032,8 +1076,14 @@ export class DndmApp extends GameElement {
                         imageId: string,
                       ) => {
                         if (active) {
-                          await this.assetSource.publish(imageId, blob);
-                          this.send({ kind: "addImage", mapId: active.id, image: newImg, imageId });
+                          const shareToken = await this.assetSource.publish(imageId, blob);
+                          this.send({
+                            kind: "addImage",
+                            mapId: active.id,
+                            image: newImg,
+                            imageId,
+                            shareToken,
+                          });
                           toastService.success(`Added image layer "${newImg.name}"`);
                         }
                       }}

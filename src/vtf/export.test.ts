@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import { describe, expect, it } from "vitest";
-import type { CharacterSheet, DndMapperState, GameMap } from "../game/domain.js";
+import type { CharacterSheet, DndMapperState, GameMap, MapImage } from "../game/domain.js";
 import { createDefaultDndMapperState, createDefaultGridConfig } from "../game/domain.js";
 import { encodeFog } from "../game/fog.js";
 import { LibraryService } from "../storage/libraryService.js";
@@ -63,7 +63,8 @@ function makeRichTestState(): { state: DndMapperState; imageBlobs: Map<string, B
         originalLongEdgePx: 800,
         displayLongEdgePx: 800,
         contentType: "image/png",
-        shareToken: null,
+        // A live lobby-scoped read URL: must not survive into the export.
+        shareToken: "/blob/deadbeef.mac",
       },
     ],
     tokens: [
@@ -300,6 +301,8 @@ describe("exportVtf ZIP Structure", () => {
     expect(dndmScene.name).toBe("Dungeon Level 1");
     expect(sceneDoc!.entityInstances).toHaveLength(2);
     expect(sceneDoc!.layers).toHaveLength(1);
+    const layerVendor = sceneDoc!.layers[0].vendorData?.knockbox_dnd_mapper as MapImage;
+    expect(layerVendor.shareToken).toBeNull();
 
     // 4. Entities (Sheets)
     expect(entryNames).toContain("entities/sheet_sheet-alice.json");

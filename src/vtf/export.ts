@@ -303,7 +303,8 @@ export async function exportVtf(
         zIndex: img.layerOrder,
         opacity: img.opacity,
         vendorData: {
-          [VENDOR_KEY]: img,
+          // shareToken is a lobby-scoped read URL; it must never be exported.
+          [VENDOR_KEY]: { ...img, shareToken: null },
         },
       };
     });

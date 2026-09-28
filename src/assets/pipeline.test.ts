@@ -315,7 +315,8 @@ describe("Asset Pipeline", () => {
       const hash = await sha256Hex(blob);
 
       expect(await transport.has(hash)).toBe(false);
-      await source.publish("img-101", blob);
+      // Local tabs share IndexedDB handles: there is no share token to send.
+      expect(await source.publish("img-101", blob)).toBeNull();
 
       expect(await transport.has(hash)).toBe(true);
       expect(await transport.hashFor("img-101")).toBe(hash);
@@ -578,12 +579,32 @@ describe("Asset Pipeline", () => {
       const hash = "abc12345";
 
       await transport.put(hash, blob);
-      await transport.register("img-1", hash);
+      expect(await transport.register("img-1", hash)).toBe("/blob/abc12345.tag6789");
 
       expect(mockPlugin.registerBlob).toHaveBeenCalledWith("img-1", blob);
       expect(await transport.hashFor("img-1")).toBe(hash);
       expect(await transport.urlFor(hash)).toBe("/blob/abc12345.tag6789");
-      expect(await transport.has(hash)).toBe(true);
+      // Never claims a hash: registerBlob dedups against the server itself.
+      expect(await transport.has(hash)).toBe(false);
+    });
+
+    it("publishes identical bytes under a second id without throwing", async () => {
+      const source = new BlobShareAssetSource(transport);
+      const blob = new Blob(["same-map-art"], { type: "image/png" });
+
+      expect(await source.publish("img-a", blob)).toBe("/blob/abc12345.tag6789");
+      expect(await source.publish("img-b", blob)).toBe("/blob/abc12345.tag6789");
+      expect(mockPlugin.registerBlob).toHaveBeenCalledTimes(2);
+    });
+
+    it("lets a guest with no handle resolve through the host's share token", async () => {
+      const host = new BlobShareAssetSource(transport);
+      const guest = new BlobShareAssetSource(new KbBlobTransport(mockPlugin));
+      const shareToken = await host.publish("img-1", new Blob(["map-art"]));
+
+      expect(await guest.resolve("img-1", shareToken)).toBe("/blob/abc12345.tag6789");
+      expect(await guest.resolve("img-1", null)).toBeNull();
+      expect(await guest.resolve("img-1")).toBeNull();
     });
 
     it("throws on register if blob was not staged via put", async () => {
@@ -685,7 +706,9 @@ describe("Asset Pipeline", () => {
       globalThis.fetch = mockFetch;
 
       const transport = new HttpBlobTransport("ticket-xyz");
-      await transport.register("logical-img-1", "hash-123", "image/webp");
+      expect(await transport.register("logical-img-1", "hash-123", "image/webp")).toBe(
+        "/blob/hash-123.tag-mac",
+      );
 
       expect(mockFetch).toHaveBeenCalledWith("/blob/register", {
         method: "POST",

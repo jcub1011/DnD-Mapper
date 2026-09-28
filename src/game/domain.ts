@@ -153,6 +153,15 @@ export function toMapSummary(map: GameMap): MapSummary {
 export type NewToken = Omit<Token, "id" | "mapId" | "ownerUserId" | "representsUserId">;
 export type NewMapImage = Omit<MapImage, "id" | "shareToken" | "layerOrder">;
 
+/**
+ * Where a duplicated map's image copy lives: the id the DM stored and
+ * published the copied bytes under, and that copy's share token.
+ */
+export interface ImageCopy {
+  readonly id: string;
+  readonly shareToken: string | null;
+}
+
 export interface FocusRect {
   readonly mapId: string;
   readonly x: number;

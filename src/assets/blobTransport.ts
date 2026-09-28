@@ -11,7 +11,12 @@
 export interface BlobTransport {
   has(sha256: string): Promise<boolean>;
   put(sha256: string, blob: Blob): Promise<void>;
-  register(logicalId: string, sha256: string): Promise<void>;
+  /**
+   * Points `logicalId` at `sha256`. Resolves to a read URL other clients in
+   * the session can load (the image's `shareToken`), or null when this
+   * transport has no cross-client URL (local tabs share IndexedDB handles).
+   */
+  register(logicalId: string, sha256: string): Promise<string | null>;
   unregister(logicalId: string): Promise<void>;
 
   /** The handle lookup: logicalId -> hash, or null if this client holds no handle. */
@@ -118,7 +123,7 @@ export class IdbBlobTransport implements BlobTransport {
     });
   }
 
-  public async register(logicalId: string, sha256: string): Promise<void> {
+  public async register(logicalId: string, sha256: string): Promise<string | null> {
     const db = await this.getDb();
     return new Promise((resolve, reject) => {
       try {
@@ -126,7 +131,9 @@ export class IdbBlobTransport implements BlobTransport {
         const store = tx.objectStore(STORE_HANDLES);
         const handleKey = [this.lobbyId, logicalId];
         store.put({ sha256 }, handleKey);
-        tx.oncomplete = () => resolve();
+        // Same-origin tabs read the shared handle store; blob: URLs are
+        // per-document, so there is nothing worth sharing.
+        tx.oncomplete = () => resolve(null);
         tx.onerror = () => reject(tx.error);
         tx.onabort = () => reject(tx.error ?? new Error("Transaction aborted"));
       } catch (err) {
@@ -362,7 +369,7 @@ export class HttpBlobTransport implements BlobTransport {
     logicalId: string,
     sha256: string,
     contentType = "image/webp",
-  ): Promise<void> {
+  ): Promise<string | null> {
     const res = await fetch(`${this.baseUrl}/blob/register`, {
       method: "POST",
       headers: {
@@ -381,6 +388,7 @@ export class HttpBlobTransport implements BlobTransport {
     if (data.url) {
       this.urls.set(sha256, data.url);
     }
+    return data.url ?? null;
   }
 
   public async unregister(logicalId: string): Promise<void> {
@@ -426,15 +434,18 @@ export class KbBlobTransport implements BlobTransport {
 
   constructor(private readonly plugin: KnockBoxBlobPlugin) {}
 
-  public async has(sha256: string): Promise<boolean> {
-    return this.urls.has(sha256);
+  public async has(_sha256: string): Promise<boolean> {
+    // Always stage: registerBlob runs its own HEAD dedup probe against the
+    // server, and claiming a hash here would skip put() and leave register()
+    // with nothing staged when the same bytes publish under a second id.
+    return false;
   }
 
   public async put(sha256: string, blob: Blob): Promise<void> {
     this.stagedBlobs.set(sha256, blob);
   }
 
-  public async register(logicalId: string, sha256: string): Promise<void> {
+  public async register(logicalId: string, sha256: string): Promise<string | null> {
     const staged = this.stagedBlobs.get(sha256);
     if (!staged) {
       throw new Error(
@@ -445,6 +456,7 @@ export class KbBlobTransport implements BlobTransport {
     this.handles.set(logicalId, sha256);
     this.urls.set(sha256, url);
     this.stagedBlobs.delete(sha256);
+    return url;
   }
 
   public async unregister(logicalId: string): Promise<void> {

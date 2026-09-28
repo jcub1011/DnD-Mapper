@@ -19,6 +19,7 @@ import type {
   Token,
 } from "./domain";
 import { isFullMap, sortImagesByLayer } from "./domain";
+import type { Intent } from "./types";
 
 const ROSTER = [
   { id: "dm-1", displayName: "Dungeon Master" },
@@ -342,6 +343,122 @@ describe("applyIntent — images & fog", () => {
     state = remRes!.state;
     expect(remRes!.patch).toEqual({ kind: "imageRemoved", imageId: img.id });
     expect((state.maps.find((m) => m.id === mapId) as GameMap).images).toHaveLength(0);
+  });
+
+  it("carries the DM's share token onto the image so guests can load it", () => {
+    const state = setupMatch();
+    const mapId = state.activeMapId!;
+    const newImg: NewMapImage = {
+      name: "Shared",
+      contentType: "image/png",
+      x: 0,
+      y: 0,
+      width: 2,
+      height: 2,
+      originalWidth: 2,
+      originalHeight: 2,
+      rotation: 0,
+      opacity: 1,
+      locked: false,
+      hidden: false,
+      byteSize: 1024,
+      wasDownscaled: false,
+      originalLongEdgePx: 100,
+      displayLongEdgePx: 100,
+    };
+    const add = (fromId: string, shareToken: unknown) =>
+      applyIntent(
+        state,
+        fromId,
+        { kind: "addImage", mapId, image: newImg, shareToken } as Intent,
+        4000,
+      );
+    const imageOf = (res: ReturnType<typeof add>) => {
+      if (res?.patch?.kind !== "image") throw new Error("expected image patch");
+      return res.patch.image;
+    };
+
+    const shared = add("dm-1", "/blob/abc.mac");
+    expect(imageOf(shared).shareToken).toBe("/blob/abc.mac");
+    expect((shared!.state.maps.find((m) => m.id === mapId) as GameMap).images[0].shareToken).toBe(
+      "/blob/abc.mac",
+    );
+
+    expect(imageOf(add("dm-1", 42)).shareToken).toBeNull();
+    expect(imageOf(add("dm-1", "x".repeat(2049))).shareToken).toBeNull();
+    expect(imageOf(add("dm-1", undefined)).shareToken).toBeNull();
+
+    // Guests still can't add images, token or not.
+    expect(add("player-1", "/blob/abc.mac")).toBeNull();
+  });
+
+  it("duplicates a map onto the DM's pre-published image copies", () => {
+    let state = setupMatch();
+    const mapId = state.activeMapId!;
+    const newImg = (name: string): NewMapImage => ({
+      name,
+      contentType: "image/png",
+      x: 0,
+      y: 0,
+      width: 2,
+      height: 2,
+      originalWidth: 2,
+      originalHeight: 2,
+      rotation: 0,
+      opacity: 1,
+      locked: false,
+      hidden: false,
+      byteSize: 1024,
+      wasDownscaled: false,
+      originalLongEdgePx: 100,
+      displayLongEdgePx: 100,
+    });
+    for (const [id, token] of [
+      ["img-a", "/blob/a.mac"],
+      ["img-b", "/blob/b.mac"],
+      ["img-c", "/blob/c.mac"],
+    ] as const) {
+      state = applyIntent(
+        state,
+        "dm-1",
+        { kind: "addImage", mapId, image: newImg(id), imageId: id, shareToken: token },
+        4000,
+      )!.state;
+    }
+
+    const dup = (fromId: string, images: unknown) =>
+      applyIntent(state, fromId, { kind: "duplicateMap", mapId, images } as Intent, 4100);
+    const copyOf = (res: ReturnType<typeof dup>) =>
+      (res!.state.maps[res!.state.maps.length - 1] as GameMap).images;
+
+    const images = copyOf(
+      dup("dm-1", {
+        "img-a": { id: "copy-a", shareToken: "/blob/a2.mac" },
+        // Collides with an existing image: falls back to a fresh id.
+        "img-b": { id: "img-c", shareToken: "/blob/b2.mac" },
+        // Not an image on the source map: ignored.
+        "img-z": { id: "copy-z", shareToken: null },
+      }),
+    );
+    expect(images.map((img) => img.name)).toEqual(["img-a", "img-b", "img-c"]);
+    expect(images[0]).toMatchObject({ id: "copy-a", shareToken: "/blob/a2.mac" });
+    // Uncopied images get a fresh id but keep the source's still-valid token.
+    expect(images[1].id).not.toMatch(/^img-[abc]$/);
+    expect(images[1].shareToken).toBe("/blob/b.mac");
+    expect(images[2].id).not.toMatch(/^img-[abc]$/);
+    expect(images[2].shareToken).toBe("/blob/c.mac");
+
+    // Two copies claiming one id: only the first keeps it.
+    const clash = copyOf(
+      dup("dm-1", {
+        "img-a": { id: "copy-x", shareToken: null },
+        "img-b": { id: "copy-x", shareToken: null },
+      }),
+    );
+    expect(clash[0].id).toBe("copy-x");
+    expect(clash[1].id).not.toBe("copy-x");
+
+    expect(dup("player-1", {})).toBeNull();
   });
 
   describe("reorderImage", () => {

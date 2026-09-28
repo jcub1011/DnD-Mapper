@@ -25,6 +25,7 @@ import type {
   DndMapperState,
   FocusRect,
   GameMap,
+  ImageCopy,
   GridConfig,
   LoadedDiceRule,
   MapImage,
@@ -61,7 +62,12 @@ export type Intent =
   | { readonly kind: "createMap"; readonly name: string }
   | { readonly kind: "renameMap"; readonly mapId: string; readonly name: string }
   | { readonly kind: "deleteMap"; readonly mapId: string }
-  | { readonly kind: "duplicateMap"; readonly mapId: string }
+  | {
+      readonly kind: "duplicateMap";
+      readonly mapId: string;
+      /** Source image id -> the copy the DM already stored and published. */
+      readonly images?: Readonly<Record<string, ImageCopy>>;
+    }
   | { readonly kind: "reorderMaps"; readonly order: readonly string[] }
   | { readonly kind: "setActiveMap"; readonly mapId: string }
   | { readonly kind: "switchMap"; readonly mapId: string }
@@ -86,12 +92,16 @@ export type Intent =
       readonly mapId: string;
       readonly image: NewMapImage;
       readonly imageId?: string;
+      /** Read URL guests load the bytes from (see MapImage.shareToken). */
+      readonly shareToken?: string | null;
     }
   | {
       readonly kind: "placeImage";
       readonly mapId: string;
       readonly image: NewMapImage;
       readonly imageId?: string;
+      /** Read URL guests load the bytes from (see MapImage.shareToken). */
+      readonly shareToken?: string | null;
     }
   | {
       readonly kind: "transformImage";

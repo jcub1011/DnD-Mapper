@@ -4,7 +4,7 @@
  * Pure (no DOM, no Date, no Node).
  */
 
-import type { GameMap, GridConfig, MapImage, NewMapImage } from "./domain.js";
+import type { GameMap, GridConfig, ImageCopy, MapImage, NewMapImage } from "./domain.js";
 import { createDefaultGridConfig, sortImagesByLayer } from "./domain.js";
 
 /**
@@ -97,12 +97,18 @@ export function deleteMap(maps: readonly GameMap[], mapId: string): readonly Gam
   return remaining.map((m, idx) => ({ ...m, listOrder: idx }));
 }
 
-/** Duplicates a map including its tokens and images with new IDs. */
+/**
+ * Duplicates a map including its tokens and images with new IDs. An image
+ * listed in `imageCopies` takes that copy's id and share token (its bytes were
+ * already stored and published under it); any other image gets a fresh id and
+ * keeps the source's share token.
+ */
 export function duplicateMap(
   maps: readonly GameMap[],
   mapId: string,
   now: number,
   newMapId?: string,
+  imageCopies: ReadonlyMap<string, ImageCopy> = new Map(),
 ): { maps: readonly GameMap[]; duplicated: GameMap | null } {
   const source = maps.find((m) => m.id === mapId);
   if (!source) return { maps, duplicated: null };
@@ -115,7 +121,12 @@ export function duplicateMap(
     createdUtc: timestampToIsoUtc(now),
     listOrder: maps.length,
     tokens: source.tokens.map((t) => ({ ...t, id: generateGuid(), mapId: id })),
-    images: source.images.map((img) => ({ ...img, id: generateGuid() })),
+    images: source.images.map((img) => {
+      const copy = imageCopies.get(img.id);
+      return copy
+        ? { ...img, id: copy.id, shareToken: copy.shareToken }
+        : { ...img, id: generateGuid() };
+    }),
   };
 
   return {
@@ -166,6 +177,7 @@ export function addImageToMap(
   mapId: string,
   newImage: NewMapImage,
   imageId?: string,
+  shareToken: string | null = null,
 ): { maps: readonly GameMap[]; image: MapImage | null } {
   let createdImage: MapImage | null = null;
   const updatedMaps = maps.map((m) => {
@@ -174,7 +186,7 @@ export function addImageToMap(
     createdImage = {
       ...newImage,
       id: imageId ?? generateGuid(),
-      shareToken: null,
+      shareToken,
       layerOrder: maxLayer + 1,
     };
     return {

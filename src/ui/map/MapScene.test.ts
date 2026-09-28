@@ -220,6 +220,7 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
       displayLongEdgePx: 256,
     };
 
+    scene.setDm(true);
     scene.updateImages([img]);
     scene.selectImage("handles_test");
 
@@ -275,6 +276,7 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
       displayLongEdgePx: 256,
     };
 
+    scene.setDm(true);
     scene.updateImages([img]);
     scene.selectImage("hover_test");
 
@@ -329,6 +331,7 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
       { ...base, id: "move_a", name: "A", x: 0, y: 0, layerOrder: 1 },
       { ...base, id: "move_b", name: "B", x: 5, y: 5, layerOrder: 2 },
     ];
+    scene.setDm(true);
     scene.updateImages(images);
     scene.selectImage("move_a");
 
@@ -491,6 +494,7 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
     type InputState = { enabled: boolean; draggable: boolean } | null;
 
     it("restores image selection and drag listeners", () => {
+      scene.setDm(true);
       scene.updateImages([image]);
       scene.setToolMode("fog");
       scene.updateImages([image]); // sync caused by using the tool
@@ -504,6 +508,47 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
       expect(input?.draggable).toBe(true);
       expect(sprite.listenerCount(Phaser.Input.Events.POINTER_UP)).toBeGreaterThan(0);
       expect(sprite.listenerCount(Phaser.Input.Events.DRAG_START)).toBeGreaterThan(0);
+    });
+
+    it("keeps images non-interactive for non-DMs, including across rebuilds and tool switches", () => {
+      scene.setDm(false);
+      scene.updateImages([image]);
+      scene.setToolMode("fog");
+      scene.updateImages([{ ...image, x: 1 }]);
+      scene.setToolMode("none");
+
+      const layer = (
+        scene as unknown as {
+          imageLayer: {
+            sprites: Map<string, Phaser.GameObjects.Image>;
+            handleContainers: Map<string, Phaser.GameObjects.Container>;
+          };
+        }
+      ).imageLayer;
+      const sprite = layer.sprites.get(image.id)!;
+      expect((sprite.input as unknown as InputState)?.enabled ?? false).toBe(false);
+      expect(sprite.listenerCount(Phaser.Input.Events.DRAG_START)).toBe(0);
+
+      scene.selectImage(image.id);
+      expect(scene.getSelectedImageId()).toBeNull();
+      expect(layer.handleContainers.size).toBe(0);
+    });
+
+    it("follows DM role changes: gaining it enables images, losing it clears the selection", () => {
+      scene.setDm(false);
+      scene.updateImages([image]);
+      const sprite = (
+        scene as unknown as { imageLayer: { sprites: Map<string, Phaser.GameObjects.Image> } }
+      ).imageLayer.sprites.get(image.id)!;
+
+      scene.setDm(true);
+      expect((sprite.input as unknown as InputState)?.enabled).toBe(true);
+      scene.selectImage(image.id);
+      expect(scene.getSelectedImageId()).toBe(image.id);
+
+      scene.setDm(false);
+      expect(scene.getSelectedImageId()).toBeNull();
+      expect((sprite.input as unknown as InputState)?.enabled ?? false).toBe(false);
     });
 
     it("restores token drag listeners", () => {
@@ -1048,6 +1093,7 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
       };
 
     it("disables token and image interaction, including across rebuilds", () => {
+      scene.setDm(true);
       scene.updateTokens([token]);
       scene.updateImages([image]);
       scene.setViewOnly(true);

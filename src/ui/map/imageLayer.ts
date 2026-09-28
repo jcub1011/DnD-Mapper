@@ -85,7 +85,7 @@ export function ensureTexture(
   if (existing) return existing;
 
   const task = (async () => {
-    const url = await assets.resolve(image.id);
+    const url = await assets.resolve(image.id, image.shareToken);
     if (url === null) return false; // -> dashed placeholder
 
     return await new Promise<boolean>((resolve) => {
@@ -153,8 +153,16 @@ export class ImageLayer {
   }
 
   setDm(isDm: boolean): void {
+    const changed = this.isDm !== isDm;
     this.isDm = isDm;
-    this.updateVisibility();
+    if (!changed) {
+      this.updateVisibility();
+      return;
+    }
+    // Every image intent is DM-only on the host, so the role decides whether
+    // sprites are interactive at all — rebuild to re-apply it.
+    if (!isDm) this.selectImage(null);
+    this.rebuildImages();
   }
 
   setGrid(grid: GridConfig): void {
@@ -176,8 +184,9 @@ export class ImageLayer {
 
   selectImage(imageId: string | null): void {
     if (this.selectedImageId === imageId) return;
-    // While a tool is selected, block new selections (deselect always allowed).
-    if (imageId !== null && !this.interactionsEnabled) return;
+    // While a tool is selected, or for non-DMs, block new selections
+    // (deselect always allowed).
+    if (imageId !== null && (!this.interactionsEnabled || !this.isDm)) return;
     this.selectedImageId = imageId;
     if (imageId === null) {
       // External deselect (empty click, tool switch) must not leave a stale
@@ -250,7 +259,7 @@ export class ImageLayer {
       // every state sync, otherwise DRAG_END handlers accumulate with stale
       // closures that fight over sprite position — same bug class as tokens).
       // A selected tool locks all images: stay non-interactive across rebuilds.
-      if (this.interactionsEnabled && !img.locked) {
+      if (this.canInteract(img)) {
         sprite!.removeAllListeners();
         sprite!.disableInteractive();
         sprite!.setInteractive();
@@ -263,6 +272,14 @@ export class ImageLayer {
 
     this.updateVisibility();
     this.redrawSelectionHandles();
+  }
+
+  /**
+   * Mirrors the host rule (every image intent is DM-only) so a guest never
+   * gets a drag the host will silently reject.
+   */
+  private canInteract(img: MapImage): boolean {
+    return this.isDm && this.interactionsEnabled && !img.locked;
   }
 
   private updateVisibility(): void {
@@ -687,8 +704,9 @@ export class ImageLayer {
   }
 
   private redrawSelectionHandles(): void {
-    // While a tool is selected no selection outline or handles may exist.
-    if (!this.interactionsEnabled) {
+    // While a tool is selected, or for non-DMs, no selection outline or
+    // handles may exist.
+    if (!this.interactionsEnabled || !this.isDm) {
       this.destroyHandles();
       return;
     }

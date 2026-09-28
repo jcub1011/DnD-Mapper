@@ -21,6 +21,7 @@ import type {
   FocusRect,
   GameMap,
   GridConfig,
+  ImageCopy,
   MapSummary,
   NamedTemplate,
   NewMapImage,
@@ -87,6 +88,39 @@ import {
 } from "./tokens.js";
 import type { Patch, PlayerInfo } from "./types.js";
 import { isImageVisibleToPlayer } from "./visibility.js";
+
+/** Upper bound on an image's shareToken (a server-issued blob read URL). */
+const MAX_SHARE_TOKEN_LENGTH = 2048;
+
+/** Untrusted share token: a bounded string, or null. */
+function sanitizeShareToken(raw: unknown): string | null {
+  return typeof raw === "string" && raw.length <= MAX_SHARE_TOKEN_LENGTH ? raw : null;
+}
+
+/**
+ * Keeps only well-formed copies of the source map's own images whose ids are
+ * unused anywhere and distinct from each other; the rest fall back to a fresh
+ * id minted by `duplicateMap`.
+ */
+function sanitizeImageCopies(
+  raw: unknown,
+  source: GameMap,
+  maps: readonly GameMap[],
+): Map<string, ImageCopy> {
+  const copies = new Map<string, ImageCopy>();
+  if (!raw || typeof raw !== "object") return copies;
+  const taken = new Set(maps.flatMap((m) => m.images.map((img) => img.id)));
+  for (const img of source.images) {
+    if (!Object.prototype.hasOwnProperty.call(raw, img.id)) continue;
+    const entry = (raw as Record<string, unknown>)[img.id];
+    if (!entry || typeof entry !== "object") continue;
+    const { id, shareToken } = entry as { id?: unknown; shareToken?: unknown };
+    if (typeof id !== "string" || id.length === 0 || id.length > 128 || taken.has(id)) continue;
+    taken.add(id);
+    copies.set(img.id, { id, shareToken: sanitizeShareToken(shareToken) });
+  }
+  return copies;
+}
 
 // ── Permission Policies ──────────────────────────────────────────────────────
 
@@ -1067,7 +1101,15 @@ export function applyIntent(
       if (!isDm(state, fromId)) return null;
       if (typeof intent.mapId !== "string") return null;
       const fullMaps = state.maps.filter(isFullMap);
-      const { maps: nextMaps, duplicated } = duplicateMap(fullMaps, intent.mapId, now);
+      const source = fullMaps.find((m) => m.id === intent.mapId);
+      if (!source) return null;
+      const { maps: nextMaps, duplicated } = duplicateMap(
+        fullMaps,
+        intent.mapId,
+        now,
+        undefined,
+        sanitizeImageCopies(intent.images, source, fullMaps),
+      );
       if (!duplicated) return null;
       // N:1 binding: cloned tokens keep their sheetId so the duplicated map
       // shares sheets with the source map (same player, more maps). Token ids
@@ -1630,6 +1672,7 @@ export function applyIntent(
         intent.mapId,
         intent.image as NewMapImage,
         typeof intent.imageId === "string" ? intent.imageId : undefined,
+        sanitizeShareToken(intent.shareToken),
       );
       if (!created) return null;
       const nextState: DndMapperState = { ...state, maps: nextMaps };
