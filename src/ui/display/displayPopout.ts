@@ -255,19 +255,22 @@ export class DisplayPopoutHost {
 }
 
 /**
- * Popup-side AssetSource: asks the DM window for image bytes and serves them
- * as local object URLs. Read-only — publish/release are no-ops here.
+ * Popup-side AssetSource: asks the DM window for image bytes once, caches the
+ * Blob, and serves a fresh object URL per `resolve()` — the consumer
+ * (`ensureTexture`) revokes each URL once the texture is uploaded, so a cached
+ * URL would be dead the next time the image is needed (e.g. after a map
+ * switch). Read-only — publish is a no-op here.
  */
 export class ProxyAssetSource implements AssetSource {
-  private readonly urls = new Map<string, string>();
+  private readonly blobs = new Map<string, Blob>();
   private readonly pending = new Map<string, (url: string | null) => void>();
   private readonly inFlight = new Map<string, Promise<string | null>>();
 
   constructor(private readonly request: (imageId: string) => void) {}
 
   resolve(imageId: string): Promise<string | null> {
-    const cached = this.urls.get(imageId);
-    if (cached) return Promise.resolve(cached);
+    const cached = this.blobs.get(imageId);
+    if (cached) return Promise.resolve(URL.createObjectURL(cached));
     const existing = this.inFlight.get(imageId);
     if (existing) return existing;
 
@@ -294,9 +297,8 @@ export class ProxyAssetSource implements AssetSource {
       settle(null);
       return;
     }
-    const url = URL.createObjectURL(blob);
-    this.urls.set(imageId, url);
-    settle(url);
+    this.blobs.set(imageId, blob);
+    settle(URL.createObjectURL(blob));
   }
 
   getUrl(imageId: string): Promise<string | null> {
@@ -306,16 +308,11 @@ export class ProxyAssetSource implements AssetSource {
   async publish(_imageId: string, _blob: Blob): Promise<void> {}
 
   async release(imageId: string): Promise<void> {
-    const url = this.urls.get(imageId);
-    if (url) {
-      URL.revokeObjectURL(url);
-      this.urls.delete(imageId);
-    }
+    this.blobs.delete(imageId);
   }
 
   dispose(): void {
-    for (const url of this.urls.values()) URL.revokeObjectURL(url);
-    this.urls.clear();
+    this.blobs.clear();
     for (const settle of [...this.pending.values()]) settle(null);
   }
 }

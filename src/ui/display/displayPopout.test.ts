@@ -164,7 +164,10 @@ describe("ProxyAssetSource", () => {
   it("requests an image once and serves it as an object URL", async () => {
     const request = vi.fn();
     const source = new ProxyAssetSource(request);
-    const createUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:local/1");
+    const createUrl = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValueOnce("blob:local/1")
+      .mockReturnValueOnce("blob:local/2");
 
     const a = source.resolve("img-1");
     const b = source.resolve("img-1");
@@ -173,9 +176,36 @@ describe("ProxyAssetSource", () => {
     source.receive("img-1", new Blob(["img"]));
     await expect(a).resolves.toBe("blob:local/1");
     await expect(b).resolves.toBe("blob:local/1");
-    await expect(source.resolve("img-1")).resolves.toBe("blob:local/1");
+    // Cached bytes, fresh URL — the consumer revokes each URL it is given.
+    await expect(source.resolve("img-1")).resolves.toBe("blob:local/2");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(createUrl).toHaveBeenCalledTimes(2);
+    createUrl.mockRestore();
+  });
+
+  it("serves a live URL again after the consumer revoked the first (map switch back)", async () => {
+    const request = vi.fn();
+    const source = new ProxyAssetSource(request);
+    const blob = new Blob(["img"]);
+    const createUrl = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValueOnce("blob:local/1")
+      .mockReturnValueOnce("blob:local/2");
+    const revokeUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+
+    const first = source.resolve("img-1");
+    source.receive("img-1", blob);
+    const firstUrl = await first;
+    // ensureTexture revokes the URL once Phaser has uploaded the texture.
+    URL.revokeObjectURL(firstUrl!);
+
+    const second = await source.resolve("img-1");
+    expect(second).toBe("blob:local/2");
+    expect(second).not.toBe(firstUrl);
+    expect(createUrl).toHaveBeenLastCalledWith(blob);
     expect(request).toHaveBeenCalledTimes(1);
     createUrl.mockRestore();
+    revokeUrl.mockRestore();
   });
 
   it("resolves null when the opener has no bytes", async () => {
