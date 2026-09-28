@@ -546,6 +546,30 @@ dndm-toolbar {
   opacity: 0.5;
 }
 
+.dndm-layer-row--dragging {
+  opacity: 0.35;
+}
+
+/* Inset shadows so the drop indicator never shifts row layout mid-drag. */
+.dndm-layer-row--drop-above {
+  box-shadow: inset 0 2px 0 var(--dndm-ember);
+}
+
+.dndm-layer-row--drop-below {
+  box-shadow: inset 0 -2px 0 var(--dndm-ember);
+}
+
+.dndm-layer-drag-handle {
+  flex: 0 0 auto;
+  cursor: grab;
+  color: var(--dndm-text-muted);
+  user-select: none;
+}
+
+.dndm-layer-drag-handle:active {
+  cursor: grabbing;
+}
+
 .dndm-layer-clickarea {
   flex: 1 1 auto;
   min-width: 0;

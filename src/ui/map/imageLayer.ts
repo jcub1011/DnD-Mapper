@@ -12,7 +12,7 @@ import Phaser from "phaser";
 import { DEPTH } from "./depth";
 import { CELL } from "./viewport";
 import type { GridConfig, MapImage } from "../../game/domain";
-import { MIN_IMAGE_DIMENSION } from "../../game/domain";
+import { MIN_IMAGE_DIMENSION, sortImagesByLayer } from "../../game/domain";
 import { snapCorner, snapImageResize, snapRotation } from "../../game/snapping";
 import type { AssetSource } from "../../assets/assetSource";
 
@@ -165,7 +165,7 @@ export class ImageLayer {
     }
 
     // 2. Sort by layerOrder to establish rank (DEPTH.IMAGES + rank)
-    const sorted = [...this.images].sort((a, b) => a.layerOrder - b.layerOrder);
+    const sorted = sortImagesByLayer(this.images);
 
     sorted.forEach((img, rank) => {
       let sprite = this.sprites.get(img.id);

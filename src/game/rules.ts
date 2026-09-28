@@ -1702,18 +1702,19 @@ export function applyIntent(
       if (!isDm(state, fromId)) return null;
       if (typeof intent.imageId !== "string" || typeof intent.layerOrder !== "number") return null;
       const fullMaps = state.maps.filter(isFullMap);
-      const { maps: nextMaps, image: updated } = reorderMapImage(
+      const { maps: nextMaps, map: updatedMap } = reorderMapImage(
         fullMaps,
         intent.imageId,
         intent.layerOrder,
       );
-      if (!updated) return null;
+      if (!updatedMap) return null;
       const nextState: DndMapperState = { ...state, maps: nextMaps };
+      // Several images' layerOrder can change, so ship the whole map.
       return {
         state: nextState,
         patch: {
-          kind: "image",
-          image: updated,
+          kind: "map",
+          map: updatedMap,
         },
       };
     }

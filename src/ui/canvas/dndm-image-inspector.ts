@@ -14,8 +14,13 @@ export class DndmImageInspector extends GameElement {
   @property({ attribute: false })
   image: MapImage | null = null;
 
+  /** Stacking position of this image, 0 = bottom. */
   @property({ type: Number })
-  maxLayerOrder = 0;
+  layerRank = 0;
+
+  /** Number of images on the map. */
+  @property({ type: Number })
+  layerCount = 1;
 
   @property({ attribute: false })
   onTransform?: (patch: {
@@ -72,23 +77,32 @@ export class DndmImageInspector extends GameElement {
     this.commitTransform({ width: nextW, height: nextH });
   }
 
+  // onReorder takes a target stacking rank; the reducer renumbers the map.
+  private get isTop(): boolean {
+    return this.layerRank >= this.layerCount - 1;
+  }
+
+  private get isBottom(): boolean {
+    return this.layerRank <= 0;
+  }
+
   private handleLayerUp(): void {
-    if (!this.image) return;
-    const next = this.image.layerOrder + 1;
-    this.onReorder?.(next);
+    if (!this.image || this.isTop) return;
+    this.onReorder?.(this.layerRank + 1);
   }
 
   private handleLayerDown(): void {
-    if (!this.image) return;
-    const next = Math.max(0, this.image.layerOrder - 1);
-    this.onReorder?.(next);
+    if (!this.image || this.isBottom) return;
+    this.onReorder?.(this.layerRank - 1);
   }
 
   private handleLayerToFront(): void {
-    this.onReorder?.(this.maxLayerOrder + 1);
+    if (!this.image || this.isTop) return;
+    this.onReorder?.(this.layerCount - 1);
   }
 
   private handleLayerToBack(): void {
+    if (!this.image || this.isBottom) return;
     this.onReorder?.(0);
   }
 
@@ -201,6 +215,7 @@ export class DndmImageInspector extends GameElement {
                 class="dndm-btn dndm-btn--icon dndm-btn--small"
                 type="button"
                 title="Send to back"
+                ?disabled=${this.isBottom}
                 @click=${() => this.handleLayerToBack()}
               >
                 ⤓
@@ -209,15 +224,19 @@ export class DndmImageInspector extends GameElement {
                 class="dndm-btn dndm-btn--icon dndm-btn--small"
                 type="button"
                 title="Lower"
+                ?disabled=${this.isBottom}
                 @click=${() => this.handleLayerDown()}
               >
                 ↓
               </button>
-              <span class="dndm-imgi-layer-readout">${img.layerOrder}</span>
+              <span class="dndm-imgi-layer-readout" title="Stacking position (1 = bottom)"
+                >${this.layerRank + 1} / ${this.layerCount}</span
+              >
               <button
                 class="dndm-btn dndm-btn--icon dndm-btn--small"
                 type="button"
                 title="Raise"
+                ?disabled=${this.isTop}
                 @click=${() => this.handleLayerUp()}
               >
                 ↑
@@ -226,6 +245,7 @@ export class DndmImageInspector extends GameElement {
                 class="dndm-btn dndm-btn--icon dndm-btn--small"
                 type="button"
                 title="Bring to front"
+                ?disabled=${this.isTop}
                 @click=${() => this.handleLayerToFront()}
               >
                 ⤒

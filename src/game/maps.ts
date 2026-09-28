@@ -5,7 +5,7 @@
  */
 
 import type { GameMap, GridConfig, MapImage, NewMapImage } from "./domain.js";
-import { createDefaultGridConfig } from "./domain.js";
+import { createDefaultGridConfig, sortImagesByLayer } from "./domain.js";
 
 /**
  * Standard RFC 4122 v4 UUID generator using Math.random().
@@ -213,22 +213,35 @@ export function transformMapImage(
   return { maps: updatedMaps, image: updatedImage };
 }
 
-/** Reorders an image layerOrder within its map. */
+/**
+ * Moves an image to a target stacking rank (0 = bottom, clamped to the top)
+ * within its map, then renumbers every image on that map to a dense 0..n-1
+ * layerOrder so no two images can ever tie.
+ */
 export function reorderMapImage(
   maps: readonly GameMap[],
   imageId: string,
-  layerOrder: number,
-): { maps: readonly GameMap[]; image: MapImage | null } {
-  let updatedImage: MapImage | null = null;
+  targetRank: number,
+): { maps: readonly GameMap[]; map: GameMap | null } {
+  let updatedMap: GameMap | null = null;
   const updatedMaps = maps.map((m) => {
-    const imgIndex = m.images.findIndex((img) => img.id === imageId);
-    if (imgIndex === -1) return m;
-    updatedImage = { ...m.images[imgIndex], layerOrder };
-    const nextImages = [...m.images];
-    nextImages[imgIndex] = updatedImage;
-    return { ...m, images: nextImages };
+    const target = m.images.find((img) => img.id === imageId);
+    if (!target) return m;
+
+    const ordered = sortImagesByLayer(m.images).filter((img) => img.id !== imageId);
+    const rank = Math.max(0, Math.min(ordered.length, Math.trunc(targetRank)));
+    ordered.splice(rank, 0, target);
+
+    const rankById = new Map(ordered.map((img, i) => [img.id, i]));
+    // Preserve array order; only layerOrder changes.
+    const nextImages = m.images.map((img) => {
+      const nextOrder = rankById.get(img.id)!;
+      return img.layerOrder === nextOrder ? img : { ...img, layerOrder: nextOrder };
+    });
+    updatedMap = { ...m, images: nextImages };
+    return updatedMap;
   });
-  return { maps: updatedMaps, image: updatedImage };
+  return { maps: updatedMaps, map: updatedMap };
 }
 
 /** Sets locked status on an image. */

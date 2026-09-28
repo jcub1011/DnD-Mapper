@@ -15,6 +15,7 @@ import type { DndmImageUpload } from "../upload/dndm-image-upload";
 import {
   createDefaultDndMapperState,
   isFullMap,
+  sortImagesByLayer,
   type AttributePreset,
   type AttributeValue,
   type GameMap,
@@ -1166,6 +1167,8 @@ export class DndmApp extends GameElement {
                         this.send({ kind: "setImageHidden", imageId: id, hidden })}
                       .onToggleLocked=${(id: string, locked: boolean) =>
                         this.send({ kind: "setImageLocked", imageId: id, locked })}
+                      .onReorderImage=${(id: string, layerOrder: number) =>
+                        this.send({ kind: "reorderImage", imageId: id, layerOrder })}
                       .onRenameImage=${(id: string, _name: string) => {
                         const img = active?.images.find((i) => i.id === id);
                         if (img) {
@@ -1608,7 +1611,10 @@ export class DndmApp extends GameElement {
                 ? html`
                     <dndm-image-inspector
                       .image=${this.selectedImage}
-                      .maxLayerOrder=${Math.max(...active.images.map((i) => i.layerOrder), 0)}
+                      .layerRank=${sortImagesByLayer(active.images).findIndex(
+                        (i) => i.id === this.selectedImage?.id,
+                      )}
+                      .layerCount=${active.images.length}
                       .onTransform=${(patch: {
                       x: number;
                       y: number;

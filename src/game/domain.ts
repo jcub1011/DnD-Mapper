@@ -72,6 +72,20 @@ export function getMapImageDisplayName(img: Pick<MapImage, "name" | "layerOrder"
   return `Layer #${img.layerOrder}`;
 }
 
+/**
+ * Visual stacking order, bottom → top. Ties on layerOrder fall back to array
+ * index (later = higher) so the renderer, layer list, and reorder reducer
+ * always agree even on legacy data with duplicate layerOrder values.
+ */
+export function sortImagesByLayer<T extends Pick<MapImage, "layerOrder">>(
+  images: readonly T[],
+): T[] {
+  return images
+    .map((img, index) => ({ img, index }))
+    .sort((a, b) => a.img.layerOrder - b.img.layerOrder || a.index - b.index)
+    .map((e) => e.img);
+}
+
 export type TokenType = "PlayerToken" | "NPCToken";
 export type TokenIconKind = "Initial" | "Solid";
 
