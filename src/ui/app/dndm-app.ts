@@ -1378,69 +1378,6 @@ export class DndmApp extends GameElement {
                         : nothing
                     }
                   </div>
-
-                  ${
-                  this.isDm && this.selectedImage
-                    ? html`
-                        <div class="dndm-canvas-inspector">
-                          <dndm-image-inspector
-                            .image=${this.selectedImage}
-                            .maxLayerOrder=${Math.max(...active.images.map((i) => i.layerOrder), 0)}
-                            .onTransform=${(patch: {
-                            x: number;
-                            y: number;
-                            width: number;
-                            height: number;
-                            rotation: number;
-                          }) => {
-                            if (this.selectedImage) {
-                              this.send({
-                                kind: "transformImage",
-                                imageId: this.selectedImage.id,
-                                ...patch,
-                              });
-                            }
-                          }}
-                            .onReorder=${(layerOrder: number) => {
-                            if (this.selectedImage) {
-                              this.send({
-                                kind: "reorderImage",
-                                imageId: this.selectedImage.id,
-                                layerOrder,
-                              });
-                            }
-                          }}
-                            .onSetLocked=${(locked: boolean) => {
-                            if (this.selectedImage) {
-                              this.send({
-                                kind: "setImageLocked",
-                                imageId: this.selectedImage.id,
-                                locked,
-                              });
-                            }
-                          }}
-                            .onRemove=${async () => {
-                            if (this.selectedImage) {
-                              const imgId = this.selectedImage.id;
-                              await this.assetSource.release(imgId);
-                              await this.libraryService.deleteImage(imgId);
-                              this.send({
-                                kind: "removeImage",
-                                imageId: imgId,
-                              });
-                              this.selectedImageId = null;
-                              fx.map()?.selectImage(null);
-                            }
-                          }}
-                            .onClose=${() => {
-                            this.selectedImageId = null;
-                            fx.map()?.selectImage(null);
-                          }}
-                          ></dndm-image-inspector>
-                        </div>
-                      `
-                    : nothing
-                }
                 `
           }
           ${
@@ -1666,6 +1603,66 @@ export class DndmApp extends GameElement {
               .onSetSchemaPreset=${(preset: AttributePreset) =>
                 this.send({ kind: "setSchemaPreset", preset })}
             ></dndm-character-sheet>
+            ${
+              this.isDm && active && this.selectedImage
+                ? html`
+                    <dndm-image-inspector
+                      .image=${this.selectedImage}
+                      .maxLayerOrder=${Math.max(...active.images.map((i) => i.layerOrder), 0)}
+                      .onTransform=${(patch: {
+                      x: number;
+                      y: number;
+                      width: number;
+                      height: number;
+                      rotation: number;
+                    }) => {
+                      if (this.selectedImage) {
+                        this.send({
+                          kind: "transformImage",
+                          imageId: this.selectedImage.id,
+                          ...patch,
+                        });
+                      }
+                    }}
+                      .onReorder=${(layerOrder: number) => {
+                      if (this.selectedImage) {
+                        this.send({
+                          kind: "reorderImage",
+                          imageId: this.selectedImage.id,
+                          layerOrder,
+                        });
+                      }
+                    }}
+                      .onSetLocked=${(locked: boolean) => {
+                      if (this.selectedImage) {
+                        this.send({
+                          kind: "setImageLocked",
+                          imageId: this.selectedImage.id,
+                          locked,
+                        });
+                      }
+                    }}
+                      .onRemove=${async () => {
+                      if (this.selectedImage) {
+                        const imgId = this.selectedImage.id;
+                        await this.assetSource.release(imgId);
+                        await this.libraryService.deleteImage(imgId);
+                        this.send({
+                          kind: "removeImage",
+                          imageId: imgId,
+                        });
+                        this.selectedImageId = null;
+                        fx.map()?.selectImage(null);
+                      }
+                    }}
+                      .onClose=${() => {
+                      this.selectedImageId = null;
+                      fx.map()?.selectImage(null);
+                    }}
+                    ></dndm-image-inspector>
+                  `
+                : nothing
+            }
           </div>
         </aside>
 

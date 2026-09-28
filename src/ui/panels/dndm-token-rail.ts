@@ -143,11 +143,9 @@ export class DndmTokenRail extends GameElement {
     const host = this.closest(".dndm-canvas-area") as HTMLElement | null;
     if (!host) return;
     const hostRect = host.getBoundingClientRect();
-    // Measure wrapping top floats (toolbar / inspector / banner) and bottom footer.
+    // Measure wrapping top floats (toolbar / banner) and bottom footer.
     const topEls = Array.from(
-      host.querySelectorAll<HTMLElement>(
-        ".dndm-canvas-toolbar, .dndm-canvas-inspector, .dndm-initiative-banner",
-      ),
+      host.querySelectorAll<HTMLElement>(".dndm-canvas-toolbar, .dndm-initiative-banner"),
     );
     const footer = host.querySelector<HTMLElement>(".dndm-rollfooter");
     let bottom = 12;
