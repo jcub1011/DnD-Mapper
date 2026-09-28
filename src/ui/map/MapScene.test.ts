@@ -513,6 +513,163 @@ describe("MapScene Rendering and Interactions (05 — Rendering)", () => {
     });
   });
 
+  describe("focus box editing", () => {
+    const grid: GridConfig = {
+      widthCells: 30,
+      heightCells: 20,
+      cellPixels: CELL,
+      showGridLines: true,
+      snapToGrid: true,
+      lineColor: "#222",
+    };
+    const box = { mapId: "map1", x: 2, y: 2, width: 4, height: 3 };
+
+    /** Pointer at cell-space point (cx, cy); screen == world at zoom 1. */
+    const cellPointer = (
+      cx: number,
+      cy: number,
+      opts: { isDown?: boolean; ctrlKey?: boolean; shiftKey?: boolean } = {},
+    ) =>
+      ({
+        x: cx * CELL,
+        y: cy * CELL,
+        worldX: cx * CELL,
+        worldY: cy * CELL,
+        isDown: opts.isDown ?? true,
+        event: { ctrlKey: opts.ctrlKey ?? false, shiftKey: opts.shiftKey ?? false },
+        leftButtonDown: () => true,
+        middleButtonDown: () => false,
+        rightButtonDown: () => false,
+      }) as unknown as Phaser.Input.Pointer;
+
+    let commits: unknown[];
+
+    const drag = (
+      from: [number, number],
+      to: [number, number],
+      opts: { ctrlKey?: boolean; shiftKey?: boolean } = {},
+    ) => {
+      scene.input.emit(Phaser.Input.Events.POINTER_DOWN, cellPointer(...from, opts));
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, cellPointer(...to, opts));
+      scene.input.emit(Phaser.Input.Events.POINTER_UP, cellPointer(...to, opts));
+    };
+
+    const pressEscape = () =>
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+
+    const storedFocus = () =>
+      (scene as unknown as { focusOverlay: { currentFocus: unknown } }).focusOverlay.currentFocus;
+
+    beforeEach(() => {
+      scene.resetView();
+      (scene as unknown as { activeMap: { id: string } }).activeMap = { id: "map1" };
+      scene.updateGrid(grid);
+      scene.setFocusRect(box);
+      scene.setToolMode("focus");
+      commits = [];
+      scene.onFocusRectCommit = (rect) => commits.push(rect);
+    });
+
+    it("moves the box when dragging inside it, keeping its size and snapping", () => {
+      drag([3, 3], [5.2, 4.1]);
+      expect(commits).toEqual([{ mapId: "map1", x: 4, y: 3, width: 4, height: 3 }]);
+    });
+
+    it("moves freely with Ctrl held", () => {
+      drag([3, 3], [5.2, 4.1], { ctrlKey: true });
+      const rect = commits[0] as typeof box;
+      expect(rect.x).toBeCloseTo(4.2, 4);
+      expect(rect.y).toBeCloseTo(3.1, 4);
+      expect(rect.width).toBe(4);
+      expect(rect.height).toBe(3);
+    });
+
+    it("resizes from a corner with the aspect ratio locked", () => {
+      drag([6, 5], [10, 6]);
+      expect(commits).toEqual([{ mapId: "map1", x: 2, y: 2, width: 8, height: 6 }]);
+    });
+
+    it("resizes with a free aspect ratio while Shift is held", () => {
+      drag([6, 5], [10, 6], { shiftKey: true });
+      expect(commits).toEqual([{ mapId: "map1", x: 2, y: 2, width: 8, height: 4 }]);
+    });
+
+    it("resizes from the opposite corner, anchoring the far one", () => {
+      drag([2, 2], [0, 1], { shiftKey: true });
+      expect(commits).toEqual([{ mapId: "map1", x: 0, y: 1, width: 6, height: 4 }]);
+    });
+
+    it("draws a new box when dragging outside the existing one", () => {
+      drag([10, 10], [12, 12]);
+      expect(commits).toEqual([{ mapId: "map1", x: 10, y: 10, width: 2, height: 2 }]);
+    });
+
+    it("does not commit a click on the box without movement", () => {
+      drag([3, 3], [3, 3]);
+      expect(commits).toEqual([]);
+    });
+
+    it("cancels a new draw on Escape and keeps the old box", () => {
+      scene.input.emit(Phaser.Input.Events.POINTER_DOWN, cellPointer(10, 10));
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, cellPointer(12, 12));
+      pressEscape();
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, cellPointer(14, 14));
+      scene.input.emit(Phaser.Input.Events.POINTER_UP, cellPointer(14, 14));
+
+      expect(commits).toEqual([]);
+      expect(storedFocus()).toEqual(box);
+    });
+
+    it("cancels a move on Escape", () => {
+      scene.input.emit(Phaser.Input.Events.POINTER_DOWN, cellPointer(3, 3));
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, cellPointer(8, 8));
+      pressEscape();
+      scene.input.emit(Phaser.Input.Events.POINTER_UP, cellPointer(8, 8));
+
+      expect(commits).toEqual([]);
+      expect(storedFocus()).toEqual(box);
+    });
+
+    it("draws instead of moving a box that belongs to another map", () => {
+      scene.setFocusRect({ ...box, mapId: "other" });
+      drag([3, 3], [5, 4]);
+      expect(commits).toEqual([{ mapId: "map1", x: 3, y: 3, width: 2, height: 1 }]);
+    });
+
+    it("stays editable after the focus tool is toggled off and back on", () => {
+      scene.setToolMode("none");
+      scene.setToolMode("focus");
+      drag([3, 3], [5.2, 4.1]);
+      expect(commits).toEqual([{ mapId: "map1", x: 4, y: 3, width: 4, height: 3 }]);
+    });
+
+    it("shows move and resize cursors while hovering the box", () => {
+      const canvas = scene.game.canvas;
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, cellPointer(6, 5, { isDown: false }));
+      expect(canvas.style.cursor).toBe("nwse-resize");
+      expect(canvas.title).toContain("resize");
+
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, cellPointer(6, 2, { isDown: false }));
+      expect(canvas.style.cursor).toBe("nesw-resize");
+
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, cellPointer(4, 3, { isDown: false }));
+      expect(canvas.style.cursor).toBe("move");
+      expect(canvas.title).toBe("");
+
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, cellPointer(15, 15, { isDown: false }));
+      expect(canvas.style.cursor).not.toBe("move");
+    });
+
+    it("releases the cursor when the focus tool is deselected", () => {
+      const canvas = scene.game.canvas;
+      scene.input.emit(Phaser.Input.Events.POINTER_MOVE, cellPointer(4, 3, { isDown: false }));
+      expect(canvas.style.cursor).toBe("move");
+
+      scene.setToolMode("none");
+      expect(canvas.style.cursor).not.toBe("move");
+    });
+  });
+
   it("centers and resets viewport properly", () => {
     const cam = scene.cameras.main;
 
@@ -1293,10 +1450,10 @@ describe("RulerOverlay and FocusOverlay Math", () => {
   it("calculates focus rect with and without grid snapping", () => {
     const focus = new FocusOverlay(scene);
 
-    focus.startDrag(2.2, 3.8);
-    focus.updateDrag(7.1, 8.4, true);
+    focus.beginGesture(2.2, 3.8);
+    focus.updateGesture(7.1, 8.4, true);
 
-    const snapped = focus.endDrag("map1", true);
+    const snapped = focus.endGesture("map1", true);
     expect(snapped).toEqual({
       mapId: "map1",
       x: 2, // floor(2.2)
@@ -1306,10 +1463,10 @@ describe("RulerOverlay and FocusOverlay Math", () => {
     });
 
     // Without snapping
-    focus.startDrag(2.2, 3.8);
-    focus.updateDrag(7.2, 8.8, false);
+    focus.beginGesture(2.2, 3.8);
+    focus.updateGesture(7.2, 8.8, false);
 
-    const unsnapped = focus.endDrag("map1", false);
+    const unsnapped = focus.endGesture("map1", false);
     expect(unsnapped!.x).toBeCloseTo(2.2, 4);
     expect(unsnapped!.y).toBeCloseTo(3.8, 4);
     expect(unsnapped!.width).toBeCloseTo(5.0, 4);

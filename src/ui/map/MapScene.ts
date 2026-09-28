@@ -9,7 +9,7 @@
  *  - Token containers with owner halos, readable initials, and stack chip fan-out
  *  - Interactive transform handles (move, 4-corner resize, rotate)
  *  - Chebyshev/Euclidean measurement ruler with screen-constant scaling
- *  - Focus rect visualization and drag creation
+ *  - Focus rect visualization, drag creation, and in-place move/resize (Esc cancels)
  *  - Tool mode state machine with Space-to-pan override
  *  - Two-finger pan & pinch-zoom touch navigation
  *  - WebGL context loss recovery
@@ -48,6 +48,11 @@ export type ToolMode = "none" | "markup" | "focus" | "fog" | "ruler";
 
 /** Duration of the smooth pan used when centering on a token or a shared view. */
 const CENTER_PAN_MS = 300;
+
+function pointerModifiers(pointer: Phaser.Input.Pointer): { ctrl: boolean; shift: boolean } {
+  const e = pointer.event as MouseEvent | null | undefined;
+  return { ctrl: e?.ctrlKey ?? false, shift: e?.shiftKey ?? false };
+}
 
 export class MapScene extends Phaser.Scene {
   private bgGfx!: Phaser.GameObjects.Graphics;
@@ -231,7 +236,9 @@ export class MapScene extends Phaser.Scene {
     // A map switch or reload is not a move: snap, don't slide.
     this.tokenLayer.setTokens(map.tokens, { animate: false });
 
+    this.focusOverlay.setGrid(map.grid);
     this.focusOverlay.setFocusRect(null);
+    this.syncFocusEditable();
     this.rulerOverlay.clear();
   }
 
@@ -319,7 +326,9 @@ export class MapScene extends Phaser.Scene {
   setViewOnly(viewOnly: boolean): void {
     if (viewOnly === this.viewOnly) return;
     this.viewOnly = viewOnly;
+    this.focusOverlay.cancelGesture();
     this.applyInteractiveState();
+    this.syncFocusEditable();
   }
 
   setNavigationLocked(locked: boolean): void {
@@ -343,6 +352,7 @@ export class MapScene extends Phaser.Scene {
     this.imageLayer.setGrid(grid);
     this.fogLayer.setupGrid(grid);
     this.tokenLayer.setGrid(grid);
+    this.focusOverlay.setGrid(grid);
   }
 
   updateImages(images: readonly MapImage[]): void {
@@ -413,11 +423,20 @@ export class MapScene extends Phaser.Scene {
 
     // Reset temporary states
     this.rulerOverlay.clear();
-    this.focusOverlay.cancelDrag();
+    this.focusOverlay.cancelGesture();
     this.fogLayer.cancelStroke();
     this.fogLayer.setFogToolActive(mode === "fog");
 
     this.applyInteractiveState();
+    this.syncFocusEditable();
+  }
+
+  /** The focus box shows handles and can be moved/resized only under the focus tool. */
+  private syncFocusEditable(): void {
+    this.focusOverlay.setEditable(
+      this.currentToolMode === "focus" && !this.viewOnly,
+      this.activeMap?.id ?? null,
+    );
   }
 
   get effectiveMode(): ToolMode {
@@ -637,6 +656,12 @@ export class MapScene extends Phaser.Scene {
         this.spaceHeld = true;
         this.applyInteractiveState();
       }
+      // Esc abandons a focus box draw/move/resize mid-drag; the rest of the
+      // press becomes a no-op because no gesture is left to update or commit.
+      if (e.key === "Escape" && this.focusOverlay.isGesturing) {
+        e.preventDefault();
+        this.focusOverlay.cancelGesture();
+      }
     });
 
     window.addEventListener("keyup", (e: KeyboardEvent) => {
@@ -708,9 +733,9 @@ export class MapScene extends Phaser.Scene {
           this.fogLayer.addBrushCells(Math.floor(cellX), Math.floor(cellY), this.fogBrushRadius);
           this.fogLayer.redrawPreview(this.fogBrushMode === "paint");
         } else if (mode === "focus") {
-          const ctrl = pointer.event ? (pointer.event as MouseEvent).ctrlKey : false;
-          this.focusOverlay.startDrag(cellX, cellY);
-          this.focusOverlay.updateDrag(cellX, cellY, !ctrl && this.snapToGrid);
+          const { ctrl, shift } = pointerModifiers(pointer);
+          this.focusOverlay.beginGesture(cellX, cellY);
+          this.focusOverlay.updateGesture(cellX, cellY, !ctrl && this.snapToGrid, shift);
         } else if (mode === "ruler") {
           if (!this.rulerOverlay.pointA) {
             this.rulerOverlay.setPointA(cellX, cellY);
@@ -758,8 +783,10 @@ export class MapScene extends Phaser.Scene {
           this.fogBrushMode === "paint",
         );
       } else if (mode === "focus" && pointer.isDown) {
-        const ctrl = pointer.event ? (pointer.event as MouseEvent).ctrlKey : false;
-        this.focusOverlay.updateDrag(cellX, cellY, !ctrl && this.snapToGrid);
+        const { ctrl, shift } = pointerModifiers(pointer);
+        this.focusOverlay.updateGesture(cellX, cellY, !ctrl && this.snapToGrid, shift);
+      } else if (mode === "focus") {
+        this.focusOverlay.updateHover(cellX, cellY);
       } else if (mode === "ruler" && this.rulerOverlay.pointA && !this.rulerOverlay.pointB) {
         this.rulerOverlay.setPreviewPoint(cellX, cellY);
       }
@@ -768,6 +795,7 @@ export class MapScene extends Phaser.Scene {
     // Clear the fog hover preview when the pointer leaves the canvas.
     this.input.on(Phaser.Input.Events.GAME_OUT, () => {
       this.fogLayer.clearHover();
+      this.focusOverlay.clearHover();
     });
 
     // 5. Pointer Up. Phaser reports a release off the canvas (over a rail, or
@@ -794,9 +822,9 @@ export class MapScene extends Phaser.Scene {
         this.onFogStrokeCommit?.(stroke, this.fogBrushMode === "paint");
       }
     } else if (mode === "focus") {
-      const ctrl = pointer.event ? (pointer.event as MouseEvent).ctrlKey : false;
+      const { ctrl, shift } = pointerModifiers(pointer);
       const mapId = this.activeMap?.id ?? "active";
-      const rect = this.focusOverlay.endDrag(mapId, !ctrl && this.snapToGrid);
+      const rect = this.focusOverlay.endGesture(mapId, !ctrl && this.snapToGrid, shift);
       if (rect) {
         this.onFocusRectCommit?.(rect);
       }

@@ -179,7 +179,7 @@ export class DndmToolbar extends GameElement {
               <button
                 class="dndm-zoom-btn ${this.toolMode === "focus" ? "active" : ""}"
                 type="button"
-                title="Focus box — drag on the map to define a focus region"
+                title="Focus box — drag to draw; drag the box or its corners to move/resize; Esc cancels"
                 @click=${() => this.toggleFocus()}
               >
                 ${focusRectIcon()}

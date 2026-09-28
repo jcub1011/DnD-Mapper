@@ -16,6 +16,22 @@ import type { GridConfig, MapImage } from "../../game/domain";
 import { MIN_IMAGE_DIMENSION, sortImagesByLayer } from "../../game/domain";
 import { snapCorner, snapImageResize, snapRotation } from "../../game/snapping";
 import type { AssetSource } from "../../assets/assetSource";
+import {
+  CORNER_BASE_DEG,
+  CORNER_HANDLE_SIZE,
+  CORNER_IDS,
+  HANDLE_HIT_SIZE,
+  HANDLE_HOVER_COLOR,
+  HANDLE_HOVER_SCALE,
+  HANDLE_STROKE_COLOR,
+  HANDLE_STROKE_WIDTH,
+  OUTLINE_WIDTH,
+  RESIZE_HINT,
+  SELECTION_COLOR,
+  resizeCursorForAngle,
+} from "./selectionChrome";
+
+export { resizeCursorForAngle };
 
 export interface ImageTransformEvent {
   imageId: string;
@@ -28,26 +44,14 @@ export interface ImageTransformEvent {
 
 const inFlight = new Map<string, Promise<boolean>>();
 
-// Selection chrome, sized in screen pixels (world sizes are divided by zoom).
-const SELECTION_COLOR = 0xe89055;
-const HANDLE_HOVER_COLOR = 0xffc49c;
-const HANDLE_STROKE_COLOR = 0x07060a;
-const HANDLE_STROKE_WIDTH = 2;
-const HANDLE_HOVER_SCALE = 1.25;
-const HANDLE_HIT_SIZE = 28;
-const CORNER_HANDLE_SIZE = 12;
+// Rotation chrome (image-only), sized in screen pixels; the shared corner
+// handle and outline chrome lives in selectionChrome.ts.
 const ROTATE_HANDLE_RADIUS = 8;
-const OUTLINE_WIDTH = 3;
 const STEM_WIDTH = 2;
 const STEM_LENGTH = 32;
 
 const ROTATE_HANDLE_ID = "rot";
-const CORNER_IDS = ["nw", "ne", "se", "sw"] as const;
-// Outward direction of each corner on an unrotated image, in degrees
-// clockwise from +x (screen y points down, so 45° is down-right).
-const CORNER_BASE_DEG: Record<string, number> = { se: 45, sw: 135, nw: 225, ne: 315 };
 
-const RESIZE_HINT = "Drag to resize · Shift: free aspect ratio · Ctrl: ignore grid snap";
 const ROTATE_HINT = "Drag to rotate · Ctrl: free rotation (no 5° snap)";
 
 // Clockwise-arrow cursor (Lucide "rotate-cw", ISC) with a white halo for
@@ -59,14 +63,6 @@ const ROTATE_CURSOR_SVG =
   "<g stroke='black' stroke-width='2'><path d='M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8'/><path d='M21 3v5h-5'/></g>" +
   "</svg>";
 const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(ROTATE_CURSOR_SVG)}") 12 12, grab`;
-
-const RESIZE_CURSORS = ["ew-resize", "nwse-resize", "ns-resize", "nesw-resize"] as const;
-
-/** CSS resize cursor closest to an outward handle direction (degrees clockwise from +x). */
-export function resizeCursorForAngle(deg: number): string {
-  const axis = ((deg % 180) + 180) % 180;
-  return RESIZE_CURSORS[Math.round(axis / 45) % 4];
-}
 
 /**
  * Ensures texture is loaded into Phaser for the given map image.
